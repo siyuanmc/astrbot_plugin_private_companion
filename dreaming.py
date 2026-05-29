@@ -412,7 +412,11 @@ async def generate_enhanced_dream_pick(plugin, weather: dict[str, Any] | None = 
     raw_text = await plugin._llm_call(
         prompt,
         max_tokens=1050,
-        provider_id=plugin.dream_provider_id or plugin.llm_provider_id,
+        provider_id=plugin._task_provider(
+            getattr(plugin, "dream_provider_id", ""),
+            getattr(plugin, "diary_provider_id", ""),
+            getattr(plugin, "mai_style_provider_id", ""),
+        ),
     )
     payload = plugin._extract_json_payload(raw_text or "")
     if not isinstance(payload, dict):
@@ -510,7 +514,14 @@ async def generate_daily_diary(plugin) -> dict[str, Any]:
 近期重要日期：
 {plugin._format_important_dates_for_prompt()}
 """.strip()
-    raw_text = await plugin._llm_call(prompt, max_tokens=500)
+    raw_text = await plugin._llm_call(
+        prompt,
+        max_tokens=500,
+        provider_id=plugin._task_provider(
+            getattr(plugin, "diary_provider_id", ""),
+            getattr(plugin, "mai_style_provider_id", ""),
+        ),
+    )
     payload = plugin._extract_json_payload(raw_text or "")
     if not isinstance(payload, dict):
         payload = plugin._fallback_diary_payload()

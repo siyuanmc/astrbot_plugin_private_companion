@@ -40,6 +40,8 @@
             <button id="exportSnapshotBtn" type="button">导出快照</button>
           </div>
         </div>
+        <div id="dashboardPulse" class="dashboard-pulse"></div>
+        <div id="dashboardShortcuts" class="dashboard-shortcuts"></div>
         <div class="dashboard-grid">
           <article class="wide">
             <h2>配置健康检查</h2>
@@ -524,28 +526,37 @@
           </article>
           <article class="wide">
             <h2>群聊名单覆盖</h2>
-            <p class="section-desc">这里按当前名单模式预览每个已记录群会被允许还是拦截。</p>
+            <p class="section-desc">按当前名单模式预览已记录群的处理结果。</p>
             <div id="listCoverage" class="coverage-grid"></div>
           </article>
           <article class="wide">
             <h2>群聊名单</h2>
-            <p class="section-desc">名单保存后立即影响后续群消息处理；已经积累的群观察数据不会自动删除。</p>
-            <form id="accessForm" class="form-grid">
-              <label>
-                模式
-                <select id="groupAccessMode">
-                  <option value="whitelist">白名单</option>
-                  <option value="blacklist">黑名单</option>
+            <form id="accessForm" class="access-manager">
+              <div class="access-mode-row">
+                <select id="groupAccessMode" aria-label="群聊名单模式">
+                  <option value="whitelist">白名单模式</option>
+                  <option value="blacklist">黑名单模式</option>
                 </select>
-              </label>
-              <label>
-                白名单群号
-                <textarea id="groupWhitelist" rows="4" placeholder="一行一个或逗号分隔"></textarea>
-              </label>
-              <label>
-                黑名单群号
-                <textarea id="groupBlacklist" rows="4" placeholder="一行一个或逗号分隔"></textarea>
-              </label>
+                <div class="access-mode-switch" role="group" aria-label="群聊名单模式">
+                  <label><input type="radio" name="groupAccessModeChoice" value="whitelist"> <span>白名单</span></label>
+                  <label><input type="radio" name="groupAccessModeChoice" value="blacklist"> <span>黑名单</span></label>
+                </div>
+              </div>
+              <div id="accessSummary" class="access-summary"></div>
+              <div id="accessQuickGroups" class="access-quick-groups"></div>
+              <details class="access-advanced">
+                <summary>批量编辑群号</summary>
+                <div class="form-grid">
+                  <label>
+                    白名单群号
+                    <textarea id="groupWhitelist" rows="4" placeholder="一行一个或逗号分隔"></textarea>
+                  </label>
+                  <label>
+                    黑名单群号
+                    <textarea id="groupBlacklist" rows="4" placeholder="一行一个或逗号分隔"></textarea>
+                  </label>
+                </div>
+              </details>
               <div class="actions">
                 <button type="submit">保存名单</button>
               </div>
@@ -553,8 +564,12 @@
           </article>
           <article class="wide">
             <h2>功能开关</h2>
-            <p class="section-desc">开关按能力域分组显示。建议保留隐私保护和回复自检，群聊插话可按需要单独打开。</p>
-            <div class="chips" id="featureFlags"></div>
+            <div id="featureSwitchSummary" class="feature-switch-summary"></div>
+            <div class="feature-switch-toolbar">
+              <input id="featureFilter" type="search" placeholder="筛选功能名 / 配置键" />
+              <button id="enableSafeFeaturesBtn" type="button">启用基础安全项</button>
+            </div>
+            <div class="feature-switch-board" id="featureFlags"></div>
             <div class="actions">
               <button id="saveFeaturesBtn" type="button">保存功能开关</button>
             </div>
@@ -564,7 +579,7 @@
 
       <section class="panel" id="panel-models">
         <div class="section-head">
-          <h2>新增能力模型</h2>
+          <h2>分项能力模型</h2>
           <span class="muted">留空时按“单项模型 → 陪伴通用模型 → 主模型/默认模型”回退</span>
         </div>
         <div class="notice-grid">

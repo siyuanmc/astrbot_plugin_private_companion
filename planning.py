@@ -36,10 +36,15 @@ async def generate_detail_enhancement(
 ) -> dict[str, Any]:
     await plugin._ensure_weather_context()
     prompt = plugin._build_detail_enhancement_prompt(segment, plan, state)
+    detail_provider = plugin._task_provider(
+        getattr(plugin, "detail_enhancement_provider_id", ""),
+        getattr(plugin, "daily_plan_provider_id", ""),
+        getattr(plugin, "mai_style_provider_id", ""),
+    )
     raw_text = await plugin._llm_call(
         prompt,
         max_tokens=700,
-        provider_id=plugin.detail_enhancement_provider_id,
+        provider_id=detail_provider,
     )
     payload = plugin._extract_json_payload(raw_text or "")
     if (
@@ -60,7 +65,7 @@ async def generate_detail_enhancement(
         retry_raw_text = await plugin._llm_call(
             retry_prompt,
             max_tokens=850,
-            provider_id=plugin.detail_enhancement_provider_id,
+            provider_id=detail_provider,
         )
         retry_payload = plugin._extract_json_payload(retry_raw_text or "")
         if isinstance(retry_payload, dict):
@@ -368,7 +373,11 @@ async def generate_daily_plan(plugin) -> dict[str, Any]:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     await plugin._ensure_weather_context()
     prompt = plugin._build_daily_plan_prompt(now)
-    raw_text = await plugin._llm_call(prompt, max_tokens=900)
+    plan_provider = plugin._task_provider(
+        getattr(plugin, "daily_plan_provider_id", ""),
+        getattr(plugin, "mai_style_provider_id", ""),
+    )
+    raw_text = await plugin._llm_call(prompt, max_tokens=900, provider_id=plan_provider)
     items = plugin._parse_plan_items(raw_text or "")
     if items and plugin._plan_has_excess_micro_segments(items):
         retry_prompt = (
@@ -378,7 +387,7 @@ async def generate_daily_plan(plugin) -> dict[str, Any]:
             + "不要把“看一眼、拍一下、翻个身、关掉闹钟”这种瞬时动作单独立成一项；"
             + "如果要写到这些动作,要把它们嵌进更完整的时段里,比如“起床后赖床一会儿,顺手看了一眼窗外”。"
         )
-        retry_raw_text = await plugin._llm_call(retry_prompt, max_tokens=900)
+        retry_raw_text = await plugin._llm_call(retry_prompt, max_tokens=900, provider_id=plan_provider)
         retry_items = plugin._parse_plan_items(retry_raw_text or "")
         if retry_items and not plugin._plan_has_excess_micro_segments(retry_items):
             raw_text = retry_raw_text
@@ -390,7 +399,7 @@ async def generate_daily_plan(plugin) -> dict[str, Any]:
             + "减少“漂亮但空”的句子。不要只写“思绪飘忽、梦里全是模糊碎片、心情随着光线变软、脑海里闪过今天的画面”这类抽象描述；"
             + "每个日程段都先给出一个能看见的动作、位置或手边的小东西，再让情绪贴在上面。"
         )
-        retry_raw_text = await plugin._llm_call(retry_prompt, max_tokens=900)
+        retry_raw_text = await plugin._llm_call(retry_prompt, max_tokens=900, provider_id=plan_provider)
         retry_items = plugin._parse_plan_items(retry_raw_text or "")
         if retry_items and not plugin._plan_has_excess_abstract_segments(retry_items):
             raw_text = retry_raw_text
@@ -402,7 +411,7 @@ async def generate_daily_plan(plugin) -> dict[str, Any]:
             + "今天属于周末或节假日语境。除非上面的设定、重要日期或备注明确写了调休、补课、补班、考试、值班等例外，"
             + "否则不要安排上课、放学、作业、教室、食堂、上班、下班、会议这类普通工作日主线。"
         )
-        retry_raw_text = await plugin._llm_call(retry_prompt, max_tokens=900)
+        retry_raw_text = await plugin._llm_call(retry_prompt, max_tokens=900, provider_id=plan_provider)
         retry_items = plugin._parse_plan_items(retry_raw_text or "")
         if retry_items and not plugin._plan_conflicts_with_calendar(retry_items):
             raw_text = retry_raw_text
@@ -415,7 +424,7 @@ async def generate_daily_plan(plugin) -> dict[str, Any]:
             + "不要再写同一套“起床洗漱-整理小事-专注做事-休息-收尾睡觉”；至少一半时间点的场景、对象、占用事项或小意外要和最近日程不同。"
             + "如果今天确实有固定事项,也要改变切入角度、地点、阻碍、同行/独处状态或情绪走向。"
         )
-        retry_raw_text = await plugin._llm_call(retry_prompt, max_tokens=900)
+        retry_raw_text = await plugin._llm_call(retry_prompt, max_tokens=900, provider_id=plan_provider)
         retry_items = plugin._parse_plan_items(retry_raw_text or "")
         if (
             retry_items
@@ -435,7 +444,7 @@ async def generate_daily_plan(plugin) -> dict[str, Any]:
         "date": today,
         "generated_at": now,
         "source": source,
-        "provider_id": plugin.llm_provider_id,
+        "provider_id": plan_provider or plugin.llm_provider_id,
         "raw": raw_text,
         "items": items,
     }

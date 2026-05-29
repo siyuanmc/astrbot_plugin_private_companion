@@ -71,6 +71,69 @@
     "default": "",
     "_special": "select_provider"
   },
+  "DAILY_PLAN_PROVIDER_ID": {
+    "description": "日程生成模型（留空跟随陪伴通用模型）",
+    "type": "string",
+    "hint": "用于每天生成粗日程和重试纠偏。建议选择擅长结构化 JSON、能理解人格和世界观且成本可控的模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "DETAIL_ENHANCEMENT_PROVIDER_ID": {
+    "description": "细节强化模型（留空跟随主模型）",
+    "type": "string",
+    "hint": "用于把某个日程段展开为细节事件和主动意愿。建议选择便宜但稳定、擅长结构化 JSON 的模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "DIARY_PROVIDER_ID": {
+    "description": "日记生成模型（留空跟随陪伴通用模型）",
+    "type": "string",
+    "hint": "用于每日 Bot 日记、生活碎片、梦境碎片和日记里的主动契机。适合短文本自然、结构化稳定的模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "DREAM_PROVIDER_ID": {
+    "description": "强化梦境模型（留空跟随主模型）",
+    "type": "string",
+    "hint": "专门用于生成梦境状态的一句描述。建议选择便宜、擅长短文本意象和 JSON 输出的模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "CREATIVE_PROVIDER_ID": {
+    "description": "私下创作模型（留空跟随陪伴通用模型）",
+    "type": "string",
+    "hint": "用于生成小说项目设定和按人格速度续写正文。建议选择文风稳定、能遵守人设身份边界的模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "VOICE_PROMPT_PROVIDER_ID": {
+    "description": "主动语音文案模型（留空跟随陪伴通用模型）",
+    "type": "string",
+    "hint": "用于主动 voice 的短句生成和 TTS 格式修复。适合短文本口语能力好、能遵守 <tts> 或日语规则的模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "PHOTO_PROMPT_PROVIDER_ID": {
+    "description": "主动生图提示词模型（留空跟随主模型）",
+    "type": "string",
+    "hint": "只用于生成 photo_text 的画面提示词和画面描述。适合单独换成更擅长视觉描述、审美更稳定的模型，不影响普通聊天或每日日程模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "NARRATION_PROVIDER_ID": {
+    "description": "工具结果转述模型（留空则不单独转述）",
+    "type": "string",
+    "hint": "用于把工具结果转成可供最终主动消息使用的自然语言上下文。当前主要用于 screen_peek 观察结果转述，不参与主动生图提示词生成。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "HISTORY_SUMMARY_PROVIDER_ID": {
+    "description": "昨日对话摘要模型（留空跟随日程模型）",
+    "type": "string",
+    "hint": "用于把昨日/最近完整对话压成可延续到日程和梦境的摘要。适合便宜、长上下文整理稳定的模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
   "RESPONSE_REVIEW_PROVIDER_ID": {
     "description": "回复自检改写模型（留空用默认）",
     "type": "string",
@@ -117,34 +180,6 @@
     "description": "群内黑话释义模型（留空跟随陪伴通用模型）",
     "type": "string",
     "hint": "用于根据群聊样例解释群内常见词/梗。留空会回退到 MAI_STYLE_PROVIDER_ID。",
-    "default": "",
-    "_special": "select_provider"
-  },
-  "DETAIL_ENHANCEMENT_PROVIDER_ID": {
-    "description": "细节强化模型（留空用每日模型/默认模型）",
-    "type": "string",
-    "hint": "用于把某个日程段展开为细节事件和主动意愿。建议选择便宜但稳定、擅长结构化 JSON 的模型。",
-    "default": "",
-    "_special": "select_provider"
-  },
-  "DREAM_PROVIDER_ID": {
-    "description": "强化梦境模型（留空用每日模型/默认模型）",
-    "type": "string",
-    "hint": "专门用于生成梦境状态的一句描述。建议选择便宜、擅长短文本意象和 JSON 输出的模型。",
-    "default": "",
-    "_special": "select_provider"
-  },
-  "PHOTO_PROMPT_PROVIDER_ID": {
-    "description": "主动生图提示词模型（留空跟随日程模型/默认模型）",
-    "type": "string",
-    "hint": "只用于生成 photo_text 的画面提示词和画面描述。适合单独换成更擅长视觉描述、审美更稳定的模型，不影响普通聊天或每日日程模型。",
-    "default": "",
-    "_special": "select_provider"
-  },
-  "NARRATION_PROVIDER_ID": {
-    "description": "转述模型（留空用每日模型/默认模型）",
-    "type": "string",
-    "hint": "用于把工具结果转成可供最终主动消息使用的自然语言上下文。当前主要用于 screen_peek 这类观察结果转述，不参与主动生图提示词生成。",
     "default": "",
     "_special": "select_provider"
   },

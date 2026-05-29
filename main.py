@@ -134,8 +134,8 @@ class _CapturedSendMessageCall:
 @register(
     PLUGIN_NAME,
     "Codex",
-    "我会永远陪着你：让 Bot 拥有连续生活状态、私聊主动陪伴、群聊观察和长期创作的拟人陪伴插件。",
-    "2.2.0",
+    "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
+    "2.3.0",
 )
 class PrivateCompanionPlugin(Star):
     @staticmethod
@@ -172,6 +172,7 @@ class PrivateCompanionPlugin(Star):
         self.target_platform = self._cfg_str(c, "target_platform", "aiocqhttp", "aiocqhttp")
         self.default_enable_configured_targets = self._cfg_bool(c, "default_enable_configured_targets", True)
         self.llm_provider_id = self._cfg_str(c, "LLM_PROVIDER_ID", "")
+        self.daily_plan_provider_id = self._cfg_str(c, "DAILY_PLAN_PROVIDER_ID", "")
         self.enable_daily_plan = self._cfg_bool(c, "enable_daily_plan", True)
         self.daily_plan_time = self._cfg_str(c, "daily_plan_time", "07:30")
         self.bot_name = self._cfg_str(c, "bot_name", "小星", "小星")
@@ -185,6 +186,7 @@ class PrivateCompanionPlugin(Star):
         self.humanized_state_intensity = self._cfg_int(c, "humanized_state_intensity", 50, 0, 100)
         self.enable_enhanced_dreams = self._cfg_bool(c, "enable_enhanced_dreams", False)
         self.dream_provider_id = self._cfg_str(c, "DREAM_PROVIDER_ID", "")
+        self.diary_provider_id = self._cfg_str(c, "DIARY_PROVIDER_ID", "")
         self.dream_afterglow_mode = self._cfg_str(c, "dream_afterglow_mode", "auto", "auto")
         if self.dream_afterglow_mode not in {"auto", "轻", "标准", "明显"}:
             self.dream_afterglow_mode = "auto"
@@ -207,6 +209,9 @@ class PrivateCompanionPlugin(Star):
         self.creative_base_chars_per_hour = self._cfg_int(c, "creative_base_chars_per_hour", 260, 60, 1200)
         self.creative_max_active_projects = self._cfg_int(c, "creative_max_active_projects", 2, 1, 5)
         self.creative_hidden_mode = self._cfg_bool(c, "creative_hidden_mode", True)
+        self.creative_provider_id = self._cfg_str(c, "CREATIVE_PROVIDER_ID", "")
+        self.voice_prompt_provider_id = self._cfg_str(c, "VOICE_PROMPT_PROVIDER_ID", "")
+        self.history_summary_provider_id = self._cfg_str(c, "HISTORY_SUMMARY_PROVIDER_ID", "")
         self.enable_llm_proactive_message = self._cfg_bool(c, "enable_llm_proactive_message", True)
         self.enable_llm_timer_scheduling = self._cfg_bool(c, "enable_llm_timer_scheduling", True)
         self.enable_proactive_decorating_hooks = self._cfg_bool(c, "enable_proactive_decorating_hooks", True)
@@ -1172,6 +1177,7 @@ class PrivateCompanionPlugin(Star):
             prompt,
             max_tokens=180,
             provider_id=self._task_provider(self.relationship_analysis_provider_id, self.mai_style_provider_id),
+            task="worldbook_registration",
         )
         cleaned = _single_line(impression, 220)
         if not cleaned:
@@ -1726,7 +1732,12 @@ class PrivateCompanionPlugin(Star):
   "next_hint": "第一段准备写什么"
 }}
 """.strip()
-        text = await self._llm_call(prompt, max_tokens=500, provider_id=self.llm_provider_id)
+        text = await self._llm_call(
+            prompt,
+            max_tokens=500,
+            provider_id=self._task_provider(self.creative_provider_id, self.mai_style_provider_id),
+            task="creative_project",
+        )
         payload = self._extract_json_payload(text or "")
         if not isinstance(payload, dict):
             payload = {}
@@ -1782,7 +1793,12 @@ class PrivateCompanionPlugin(Star):
 4. 细节要具体,但不要堆辞藻；可以有一点梦境感或生活感。
 5. {finish_hint}
 """.strip()
-        text = await self._llm_call(prompt, max_tokens=max(220, budget + 160), provider_id=self.llm_provider_id)
+        text = await self._llm_call(
+            prompt,
+            max_tokens=max(220, budget + 160),
+            provider_id=self._task_provider(self.creative_provider_id, self.mai_style_provider_id),
+            task="creative_writing",
+        )
         cleaned = str(text or "").strip()
         cleaned = re.sub(r"^```(?:text|markdown)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE | re.DOTALL).strip()
         cleaned = re.sub(r"^(?:正文|续写|片段)[:：]\s*", "", cleaned).strip()
@@ -3425,6 +3441,7 @@ class PrivateCompanionPlugin(Star):
             prompt,
             max_tokens=80,
             provider_id=self._task_provider(self.group_interject_provider_id, self.mai_style_provider_id),
+            task="group_interject",
         )
         reply = _single_line(generated, 80)
         if not reply or reply in {"空字符串", "不适合说话"}:
@@ -3489,6 +3506,7 @@ class PrivateCompanionPlugin(Star):
             prompt,
             max_tokens=420,
             provider_id=self._task_provider(self.group_episode_provider_id, self.mai_style_provider_id),
+            task="group_episode",
         )
         payload = self._extract_json_payload(raw or "")
         if not isinstance(payload, dict):
@@ -3562,6 +3580,7 @@ class PrivateCompanionPlugin(Star):
             prompt,
             max_tokens=560,
             provider_id=self._task_provider(self.group_slang_provider_id, self.mai_style_provider_id),
+            task="group_slang",
         )
         payload = self._extract_json_payload(raw or "")
         if not isinstance(payload, dict):
@@ -3683,6 +3702,7 @@ class PrivateCompanionPlugin(Star):
             prompt,
             max_tokens=520,
             provider_id=self._task_provider(self.dialogue_episode_provider_id, self.mai_style_provider_id),
+            task="dialogue_episode",
         )
         payload = self._extract_json_payload(raw or "")
         if not isinstance(payload, dict):
@@ -3816,6 +3836,7 @@ class PrivateCompanionPlugin(Star):
             prompt,
             max_tokens=420,
             provider_id=self._task_provider(self.companion_memory_provider_id, self.mai_style_provider_id),
+            task="memory_profile",
         )
         payload = self._extract_json_payload(raw or "")
         if not isinstance(payload, dict):
@@ -4035,6 +4056,7 @@ class PrivateCompanionPlugin(Star):
             prompt,
             max_tokens=260,
             provider_id=self._task_provider(self.response_review_provider_id, self.mai_style_provider_id),
+            task="response_review",
         )
         cleaned = str(rewritten or "").strip()
         if not cleaned:
@@ -4156,6 +4178,7 @@ Bot 主动后用户回复次数：{reply_count}
             prompt,
             max_tokens=220,
             provider_id=self._task_provider(self.relationship_analysis_provider_id, self.mai_style_provider_id),
+            task="relationship",
         )
         payload = self._extract_json_payload(raw_text or "")
         if not isinstance(payload, dict):
@@ -4599,7 +4622,12 @@ Bot 主动后用户回复次数：{reply_count}
             raw_text = await self._llm_call(
                 prompt,
                 max_tokens=1000,
-                provider_id=self.detail_enhancement_provider_id,
+                provider_id=self._task_provider(
+                    self.detail_enhancement_provider_id,
+                    self.daily_plan_provider_id,
+                    self.mai_style_provider_id,
+                ),
+                task="full_test_detail",
             )
             payload = self._extract_json_payload(raw_text or "")
             if not isinstance(payload, dict):
@@ -6780,6 +6808,7 @@ Bot 主动后用户回复次数：{reply_count}
             prompt,
             max_tokens=80,
             provider_id=self.narration_provider_id,
+            task="screen_narration",
         )
         return _single_line(text, 120) if text else cleaned_context
 
@@ -8263,7 +8292,12 @@ Bot 主动后用户回复次数：{reply_count}
                     requirement=requirement,
                     target=target,
                 )
-                repaired = await self._llm_call(repair_prompt, max_tokens=140)
+                repaired = await self._llm_call(
+                    repair_prompt,
+                    max_tokens=140,
+                    provider_id=self._task_provider(self.voice_prompt_provider_id, self.mai_style_provider_id),
+                    task="voice_repair",
+                )
                 if repaired:
                     spoken = str(repaired).strip()
                     if "<tts>" not in spoken:
@@ -8315,7 +8349,12 @@ Bot 主动后用户回复次数：{reply_count}
 4. 可以有一点嘴硬、黏人、藏着的想念,但不要把喜欢说满。
 5. 不要提 AI、模型、插件、TTS、语音合成这些词。
 """.strip()
-        text = await self._llm_call(prompt, max_tokens=120)
+        text = await self._llm_call(
+            prompt,
+            max_tokens=120,
+            provider_id=self._task_provider(self.voice_prompt_provider_id, self.mai_style_provider_id),
+            task="voice",
+        )
         spoken = str(text or "").strip()
         if not spoken:
             spoken = random.choice(VOICE_FALLBACK_TEMPLATES)
@@ -8328,7 +8367,12 @@ Bot 主动后用户回复次数：{reply_count}
                 requirement=requirement,
                 target=target,
             )
-            repaired = await self._llm_call(repair_prompt, max_tokens=140)
+            repaired = await self._llm_call(
+                repair_prompt,
+                max_tokens=140,
+                provider_id=self._task_provider(self.voice_prompt_provider_id, self.mai_style_provider_id),
+                task="voice_repair",
+            )
             if repaired:
                 spoken = str(repaired).strip()
                 if "<tts>" not in spoken:
@@ -8675,7 +8719,8 @@ Bot 主动后用户回复次数：{reply_count}
         text = await self._llm_call(
             prompt,
             max_tokens=260,
-            provider_id=self.photo_prompt_provider_id or self.llm_provider_id,
+            provider_id=self._task_provider(self.photo_prompt_provider_id, self.mai_style_provider_id),
+            task="photo_prompt",
         )
         payload = self._extract_json_payload(text or "")
         if isinstance(payload, dict):
@@ -12768,7 +12813,12 @@ Bot 主动后用户回复次数：{reply_count}
   "dream_reference": "今天梦境/梦境碎片可以参考的物件、感官、半句话或情绪；没有就写无明确碎片"
 }}
 """.strip()
-        raw = await self._llm_call(prompt, max_tokens=650)
+        raw = await self._llm_call(
+            prompt,
+            max_tokens=650,
+            provider_id=self._task_provider(self.history_summary_provider_id, self.daily_plan_provider_id, self.mai_style_provider_id),
+            task="yesterday_summary",
+        )
         payload = self._extract_json_payload(raw or "")
         if not isinstance(payload, dict):
             return {
@@ -14081,18 +14131,24 @@ Bot 主动后用户回复次数：{reply_count}
         rules = (
             ("daily_plan", ("日程生成器", "生成今天的一日生活日程", "\"schedule\"")),
             ("detail", ("日程细化生成器", "today_events", "presence_status")),
+            ("full_test_detail", ("完整测试", "缺少这些主动行为", "today_events")),
             ("dream", ("梦境生成器", "dream_type", "afterglow")),
             ("diary", ("日记生成器", "dream_fragments", "long_term_events")),
             ("memory_profile", ("私聊记忆整理", "长期画像", "user_traits")),
             ("dialogue_episode", ("私聊对话整理成片段", "共同经历", "open_loops")),
             ("response_review", ("改写成更像真实私聊", "需要修正的问题", "原回复")),
             ("relationship", ("关系站位", "relationship", "互动边界")),
+            ("worldbook_registration", ("自我介绍原文", "人物画像插件", "初始印象")),
             ("group_interject", ("群聊主动插话", "插话", "群聊")),
             ("group_episode", ("群聊片段", "群聊阶段性", "topic_threads")),
             ("group_slang", ("黑话", "slang", "群内")),
             ("photo_prompt", ("ComfyUI", "社交媒体随手拍", "\"caption\"")),
+            ("screen_narration", ("屏幕后留在脑子里的印象", "原始结果")),
+            ("voice_repair", ("主动语音修正", "当前版本")),
             ("voice", ("主动语音", "TTS", "语音内容")),
             ("yesterday_summary", ("昨日/最近完整对话", "残留影响", "dream_reference")),
+            ("creative_project", ("输出 JSON", "target_chars", "next_hint")),
+            ("creative_writing", ("慢慢写小说", "本次字数上限", "只输出小说正文")),
             ("provider_test", ("请只回复两个字：正常",)),
         )
         for label, markers in rules:
@@ -14188,10 +14244,11 @@ Bot 主动后用户回复次数：{reply_count}
         prompt: str,
         max_tokens: int = 600,
         provider_id: str | None = None,
+        task: str | None = None,
     ) -> str | None:
         start = time.time()
         selected_provider = str(provider_id or self.llm_provider_id or "").strip()
-        task = self._classify_llm_prompt(prompt)
+        task_key = _single_line(task, 40) or self._classify_llm_prompt(prompt)
         try:
             kwargs = {"prompt": prompt}
             if selected_provider:
@@ -14201,7 +14258,7 @@ Bot 主动后用户回复次数：{reply_count}
                 completion = resp.completion_text.strip()
                 self._record_llm_usage(
                     provider_id=selected_provider,
-                    task=task,
+                    task=task_key,
                     prompt=prompt,
                     completion=completion,
                     elapsed_ms=int((time.time() - start) * 1000),
@@ -14211,7 +14268,7 @@ Bot 主动后用户回复次数：{reply_count}
                 return completion
             self._record_llm_usage(
                 provider_id=selected_provider,
-                task=task,
+                task=task_key,
                 prompt=prompt,
                 completion="",
                 elapsed_ms=int((time.time() - start) * 1000),
@@ -14222,7 +14279,7 @@ Bot 主动后用户回复次数：{reply_count}
         except Exception as e:
             self._record_llm_usage(
                 provider_id=selected_provider,
-                task=task,
+                task=task_key,
                 prompt=prompt,
                 completion="",
                 elapsed_ms=int((time.time() - start) * 1000),

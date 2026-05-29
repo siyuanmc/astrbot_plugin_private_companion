@@ -16,6 +16,15 @@ const state = {
 const providerLabels = {
   LLM_PROVIDER_ID: "主模型",
   MAI_STYLE_PROVIDER_ID: "陪伴通用模型",
+  DAILY_PLAN_PROVIDER_ID: "日程生成",
+  DETAIL_ENHANCEMENT_PROVIDER_ID: "日程细化",
+  DIARY_PROVIDER_ID: "日记生成",
+  DREAM_PROVIDER_ID: "强化梦境",
+  CREATIVE_PROVIDER_ID: "私下创作",
+  VOICE_PROMPT_PROVIDER_ID: "主动语音文案",
+  PHOTO_PROMPT_PROVIDER_ID: "生图提示词",
+  NARRATION_PROVIDER_ID: "工具结果转述",
+  HISTORY_SUMMARY_PROVIDER_ID: "昨日对话摘要",
   RESPONSE_REVIEW_PROVIDER_ID: "回复自检改写",
   RELATIONSHIP_ANALYSIS_PROVIDER_ID: "关系站位分析",
   COMPANION_MEMORY_PROVIDER_ID: "长期画像整理",
@@ -28,6 +37,15 @@ const providerLabels = {
 const providerDescriptions = {
   LLM_PROVIDER_ID: "基础兜底模型。主动消息、未指定模型的任务都会向这里回退。",
   MAI_STYLE_PROVIDER_ID: "陪伴风格通用模型。建议选择稳定、便宜、会写自然口语的模型。",
+  DAILY_PLAN_PROVIDER_ID: "每天生成粗日程和纠偏重试。适合结构化稳定、能吃人格和世界观的模型。",
+  DETAIL_ENHANCEMENT_PROVIDER_ID: "把当前日程段展开成细节事件、状态变量和主动契机。",
+  DIARY_PROVIDER_ID: "生成每日 Bot 日记、生活碎片、梦境碎片和日记主动契机。",
+  DREAM_PROVIDER_ID: "生成强化梦境内容和梦后余韵，适合短文本意象能力好的模型。",
+  CREATIVE_PROVIDER_ID: "生成小说项目设定和慢速续写正文，适合文风稳定、能守住人设身份的模型。",
+  VOICE_PROMPT_PROVIDER_ID: "生成主动语音短句，并修复 TTS 标签、日语或双语格式。",
+  PHOTO_PROMPT_PROVIDER_ID: "生成 photo_text 的画面提示词和画面描述，可单独使用视觉描述更强的模型。",
+  NARRATION_PROVIDER_ID: "把识屏等工具结果压成自然上下文；留空则直接使用工具摘要。",
+  HISTORY_SUMMARY_PROVIDER_ID: "把昨日/最近对话整理成日程和梦境可继承的残留摘要。",
   RESPONSE_REVIEW_PROVIDER_ID: "对生成回复做自检和轻改写，减少生硬、越界、解释提示词等问题。",
   RELATIONSHIP_ANALYSIS_PROVIDER_ID: "分析关系阶段、亲近度和互动边界，调用频率不高但影响语气判断。",
   COMPANION_MEMORY_PROVIDER_ID: "整理长期画像和偏好，适合用便宜但结构化能力好的模型。",
@@ -67,6 +85,73 @@ const featureMeta = {
   enable_creative_writing: ["私下创作", "因生活小事或梦境灵感开小说坑，并按人格速度慢慢写。"],
   creative_hidden_mode: ["低调创作模式", "默认不汇报创作，只在节点或用户询问时自然提起。"],
 };
+
+const featureGroups = [
+  {
+    title: "私聊陪伴",
+    note: "关系、记忆、回复策略和自然表达。",
+    keys: [
+      "enable_mai_style_integration",
+      "enable_companion_memory",
+      "enable_expression_learning",
+      "enable_companion_reply_planner",
+      "enable_intent_emotion_analysis",
+      "enable_response_self_review",
+      "enable_passive_topic_suppression",
+      "enable_relationship_state_machine",
+      "enable_dialogue_episode_memory",
+      "enable_open_loop_tracking",
+    ],
+  },
+  {
+    title: "群聊观察",
+    note: "群氛围、黑话、话题线、插话和隐私边界。",
+    keys: [
+      "enable_group_companion",
+      "enable_group_context_injection",
+      "enable_group_slang_learning",
+      "enable_group_slang_meanings",
+      "enable_group_member_profiles",
+      "enable_group_topic_threads",
+      "enable_group_episode_memory",
+      "enable_group_relationship_graph",
+      "enable_group_interjection",
+      "enable_group_interjection_feedback",
+      "enable_group_privacy_guard",
+    ],
+  },
+  {
+    title: "身份与记忆联动",
+    note: "QQ 关系网、外部长期记忆和身份稳定识别。",
+    keys: [
+      "enable_worldbook_member_recognition",
+      "enable_livingmemory_integration",
+    ],
+  },
+  {
+    title: "长线主动",
+    note: "Bot 自己做事、外部动作和低频分享。",
+    keys: [
+      "enable_bilibili_integration",
+      "enable_bilibili_boredom_watch",
+      "enable_unanswered_screen_peek_followup",
+      "enable_creative_writing",
+      "creative_hidden_mode",
+    ],
+  },
+];
+
+const safeFeatureKeys = [
+  "enable_mai_style_integration",
+  "enable_companion_memory",
+  "enable_expression_learning",
+  "enable_response_self_review",
+  "enable_group_privacy_guard",
+  "enable_relationship_state_machine",
+  "enable_dialogue_episode_memory",
+  "enable_open_loop_tracking",
+  "enable_worldbook_member_recognition",
+];
 
 const configLabels = {
   enabled_user_count: "启用私聊对象",
@@ -119,10 +204,15 @@ const tokenTaskLabels = {
   group_interject: "群聊插话",
   group_episode: "群聊片段",
   group_slang: "黑话释义",
+  worldbook_registration: "关系网自登记",
+  creative_project: "创作立项",
   creative_writing: "小说创作",
   photo_prompt: "生图提示",
+  screen_narration: "识屏转述",
   voice: "语音文本",
+  voice_repair: "语音格式修复",
   yesterday_summary: "昨日摘要",
+  full_test_detail: "完整测试细化",
   provider_test: "模型测试",
   other: "其他调用",
 };
@@ -270,12 +360,14 @@ function renderStats() {
   const groupInfo = overview.group || {};
   const living = overview.livingmemory || {};
   const creative = overview.creative || {};
+  const tokens = state.tokenStats?.totals || {};
   $("#stats").innerHTML = [
     statCard(privateInfo.enabled_user_count || 0, `私聊对象 / 共 ${privateInfo.user_count || 0}`),
     statCard(groupInfo.enabled_group_count || 0, `群聊观测 / 共 ${groupInfo.group_count || 0}`),
     statCard(creative.active_projects || 0, `私下创作 / 共 ${creative.project_count || 0}`),
     statCard(groupInfo.access_mode || "-", "群聊名单模式"),
     statCard(living.available ? "可用" : "未检测", "LivingMemory"),
+    statCard(formatCompactNumber(tokens.total_tokens || 0), "累计 Token"),
   ].join("");
 }
 
@@ -284,6 +376,7 @@ function statCard(value, label) {
 }
 
 function renderDashboard() {
+  renderDashboardPulse();
   renderHealthPanel();
   renderDiagnostics();
   renderRelationshipChart();
@@ -291,6 +384,92 @@ function renderDashboard() {
   renderQuotaChart();
   renderFeatureMatrix();
   renderActivityHeatmap();
+}
+
+function renderDashboardPulse() {
+  const overview = state.overview || {};
+  const daily = overview.daily_state || {};
+  const life = overview.life_observation || {};
+  const current = life.current_plan || {};
+  const proactive = overview.proactive_candidates || {};
+  const proactiveCounts = proactive.counts || {};
+  const worldbook = overview.worldbook || {};
+  const tokens = state.tokenStats?.totals || {};
+  const nextUser = state.users
+    .filter((item) => Number(item.next_proactive_ts || 0) > 0)
+    .sort((a, b) => Number(a.next_proactive_ts || 0) - Number(b.next_proactive_ts || 0))[0];
+  const cards = [
+    {
+      tone: "life",
+      label: "当前片段",
+      value: current.activity || "暂无当前日程",
+      note: [current.time, current.mood, current.message_seed].filter(Boolean).join(" · ") || daily.note || "等待日程细化",
+      jump: "memory",
+    },
+    {
+      tone: "proactive",
+      label: "下一次主动",
+      value: nextUser ? (nextUser.nickname || nextUser.user_id) : "暂无计划",
+      note: nextUser ? `${nextUser.next_proactive} · ${nextUser.planned_action || "message"}` : `${proactiveCounts.accepted || 0} 个候选已进入计划`,
+      jump: "proactive",
+    },
+    {
+      tone: "worldbook",
+      label: "关系网",
+      value: `${worldbook.enabled_member_count || 0}/${worldbook.member_count || 0}`,
+      note: worldbook.enabled ? `注入上限 ${worldbook.inject_limit || 0} · 群资料 ${worldbook.group_count || 0}` : "识别未开启",
+      jump: "worldbook",
+    },
+    {
+      tone: "token",
+      label: "模型消耗",
+      value: formatCompactNumber(tokens.total_tokens || 0),
+      note: `${formatCompactNumber(tokens.calls || 0)} 次调用 · 失败 ${formatCompactNumber(tokens.errors || 0)}`,
+      jump: "tokens",
+    },
+  ];
+  $("#dashboardPulse").innerHTML = cards.map((card) => `
+    <button type="button" class="pulse-card ${escapeHtml(card.tone)}" data-jump-tab="${escapeHtml(card.jump)}">
+      <span>${escapeHtml(card.label)}</span>
+      <b>${escapeHtml(card.value)}</b>
+      <small>${escapeHtml(card.note)}</small>
+    </button>
+  `).join("");
+
+  const shortcuts = [
+    ["modules", "模块配置", moduleShortcutNote(overview.settings || {})],
+    ["config", "名单与开关", `${overview.group?.access_mode || "whitelist"} · 白 ${overview.group?.whitelist?.length || 0} / 黑 ${overview.group?.blacklist?.length || 0}`],
+    ["models", "模型分流", providerShortcutNote(overview.providers || {})],
+    ["creative", "创作状态", overview.creative?.latest_title || "暂无项目"],
+  ];
+  $("#dashboardShortcuts").innerHTML = shortcuts.map(([tab, label, note]) => `
+    <button type="button" class="shortcut-chip" data-jump-tab="${escapeHtml(tab)}">
+      <b>${escapeHtml(label)}</b>
+      <span>${escapeHtml(note)}</span>
+    </button>
+  `).join("");
+}
+
+function formatCompactNumber(value) {
+  const number = Number(value || 0);
+  if (number >= 1000000) return `${(number / 1000000).toFixed(number >= 10000000 ? 0 : 1)}M`;
+  if (number >= 1000) return `${(number / 1000).toFixed(number >= 10000 ? 0 : 1)}K`;
+  return String(Math.round(number));
+}
+
+function moduleShortcutNote(settings) {
+  const enabled = [
+    settings.enable_group_companion,
+    settings.enable_worldbook_member_recognition,
+    settings.enable_creative_writing,
+    settings.enable_bilibili_integration,
+  ].filter(Boolean).length;
+  return `${enabled}/4 个核心模块开启`;
+}
+
+function providerShortcutNote(providers) {
+  const configured = Object.values(providers || {}).filter((value) => String(value || "").trim()).length;
+  return configured ? `${configured} 个 Provider 已指定` : "使用默认回退链";
 }
 
 function renderHealthPanel() {
@@ -1426,19 +1605,8 @@ function renderConfig() {
   $("#groupAccessMode").value = group.access_mode || "whitelist";
   $("#groupWhitelist").value = (group.whitelist || []).join("\n");
   $("#groupBlacklist").value = (group.blacklist || []).join("\n");
-  renderListCoverage(group);
-  $("#featureFlags").innerHTML = Object.entries(state.featureDraft)
-    .map(([key, value]) => `
-      <label class="switch-chip" title="${escapeHtml(featureDescription(key))}">
-        <input type="checkbox" data-feature-key="${escapeHtml(key)}" ${value ? "checked" : ""}>
-        <span><b>${escapeHtml(featureLabel(key))}</b><small>${escapeHtml(key)}</small></span>
-      </label>
-    `).join("");
-  document.querySelectorAll("[data-feature-key]").forEach((input) => {
-    input.addEventListener("change", () => {
-      state.featureDraft[input.dataset.featureKey] = input.checked;
-    });
-  });
+  renderAccessManager(group);
+  renderFeatureSwitches();
 }
 
 function renderModuleSettings() {
@@ -1559,21 +1727,206 @@ function collectFormSettings(selector) {
   return result;
 }
 
-function renderListCoverage(group) {
-  const whitelist = new Set(group.whitelist || []);
-  const blacklist = new Set(group.blacklist || []);
+function normalizeGroupIdList(value) {
+  const source = Array.isArray(value) ? value.join("\n") : String(value || "");
+  const seen = new Set();
+  return source
+    .split(/[\s,，;；、]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item) => {
+      if (seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+}
+
+function accessDraftFromForm(group = {}) {
+  const whitelistInput = $("#groupWhitelist");
+  const blacklistInput = $("#groupBlacklist");
+  return {
+    mode: $("#groupAccessMode")?.value || group.access_mode || "whitelist",
+    whitelist: new Set(normalizeGroupIdList(whitelistInput ? whitelistInput.value : group.whitelist || [])),
+    blacklist: new Set(normalizeGroupIdList(blacklistInput ? blacklistInput.value : group.blacklist || [])),
+  };
+}
+
+function writeAccessDraft(draft) {
+  $("#groupAccessMode").value = draft.mode || "whitelist";
+  $("#groupWhitelist").value = [...draft.whitelist].join("\n");
+  $("#groupBlacklist").value = [...draft.blacklist].join("\n");
+}
+
+function groupAllowedByDraft(groupId, draft) {
+  const id = String(groupId || "");
+  return draft.mode === "blacklist" ? !draft.blacklist.has(id) : draft.whitelist.has(id);
+}
+
+function groupListMark(groupId, draft) {
+  const id = String(groupId || "");
+  if (draft.whitelist.has(id) && draft.blacklist.has(id)) return "白名单 + 黑名单";
+  if (draft.whitelist.has(id)) return "白名单";
+  if (draft.blacklist.has(id)) return "黑名单";
+  return "未列入";
+}
+
+function renderAccessManager(group) {
+  const draft = accessDraftFromForm(group);
+  const mode = draft.mode === "blacklist" ? "blacklist" : "whitelist";
+  $("#groupAccessMode").value = mode;
+  document.querySelectorAll("[name='groupAccessModeChoice']").forEach((input) => {
+    input.checked = input.value === mode;
+  });
+
+  const knownGroups = state.groups || [];
+  const allowedCount = knownGroups.filter((item) => groupAllowedByDraft(item.group_id, draft)).length;
+  const blockedCount = Math.max(0, knownGroups.length - allowedCount);
+  const warning = mode === "whitelist" && draft.whitelist.size === 0
+    ? "白名单为空"
+    : mode === "blacklist" && draft.blacklist.size === 0
+      ? "未拦截群"
+      : "已配置";
+  $("#accessSummary").innerHTML = `
+    <section class="access-summary-card ${mode}">
+      <span>当前模式</span>
+      <b>${escapeHtml(mode === "blacklist" ? "黑名单" : "白名单")}</b>
+      <small>${escapeHtml(warning)}</small>
+    </section>
+    <section class="access-summary-card ok">
+      <span>允许群</span>
+      <b>${escapeHtml(allowedCount)}</b>
+      <small>已记录群</small>
+    </section>
+    <section class="access-summary-card blocked">
+      <span>拦截群</span>
+      <b>${escapeHtml(blockedCount)}</b>
+      <small>已记录群</small>
+    </section>
+    <section class="access-summary-card">
+      <span>名单规模</span>
+      <b>${escapeHtml(draft.whitelist.size)} / ${escapeHtml(draft.blacklist.size)}</b>
+      <small>白名单 / 黑名单</small>
+    </section>
+  `;
+
+  $("#accessQuickGroups").innerHTML = knownGroups.length
+    ? knownGroups.map((item) => {
+      const groupId = String(item.group_id || "");
+      const inWhite = draft.whitelist.has(groupId);
+      const inBlack = draft.blacklist.has(groupId);
+      const allowed = groupAllowedByDraft(groupId, draft);
+      return `
+        <section class="access-group-card ${allowed ? "ok" : "blocked"}">
+          <div>
+            <b>${escapeHtml(groupId)}</b>
+            <span>${escapeHtml(allowed ? "允许" : "拦截")} · ${escapeHtml(groupListMark(groupId, draft))}</span>
+            <small>消息 ${escapeHtml(item.message_count || 0)} · 最近 ${escapeHtml(item.last_seen || "未知")}</small>
+          </div>
+          <div class="access-group-actions">
+            <button type="button" data-access-action="white" data-access-group="${escapeHtml(groupId)}">${escapeHtml(inWhite ? "移出白名单" : "加入白名单")}</button>
+            <button type="button" data-access-action="black" data-access-group="${escapeHtml(groupId)}">${escapeHtml(inBlack ? "移出黑名单" : "加入黑名单")}</button>
+          </div>
+        </section>
+      `;
+    }).join("")
+    : `<div class="empty small">暂无群聊记录</div>`;
+
+  renderListCoverage(group, draft);
+}
+
+function renderListCoverage(group, draft = null) {
+  const access = draft || {
+    mode: group.access_mode || "whitelist",
+    whitelist: new Set(normalizeGroupIdList(group.whitelist || [])),
+    blacklist: new Set(normalizeGroupIdList(group.blacklist || [])),
+  };
   const rows = state.groups.map((item) => {
-    const inWhite = whitelist.has(item.group_id);
-    const inBlack = blacklist.has(item.group_id);
-    const allowed = group.access_mode === "blacklist" ? !inBlack : inWhite;
+    const groupId = String(item.group_id || "");
+    const allowed = groupAllowedByDraft(groupId, access);
     return `
       <div class="coverage-item ${allowed ? "ok" : "blocked"}">
-        <b>${escapeHtml(item.group_id)}</b>
-        <span>${escapeHtml(allowed ? "允许" : "拦截")} · ${escapeHtml(inWhite ? "白名单" : inBlack ? "黑名单" : "未列入")}</span>
+        <b>${escapeHtml(groupId)}</b>
+        <span>${escapeHtml(allowed ? "允许" : "拦截")} · ${escapeHtml(groupListMark(groupId, access))}</span>
       </div>
     `;
   });
   $("#listCoverage").innerHTML = rows.length ? rows.join("") : `<div class="empty small">暂无群聊记录</div>`;
+}
+
+function renderFeatureSwitches() {
+  const filter = ($("#featureFilter")?.value || "").trim().toLowerCase();
+  const knownKeys = new Set(featureGroups.flatMap((group) => group.keys));
+  const extraKeys = Object.keys(state.featureDraft || {}).filter((key) => !knownKeys.has(key));
+  const groups = extraKeys.length
+    ? [...featureGroups, { title: "其他", note: "来自配置但暂未归入固定分组的开关。", keys: extraKeys }]
+    : featureGroups;
+  const total = Object.keys(state.featureDraft || {}).length;
+  const enabled = Object.values(state.featureDraft || {}).filter(Boolean).length;
+  const riskyEnabled = ["enable_group_interjection", "enable_bilibili_boredom_watch", "enable_unanswered_screen_peek_followup"]
+    .filter((key) => state.featureDraft[key]).length;
+  $("#featureSwitchSummary").innerHTML = `
+    <section class="feature-summary-card ok">
+      <span>已开启</span>
+      <b>${escapeHtml(enabled)} / ${escapeHtml(total)}</b>
+      <small>当前功能开关</small>
+    </section>
+    <section class="feature-summary-card">
+      <span>基础安全项</span>
+      <b>${escapeHtml(safeFeatureKeys.filter((key) => state.featureDraft[key]).length)} / ${escapeHtml(safeFeatureKeys.length)}</b>
+      <small>隐私、记忆、回复稳定性</small>
+    </section>
+    <section class="feature-summary-card ${riskyEnabled ? "warn" : ""}">
+      <span>高主动项</span>
+      <b>${escapeHtml(riskyEnabled)}</b>
+      <small>群插话 / 无聊刷视频 / 沉默窥屏</small>
+    </section>
+  `;
+
+  const board = groups.map((group) => {
+    const visibleKeys = group.keys.filter((key) => {
+      if (!filter) return true;
+      const haystack = `${key} ${featureLabel(key)} ${featureDescription(key)}`.toLowerCase();
+      return haystack.includes(filter);
+    });
+    if (!visibleKeys.length) return "";
+    const groupEnabled = visibleKeys.filter((key) => state.featureDraft[key]).length;
+    return `
+      <section class="feature-switch-group">
+        <header>
+          <div>
+            <b>${escapeHtml(group.title)}</b>
+            <span>${escapeHtml(group.note)}</span>
+          </div>
+          <small>${escapeHtml(groupEnabled)} / ${escapeHtml(visibleKeys.length)}</small>
+        </header>
+        <div class="feature-switch-list">
+          ${visibleKeys.map((key) => featureSwitchItem(key)).join("")}
+        </div>
+      </section>
+    `;
+  }).filter(Boolean).join("");
+  $("#featureFlags").innerHTML = board || `<div class="empty small">没有匹配的功能开关</div>`;
+  document.querySelectorAll("[data-feature-key]").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.featureDraft[input.dataset.featureKey] = input.checked;
+      renderFeatureSwitches();
+    });
+  });
+}
+
+function featureSwitchItem(key) {
+  const checked = Boolean(state.featureDraft[key]);
+  return `
+    <label class="feature-switch-item ${checked ? "on" : "off"}" title="${escapeHtml(featureDescription(key))}">
+      <input type="checkbox" data-feature-key="${escapeHtml(key)}" ${checked ? "checked" : ""}>
+      <span class="feature-toggle-visual"></span>
+      <span class="feature-switch-text">
+        <b>${escapeHtml(featureLabel(key))}</b>
+        <small>${escapeHtml(key)}</small>
+        <em>${escapeHtml(featureDescription(key))}</em>
+      </span>
+    </label>
+  `;
 }
 
 function renderProviders() {
@@ -1854,10 +2207,17 @@ document.querySelectorAll(".tab").forEach((button) => {
   });
 });
 
+document.addEventListener("click", (event) => {
+  const target = event.target instanceof Element ? event.target.closest("[data-jump-tab]") : null;
+  if (!target) return;
+  switchTab(target.dataset.jumpTab);
+});
+
 $("#refreshBtn").addEventListener("click", loadAll);
 $("#userFilter").addEventListener("input", renderUsers);
 $("#groupFilter").addEventListener("input", renderGroups);
 $("#worldbookMemberFilter").addEventListener("input", renderWorldbook);
+$("#featureFilter").addEventListener("input", renderFeatureSwitches);
 $("#worldbookImportBtn").addEventListener("click", async () => {
   await runAction(() => postJson("/worldbook/import", {}));
 });
@@ -1965,15 +2325,63 @@ $("#exportSnapshotBtn").addEventListener("click", () => {
 
 $("#accessForm").addEventListener("submit", async (event) => {
   event.preventDefault();
+  const draft = accessDraftFromForm(state.overview?.group || {});
+  writeAccessDraft(draft);
   await runAction(() => postJson("/settings/update", {
-    group_access_mode: $("#groupAccessMode").value,
-    group_whitelist_ids: $("#groupWhitelist").value,
-    group_blacklist_ids: $("#groupBlacklist").value,
+    group_access_mode: draft.mode,
+    group_whitelist_ids: [...draft.whitelist],
+    group_blacklist_ids: [...draft.blacklist],
+  }));
+});
+
+$("#groupAccessMode").addEventListener("change", () => {
+  renderAccessManager(state.overview?.group || {});
+});
+
+document.querySelectorAll("[name='groupAccessModeChoice']").forEach((input) => {
+  input.addEventListener("change", () => {
+    $("#groupAccessMode").value = input.value;
+    renderAccessManager(state.overview?.group || {});
+  });
+});
+
+$("#accessQuickGroups").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-access-action]");
+  if (!button) return;
+  const groupId = String(button.dataset.accessGroup || "").trim();
+  if (!groupId) return;
+  const draft = accessDraftFromForm(state.overview?.group || {});
+  const targetSet = button.dataset.accessAction === "black" ? draft.blacklist : draft.whitelist;
+  if (targetSet.has(groupId)) {
+    targetSet.delete(groupId);
+  } else {
+    targetSet.add(groupId);
+    if (button.dataset.accessAction === "black") {
+      draft.whitelist.delete(groupId);
+    } else {
+      draft.blacklist.delete(groupId);
+    }
+  }
+  writeAccessDraft(draft);
+  renderAccessManager(state.overview?.group || {});
+  await runAction(() => postJson("/settings/update", {
+    group_access_mode: draft.mode,
+    group_whitelist_ids: [...draft.whitelist],
+    group_blacklist_ids: [...draft.blacklist],
   }));
 });
 
 $("#saveFeaturesBtn").addEventListener("click", async () => {
   await runAction(() => postJson("/settings/update", { features: state.featureDraft }));
+});
+
+$("#enableSafeFeaturesBtn").addEventListener("click", () => {
+  safeFeatureKeys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(state.featureDraft, key)) {
+      state.featureDraft[key] = true;
+    }
+  });
+  renderFeatureSwitches();
 });
 
 $("#saveProvidersBtn").addEventListener("click", async () => {
