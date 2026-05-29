@@ -249,6 +249,7 @@ _DEFAULT_USER_TEMPLATE = {
     "planned_event_chain": [],
     "planned_opener_mode": "",
     "planned_followup_kind": "",
+    "planned_proactive_quota_exempt": False,
     "group_share_context": {},
     "last_group_share_key": "",
     "last_group_share_at": 0,
@@ -272,6 +273,7 @@ _DEFAULT_USER_TEMPLATE = {
     "screen_peek_today": 0,
     "screen_peek_day": "",
     "screen_peek_last_at": 0,
+    "last_unanswered_screen_peek_at": 0,
 }
 
 _DEFAULT_GROUP_TEMPLATE = {

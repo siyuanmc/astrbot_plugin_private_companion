@@ -25,10 +25,8 @@
 - 梦境与日记：生成完整梦境、梦境碎片和日记，让第二天有自然残留。
 - 私下创作：可能因生活小事、日记或梦境灵感开小说坑，并按人格速度慢慢写；默认只在阶段节点、想听读后感觉，或用户主动询问近况时自然提起，故事主导权始终在 Bot 自己手里。
 - 重要日期：记录生日、纪念日、考试、约定等日期，并影响日程、主动话题和长期准备。
-- 多能力主动行为：可选使用文字、图片、语音、戳一戳、轻窥屏、正在输入和 QQ 状态同步。
+- 多能力主动行为：可选使用文字、图片、语音、戳一戳、轻窥屏、主动后沉默窥屏、正在输入和 QQ 状态同步。
 - Token 监控与扩展页：在 AstrBot WebUI 中查看私聊、群聊、记忆、额度、主动计划和模型消耗。
-
-- 建议使用火山引擎火山方舟的协作计划的免费模型覆盖成本，所有功能全开的情况下该插件通常每天的消耗在1M左右，可以直接把GLM-4.7设置为主模型（每日2M免费额度）。
 
 常用私聊命令：
 
@@ -119,15 +117,21 @@ C:\Users\你的用户名\.astrbot\data\plugins\astrbot_plugin_private_companion
 
 `target_user_ids` 中的用户会在插件启动时自动初始化私聊陪伴。群聊默认建议使用白名单，避免误观察不该启用的群。
 
+### 成本建议
+
+建议使用火山引擎火山方舟“协作计划”的免费模型额度覆盖日常成本。按当前插件调用结构估算，在私聊、群聊观察、日程、梦境、记忆整理、关系网、自登记和 Token 监控等功能全开的情况下，通常每天消耗约 `1M tokens` 左右。
+
+如果使用火山方舟协作计划，可以直接把 `Doubao-Seed-2.0-pro` 设置为主模型；在每日 `2M tokens` 免费额度内，通常足够覆盖本插件的日常运行。免费额度、模型名称和平台政策可能变化，实际以火山方舟控制台展示为准。
+
 ## 可选联动
 
 下面这些插件或服务不是必需项。没有安装时，本插件会自动跳过对应能力或回退成普通文字。若存在 `menglimi` 维护版，建议优先使用 `menglimi` 版本，和本插件的联动适配通常更完整。
 
 ### 屏幕陪伴
 
-- 用途：支持主动 `screen_peek` 轻窥屏、屏幕状态上下文、天气能力回退。
+- 用途：支持主动 `screen_peek` 轻窥屏、主动后沉默时额外窥屏、屏幕状态上下文、天气能力回退。
 - 首选仓库：<https://github.com/menglimi/astrbot_plugin_screen_companion>
-- 对应配置：`enable_screen_glance_action`、`screen_peek_max_daily`、`screen_peek_cooldown_minutes`
+- 对应配置：`enable_screen_glance_action`、`screen_peek_max_daily`、`screen_peek_cooldown_minutes`、`enable_unanswered_screen_peek_followup`、`unanswered_screen_peek_after_minutes`、`unanswered_screen_peek_cooldown_minutes`
 
 ### TTS 语音
 

@@ -1344,6 +1344,43 @@
       "enable_screen_glance_action": true
     }
   },
+  "enable_unanswered_screen_peek_followup": {
+    "description": "主动后沉默可额外窥屏",
+    "type": "bool",
+    "hint": "开启后，如果 Bot 因无聊或空档主动找用户，过一段时间用户仍未回复，Bot 可以额外窥屏确认用户在做什么。这类窥屏不消耗每日主动识屏次数，但仍受识屏插件可用性和冷却约束。",
+    "default": true,
+    "condition": {
+      "enable_screen_glance_action": true
+    }
+  },
+  "unanswered_screen_peek_after_minutes": {
+    "description": "主动后沉默窥屏等待分钟数",
+    "type": "int",
+    "hint": "主动消息发出后，用户持续没有回复多久才考虑触发这次额外窥屏。用户期间有新消息会自动取消。",
+    "slider": {
+      "min": 10,
+      "max": 240,
+      "step": 5
+    },
+    "default": 45,
+    "condition": {
+      "enable_unanswered_screen_peek_followup": true
+    }
+  },
+  "unanswered_screen_peek_cooldown_minutes": {
+    "description": "沉默窥屏冷却分钟数",
+    "type": "int",
+    "hint": "只限制主动后沉默触发的额外窥屏，避免连续多轮主动后反复看屏。它不等同于每日次数上限。",
+    "slider": {
+      "min": 30,
+      "max": 1440,
+      "step": 10
+    },
+    "default": 180,
+    "condition": {
+      "enable_unanswered_screen_peek_followup": true
+    }
+  },
   "enable_poke_action": {
     "description": "允许主动戳一戳",
     "type": "bool",

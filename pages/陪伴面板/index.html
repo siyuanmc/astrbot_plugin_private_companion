@@ -409,6 +409,9 @@
               <label>空闲门槛分钟 <input name="idle_minutes" type="number" min="0" /></label>
               <label>最小主动间隔分钟 <input name="min_interval_minutes" type="number" min="0" /></label>
               <label>后台检查间隔秒 <input name="check_interval_seconds" type="number" min="30" /></label>
+              <label class="toggle-row"><input name="enable_unanswered_screen_peek_followup" type="checkbox" /> <span>主动后沉默时可窥屏</span></label>
+              <label>沉默多久后窥屏 <input name="unanswered_screen_peek_after_minutes" type="number" min="10" max="240" /></label>
+              <label>沉默窥屏冷却分钟 <input name="unanswered_screen_peek_cooldown_minutes" type="number" min="30" max="1440" /></label>
               <button type="submit">保存私聊主动</button>
             </form>
           </article>

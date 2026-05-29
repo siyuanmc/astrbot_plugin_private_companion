@@ -63,6 +63,7 @@ const featureMeta = {
   enable_livingmemory_integration: ["LivingMemory 协同", "引导模型按需调用长期记忆工具，避免重复造轮子。"],
   enable_bilibili_integration: ["B 站联动", "读取 B 站 Bot 观看日志，并在合适节点私聊分享。"],
   enable_bilibili_boredom_watch: ["无聊刷 B 站", "空档或无聊时低频触发 B 站 Bot 自己看视频。"],
+  enable_unanswered_screen_peek_followup: ["沉默后窥屏", "主动消息后用户长时间没回、且 Bot 正好无聊时，可免日次数窥屏确认用户在做什么。"],
   enable_creative_writing: ["私下创作", "因生活小事或梦境灵感开小说坑，并按人格速度慢慢写。"],
   creative_hidden_mode: ["低调创作模式", "默认不汇报创作，只在节点或用户询问时自然提起。"],
 };
@@ -426,7 +427,7 @@ function renderFeatureMatrix() {
     ["陪伴", ["enable_mai_style_integration", "enable_expression_learning", "enable_response_self_review", "enable_dialogue_episode_memory"]],
     ["群聊", ["enable_group_companion", "enable_group_context_injection", "enable_group_slang_learning", "enable_group_topic_threads", "enable_group_relationship_graph"]],
     ["记忆", ["enable_companion_memory", "enable_open_loop_tracking", "enable_livingmemory_integration"]],
-    ["主动联动", ["enable_bilibili_integration", "enable_bilibili_boredom_watch", "enable_creative_writing", "creative_hidden_mode"]],
+    ["主动联动", ["enable_unanswered_screen_peek_followup", "enable_bilibili_integration", "enable_bilibili_boredom_watch", "enable_creative_writing", "creative_hidden_mode"]],
   ];
   $("#featureMatrix").innerHTML = groups.map(([label, keys]) => `
     <section>

@@ -653,6 +653,7 @@ class PrivateCompanionPageApi:
             "enable_livingmemory_integration",
             "enable_bilibili_integration",
             "enable_bilibili_boredom_watch",
+            "enable_unanswered_screen_peek_followup",
             "enable_creative_writing",
             "creative_hidden_mode",
         ]
@@ -787,6 +788,9 @@ class PrivateCompanionPageApi:
             "bilibili_boredom_min_interval_hours",
             "bilibili_share_probability",
             "bilibili_share_min_score",
+            "enable_unanswered_screen_peek_followup",
+            "unanswered_screen_peek_after_minutes",
+            "unanswered_screen_peek_cooldown_minutes",
             "enable_creative_writing",
             "creative_inspiration_probability",
             "creative_share_probability",
@@ -1071,6 +1075,7 @@ class PrivateCompanionPageApi:
             "enable_livingmemory_integration",
             "enable_bilibili_integration",
             "enable_bilibili_boredom_watch",
+            "enable_unanswered_screen_peek_followup",
             "enable_creative_writing",
             "creative_hidden_mode",
         }
@@ -1153,6 +1158,8 @@ class PrivateCompanionPageApi:
             "max_dialogue_episodes",
             "bilibili_boredom_min_interval_hours",
             "bilibili_share_min_score",
+            "unanswered_screen_peek_after_minutes",
+            "unanswered_screen_peek_cooldown_minutes",
             "creative_base_chars_per_hour",
             "creative_max_active_projects",
             "worldbook_member_inject_limit",
@@ -1173,6 +1180,7 @@ class PrivateCompanionPageApi:
         if key in {
             "enable_bilibili_integration",
             "enable_bilibili_boredom_watch",
+            "enable_unanswered_screen_peek_followup",
             "enable_creative_writing",
             "creative_hidden_mode",
             "enable_worldbook_member_recognition",
@@ -1267,28 +1275,46 @@ class PrivateCompanionPageApi:
         return memories[:8]
 
     def _livingmemory_summary(self) -> dict[str, Any]:
-        available = bool(self.plugin._livingmemory_available())
+        try:
+            available = bool(self.plugin._livingmemory_available())
+        except Exception:
+            available = False
+        try:
+            plugin_dir = str(self.plugin._livingmemory_plugin_dir())
+        except Exception:
+            plugin_dir = ""
+        try:
+            status = self.plugin._format_livingmemory_status()
+        except Exception:
+            status = "LivingMemory：状态探测失败，已跳过协同。"
         return {
             "enabled": bool(getattr(self.plugin, "enable_livingmemory_integration", False)),
             "available": available,
             "tool_name": getattr(self.plugin, "livingmemory_tool_name", ""),
-            "plugin_dir": str(self.plugin._livingmemory_plugin_dir()),
-            "status": self.plugin._format_livingmemory_status(),
+            "plugin_dir": plugin_dir,
+            "status": status,
         }
 
     def _bilibili_summary(self, data: dict[str, Any]) -> dict[str, Any]:
         state = data.get("bilibili_integration") if isinstance(data.get("bilibili_integration"), dict) else {}
-        available = bool(getattr(self.plugin, "_bilibili_available", lambda: False)())
+        try:
+            available = bool(getattr(self.plugin, "_bilibili_available", lambda: False)())
+        except Exception:
+            available = False
         latest = None
         try:
             latest = self.plugin._latest_bilibili_video_candidate()
         except Exception:
             latest = None
+        try:
+            watch_log = str(getattr(self.plugin, "_bilibili_watch_log_file", lambda: "")())
+        except Exception:
+            watch_log = ""
         return {
             "enabled": bool(getattr(self.plugin, "enable_bilibili_integration", False)),
             "boredom_watch_enabled": bool(getattr(self.plugin, "enable_bilibili_boredom_watch", False)),
             "available": available,
-            "watch_log": str(getattr(self.plugin, "_bilibili_watch_log_file", lambda: "")()),
+            "watch_log": watch_log,
             "last_boredom_watch_at": self.plugin._format_timestamp_elapsed(state.get("last_boredom_watch_at", 0)),
             "last_status": state.get("last_boredom_watch_status", ""),
             "latest_video": latest if isinstance(latest, dict) else {},

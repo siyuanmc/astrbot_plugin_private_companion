@@ -283,6 +283,9 @@ class PrivateCompanionPlugin(Star):
         self.photo_action_max_daily = self._cfg_int(c, "photo_action_max_daily", 1, 0, 5)
         self.screen_peek_max_daily = self._cfg_int(c, "screen_peek_max_daily", 1, 0, 5)
         self.screen_peek_cooldown_minutes = self._cfg_int(c, "screen_peek_cooldown_minutes", 240, 0, 1440)
+        self.enable_unanswered_screen_peek_followup = self._cfg_bool(c, "enable_unanswered_screen_peek_followup", True)
+        self.unanswered_screen_peek_after_minutes = self._cfg_int(c, "unanswered_screen_peek_after_minutes", 45, 10, 240)
+        self.unanswered_screen_peek_cooldown_minutes = self._cfg_int(c, "unanswered_screen_peek_cooldown_minutes", 180, 30, 1440)
         self.enable_mai_style_integration = self._cfg_bool(c, "enable_mai_style_integration", True)
         self.enable_companion_memory = self._cfg_bool(c, "enable_companion_memory", True)
         self.enable_expression_learning = self._cfg_bool(c, "enable_expression_learning", True)
@@ -1246,12 +1249,15 @@ class PrivateCompanionPlugin(Star):
         return candidates[0]
 
     def _livingmemory_available(self) -> bool:
-        plugin_dir = self._livingmemory_plugin_dir()
-        return (
-            plugin_dir.exists()
-            and (plugin_dir / "main.py").exists()
-            and (plugin_dir / "core" / "tools" / "memory_search_tool.py").exists()
-        )
+        try:
+            plugin_dir = self._livingmemory_plugin_dir()
+            return (
+                plugin_dir.exists()
+                and (plugin_dir / "main.py").exists()
+                and (plugin_dir / "core" / "tools" / "memory_search_tool.py").exists()
+            )
+        except Exception:
+            return False
 
     def _format_livingmemory_guidance(self, *, scope: str = "private") -> str:
         if not self.enable_livingmemory_integration or not self._livingmemory_available():
@@ -1337,7 +1343,10 @@ class PrivateCompanionPlugin(Star):
             return self._bilibili_plugin_dir().parent.parent / "plugin_data" / "astrbot_plugin_bilibili_ai_bot" / "watch_log.json"
 
     def _bilibili_available(self) -> bool:
-        return self._bilibili_plugin_dir().exists() or self._bilibili_watch_log_file().exists()
+        try:
+            return self._bilibili_plugin_dir().exists() or self._bilibili_watch_log_file().exists()
+        except Exception:
+            return False
 
     def _find_bilibili_bot_instance(self) -> Any | None:
         for obj in gc.get_objects():
@@ -1353,10 +1362,10 @@ class PrivateCompanionPlugin(Star):
         return None
 
     def _load_bilibili_watch_log(self) -> list[dict[str, Any]]:
-        path = self._bilibili_watch_log_file()
-        if not path.exists():
-            return []
         try:
+            path = self._bilibili_watch_log_file()
+            if not path.exists():
+                return []
             with path.open("r", encoding="utf-8") as f:
                 raw = json.load(f)
             if isinstance(raw, list):
@@ -1611,6 +1620,7 @@ class PrivateCompanionPlugin(Star):
         user["planned_event_chain"] = []
         user["planned_opener_mode"] = ""
         user["planned_followup_kind"] = ""
+        user["planned_proactive_quota_exempt"] = False
         user["planned_candidate_id"] = item.get("id", "")
         context_key = _single_line(candidate.get("context_key"), 60)
         context = candidate.get("context")
@@ -4414,6 +4424,7 @@ Bot 主动后用户回复次数：{reply_count}
         user["planned_event_chain"] = list(current.get("chain") or []) if isinstance(current.get("chain"), list) else []
         user["planned_opener_mode"] = ""
         user["planned_followup_kind"] = ""
+        user["planned_proactive_quota_exempt"] = bool(current.get("_free_screen_peek"))
 
     def _consume_simulation_event(self, user: dict[str, Any]) -> None:
         sim = user.get("simulation_mode")
@@ -4438,6 +4449,7 @@ Bot 主动后用户回复次数：{reply_count}
         user["planned_event_chain"] = []
         user["planned_opener_mode"] = ""
         user["planned_followup_kind"] = ""
+        user["planned_proactive_quota_exempt"] = False
 
     def _available_test_actions(self, user: dict[str, Any]) -> list[str]:
         actions = ["message"]
@@ -4776,6 +4788,7 @@ Bot 主动后用户回复次数：{reply_count}
                 )
                 user["planned_opener_mode"] = ""
                 user["planned_followup_kind"] = ""
+                user["planned_proactive_quota_exempt"] = False
                 item = self._record_proactive_candidate(
                     str(user.get("user_id") or user.get("id") or ""),
                     {
@@ -4814,6 +4827,9 @@ Bot 主动后用户回复次数：{reply_count}
             else "chain_followup"
             if isinstance(planned_event, dict) and planned_event.get("_chain_followup")
             else ""
+        )
+        user["planned_proactive_quota_exempt"] = bool(
+            isinstance(planned_event, dict) and planned_event.get("_free_screen_peek")
         )
         item = self._record_proactive_candidate(
             str(user.get("user_id") or user.get("id") or ""),
@@ -4908,6 +4924,7 @@ Bot 主动后用户回复次数：{reply_count}
         user["planned_event_chain"] = list(event.get("chain") or []) if isinstance(event.get("chain"), list) else []
         user["planned_opener_mode"] = ""
         user["planned_followup_kind"] = ""
+        user["planned_proactive_quota_exempt"] = bool(event.get("_free_screen_peek"))
         return True
 
     def _pick_best_planned_event(
@@ -5413,7 +5430,7 @@ Bot 主动后用户回复次数：{reply_count}
         user["last_generated_photo_path"] = _single_line(image_path, 260)
         user["last_generated_photo_at"] = _now_ts()
 
-    def _note_screen_peek_attempt(self, user_id: str, reason: str = "") -> None:
+    def _note_screen_peek_attempt(self, user_id: str, reason: str = "", *, count_daily: bool = True) -> None:
         if not str(user_id or "").strip():
             return
         today = _today_key()
@@ -5421,9 +5438,12 @@ Bot 主动后用户回复次数：{reply_count}
         if user.get("screen_peek_day") != today:
             user["screen_peek_day"] = today
             user["screen_peek_today"] = 0
-        user["screen_peek_today"] = _safe_int(user.get("screen_peek_today"), 0) + 1
+        if count_daily:
+            user["screen_peek_today"] = _safe_int(user.get("screen_peek_today"), 0) + 1
         user["screen_peek_last_at"] = _now_ts()
         user["last_screen_peek_reason"] = _single_line(reason, 120)
+        if not count_daily:
+            user["last_unanswered_screen_peek_at"] = _now_ts()
 
     def _note_action_reply_feedback(self, user: dict[str, Any], action: str) -> None:
         raw = user.setdefault("action_reply_affinity", {})
@@ -5482,6 +5502,75 @@ Bot 主动后用户回复次数：{reply_count}
             "_origin_action": action,
             "_origin_reason": reason,
             "_cancel_on_inbound": True,
+        }
+
+    def _bot_currently_bored_for_unanswered_peek(self, user: dict[str, Any]) -> bool:
+        text_parts = [
+            user.get("last_proactive_reason"),
+            user.get("last_proactive_action"),
+            user.get("last_proactive_motive"),
+            user.get("planned_proactive_reason"),
+            user.get("planned_proactive_motive"),
+        ]
+        current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
+        if isinstance(current_item, dict):
+            text_parts.extend(
+                [
+                    current_item.get("activity"),
+                    current_item.get("mood"),
+                    current_item.get("message_seed"),
+                ]
+            )
+        snapshot = self._current_story_plan_snapshot()
+        if isinstance(snapshot, dict):
+            text_parts.extend(snapshot.values())
+        text = " ".join(_single_line(part, 80) for part in text_parts if part)
+        bored_tokens = (
+            "无聊", "发呆", "摸鱼", "闲", "空", "没事", "百无聊赖", "松下来",
+            "喘口气", "空档", "空隙", "刷视频", "短视频", "休息",
+        )
+        if any(token in text for token in bored_tokens):
+            return True
+        reason = str(user.get("last_proactive_reason") or user.get("planned_proactive_reason") or "")
+        return reason in {"check_in", "quiet_care", "background_schedule"} and _safe_int(user.get("ignored_streak"), 0) >= 1
+
+    def _maybe_make_unanswered_screen_peek_event(
+        self,
+        user: dict[str, Any],
+        reason: str,
+        action: str,
+    ) -> dict[str, Any] | None:
+        if not self.enable_unanswered_screen_peek_followup:
+            return None
+        if "screen_peek" in str(action or ""):
+            return None
+        if not self._screen_glance_available(user, ignore_daily_limit=True):
+            return None
+        now = _now_ts()
+        cooldown = max(30, self.unanswered_screen_peek_cooldown_minutes) * 60
+        last_at = _safe_float(user.get("last_unanswered_screen_peek_at"), 0)
+        if last_at > 0 and now - last_at < cooldown:
+            return None
+        if not self._bot_currently_bored_for_unanswered_peek(user):
+            return None
+        delay_minutes = max(10, self.unanswered_screen_peek_after_minutes)
+        return {
+            "date": _today_key(),
+            "window": self._window_from_delay_minutes(delay_minutes, width_minutes=18),
+            "reason": "check_in",
+            "action": "screen_peek",
+            "why": "上一条主动消息发出去后很久没有回音,又刚好有点无聊,想确认用户现在在做什么。",
+            "topic": "你这会儿在干嘛",
+            "motive": "刚才主动找你之后那边一直安静着,我又有点闲下来,就想偷偷看一眼你在忙什么",
+            "scene": "上一条主动消息之后的安静空档",
+            "tone": "小心又好奇",
+            "impulse": "不想连着催你,但有点好奇你是不是正在忙",
+            "_scheduled_ts": now + delay_minutes * 60,
+            "_cancel_on_inbound": True,
+            "_unanswered_screen_peek": True,
+            "_free_screen_peek": True,
+            "_origin_action": action,
+            "_origin_reason": reason,
         }
 
     def _window_from_delay_minutes(self, delay_minutes: int, width_minutes: int = 24) -> str:
@@ -5837,10 +5926,15 @@ Bot 主动后用户回复次数：{reply_count}
             base[action] = max(-0.08, min(0.28, (rate - 0.35) * 0.55))
         return base
 
-    def _screen_glance_available(self, user: dict[str, Any] | None = None) -> bool:
+    def _screen_glance_available(
+        self,
+        user: dict[str, Any] | None = None,
+        *,
+        ignore_daily_limit: bool = False,
+    ) -> bool:
         if not self.enable_screen_glance_action:
             return False
-        if self.screen_peek_max_daily <= 0:
+        if self.screen_peek_max_daily <= 0 and not ignore_daily_limit:
             return False
         if isinstance(user, dict):
             today = _today_key()
@@ -5849,22 +5943,28 @@ Bot 主动后用户回复次数：{reply_count}
                 if str(user.get("screen_peek_day") or "") == today
                 else 0
             )
-            if used_today >= self.screen_peek_max_daily:
+            if not ignore_daily_limit and used_today >= self.screen_peek_max_daily:
                 return False
             cooldown_seconds = max(0, self.screen_peek_cooldown_minutes) * 60
             last_at = _safe_float(user.get("screen_peek_last_at"), 0.0)
             if cooldown_seconds > 0 and last_at > 0 and _now_ts() - last_at < cooldown_seconds:
                 return False
-        plugin = self._get_screen_companion_plugin()
-        return plugin is not None and hasattr(plugin, "_invoke_screen_skill")
+        try:
+            plugin = self._get_screen_companion_plugin()
+            return plugin is not None and callable(getattr(plugin, "_invoke_screen_skill", None))
+        except Exception:
+            return False
 
     def _comfyui_photo_available(self) -> bool:
         if not self.enable_photo_text_action:
             return False
         if not self.comfyui_text2img_workflow_name and not self.comfyui_selfie_workflow_name:
             return False
-        module = self._get_comfyui_module()
-        return module is not None
+        try:
+            module = self._get_comfyui_module()
+            return module is not None
+        except Exception:
+            return False
 
     def _external_photo_available(self) -> bool:
         if not self.enable_photo_text_action:
@@ -5934,7 +6034,10 @@ Bot 主动后用户回复次数：{reply_count}
         provider_settings = dict(config.get("provider_tts_settings", {}) or {})
         if not provider_settings.get("enable", False):
             return False
-        return bool(self.context.get_using_tts_provider(target))
+        try:
+            return bool(self.context.get_using_tts_provider(target))
+        except Exception:
+            return False
 
     def _action_is_available(self, action: str, user: dict[str, Any] | None = None) -> bool:
         normalized = str(action or "message").strip()
@@ -5943,8 +6046,9 @@ Bot 主动后用户回复次数：{reply_count}
         parts = [part.strip() for part in normalized.split("+") if part.strip()]
         if not parts:
             return True
+        screen_quota_exempt = bool(isinstance(user, dict) and user.get("planned_proactive_quota_exempt"))
         for part in parts:
-            if part == "screen_peek" and not self._screen_glance_available(user):
+            if part == "screen_peek" and not self._screen_glance_available(user, ignore_daily_limit=screen_quota_exempt):
                 return False
             if part == "photo_text" and not self._photo_text_available(user):
                 return False
@@ -7650,7 +7754,12 @@ Bot 主动后用户回复次数：{reply_count}
                 }
             return await self._execute_single_action(fallback_action, user, name, reason)
         if action == "screen_peek":
-            context = await self._run_screen_peek_action(user, name, reason)
+            context = await self._run_screen_peek_action(
+                user,
+                name,
+                reason,
+                quota_exempt=bool(user.get("planned_proactive_quota_exempt")),
+            )
             return {
                 "success": not self._is_unusable_screen_peek_context(context),
                 "context": context,
@@ -7700,7 +7809,12 @@ Bot 主动后用户回复次数：{reply_count}
         return any(token in text for token in fail_tokens)
 
     async def _run_screen_peek_action(
-        self, user: dict[str, Any], name: str, reason: str
+        self,
+        user: dict[str, Any],
+        name: str,
+        reason: str,
+        *,
+        quota_exempt: bool = False,
     ) -> str:
         if not self.enable_screen_glance_action:
             return "screen_peek：未授权,跳过"
@@ -7708,10 +7822,14 @@ Bot 主动后用户回复次数：{reply_count}
         if plugin is None:
             return "screen_peek：屏幕插件不可用"
         target = str(user.get("umo") or "").strip()
-        if not self._screen_glance_available(user):
+        if not self._screen_glance_available(user, ignore_daily_limit=quota_exempt):
             return "screen_peek：今日额度或冷却未满足,跳过"
         async with self._data_lock:
-            self._note_screen_peek_attempt(str(user.get("user_id") or user.get("umo") or name), reason=reason)
+            self._note_screen_peek_attempt(
+                str(user.get("user_id") or user.get("umo") or name),
+                reason=reason,
+                count_daily=not quota_exempt,
+            )
             self._save_data_sync()
         event = None
         if target and hasattr(plugin, "_create_virtual_event"):
@@ -7742,14 +7860,17 @@ Bot 主动后用户回复次数：{reply_count}
             try:
                 module = importlib.import_module(module_name)
                 plugin = getattr(module, "_screen_companion_tool_plugin", None)
-                if plugin is not None:
+                if plugin is not None and callable(getattr(plugin, "_invoke_screen_skill", None)):
                     return plugin
             except Exception:
                 continue
         for module in list(sys.modules.values()):
-            plugin = getattr(module, "_screen_companion_tool_plugin", None)
-            if plugin is not None:
-                return plugin
+            try:
+                plugin = getattr(module, "_screen_companion_tool_plugin", None)
+                if plugin is not None and callable(getattr(plugin, "_invoke_screen_skill", None)):
+                    return plugin
+            except Exception:
+                continue
         return None
 
     async def _run_poke_action(
@@ -8228,7 +8349,10 @@ Bot 主动后用户回复次数：{reply_count}
         provider_settings = dict(config.get("provider_tts_settings", {}) or {})
         if not provider_settings.get("enable", False):
             return [], "当前会话未启用 TTS"
-        tts_provider = self.context.get_using_tts_provider(target)
+        try:
+            tts_provider = self.context.get_using_tts_provider(target)
+        except Exception as e:
+            return [], f"读取 TTS provider 失败：{e}"
         if not tts_provider:
             return [], "当前会话没有可用的 TTS provider"
         if "<tts>" in spoken_text and "</tts>" in spoken_text:
@@ -8811,8 +8935,11 @@ Bot 主动后用户回复次数：{reply_count}
             except Exception:
                 continue
         for module in list(sys.modules.values()):
-            if hasattr(module, "ComfyUIWorkflow") and hasattr(module, "_get_result_for_prompt"):
-                return module
+            try:
+                if hasattr(module, "ComfyUIWorkflow") and hasattr(module, "_get_result_for_prompt"):
+                    return module
+            except Exception:
+                continue
         return None
 
     def _extract_action_image_path(self, action_context: str) -> str:
@@ -13797,6 +13924,7 @@ Bot 主动后用户回复次数：{reply_count}
             user["planned_event_chain"] = list(payload.get("chain") or []) if isinstance(payload.get("chain"), list) else []
             user["planned_opener_mode"] = ""
             user["planned_followup_kind"] = ""
+            user["planned_proactive_quota_exempt"] = False
             self._save_data_sync()
         logger.info(
             "[PrivateCompanion] 已记录 LLM 自预约: user=%s time=%s reason=%s action=%s topic=%s",
@@ -14552,6 +14680,7 @@ Bot 主动后用户回复次数：{reply_count}
                         current["planned_proactive_topic"] = ""
                         current["planned_opener_mode"] = ""
                         current["planned_followup_kind"] = ""
+                        current["planned_proactive_quota_exempt"] = False
                         self._schedule_next_proactive(current, now=_now_ts(), delay_hours=(2, 8))
                     self._save_data_sync()
                 logger.debug(f"[PrivateCompanion] 放弃 {user_id}: 主动行为失败或不适合发送")
@@ -14606,6 +14735,7 @@ Bot 主动后用户回复次数：{reply_count}
                     current_after_failure["planned_event_chain"] = []
                     current_after_failure["planned_opener_mode"] = ""
                     current_after_failure["planned_followup_kind"] = ""
+                    current_after_failure["planned_proactive_quota_exempt"] = False
                     self._schedule_next_proactive(current_after_failure, now=_now_ts(), delay_hours=(6, 12))
                     self._save_data_sync()
                 continue
@@ -14707,7 +14837,11 @@ Bot 主动后用户回复次数：{reply_count}
                     elif followup_kind in {"suspended_opener", "chain_followup"} or opener_mode == "name_only":
                         current["pending_followup_event"] = {}
                     else:
-                        current["pending_followup_event"] = self._maybe_make_followup_event(
+                        current["pending_followup_event"] = self._maybe_make_unanswered_screen_peek_event(
+                            current,
+                            reason,
+                            current["last_proactive_action"],
+                        ) or self._maybe_make_followup_event(
                             current,
                             reason,
                             current["last_proactive_action"],
@@ -14732,6 +14866,7 @@ Bot 主动后用户回复次数：{reply_count}
                         current["planned_event_chain"] = list(next_timer.get("chain") or []) if isinstance(next_timer.get("chain"), list) else []
                         current["planned_opener_mode"] = ""
                         current["planned_followup_kind"] = ""
+                        current["planned_proactive_quota_exempt"] = False
                     else:
                         current["next_proactive_at"] = 0
                         current["planned_proactive_reason"] = ""
@@ -14742,6 +14877,7 @@ Bot 主动后用户回复次数：{reply_count}
                         current["planned_event_chain"] = []
                         current["planned_opener_mode"] = ""
                         current["planned_followup_kind"] = ""
+                        current["planned_proactive_quota_exempt"] = False
                         self._schedule_next_proactive(current, now=_now_ts())
                 self._save_data_sync()
                 current_snapshot = dict(current)
@@ -15849,6 +15985,7 @@ Bot 主动后用户回复次数：{reply_count}
                 suspended["complaint_sent"] = True
                 suspended["second_followup"] = {}
                 user["pending_followup_event"] = {}
+                user["planned_proactive_quota_exempt"] = False
             if _safe_float(user.get("awaiting_reply_since"), 0) > 0:
                 user["reply_count"] = _safe_int(user.get("reply_count"), 0) + 1
                 self._note_action_reply_feedback(
@@ -15859,6 +15996,7 @@ Bot 主动后用户回复次数：{reply_count}
                 user["awaiting_reply_since"] = 0
                 user["last_reply_at"] = _now_ts()
                 user["pending_followup_event"] = {}
+                user["planned_proactive_quota_exempt"] = False
             user["ignored_streak"] = 0
             if text:
                 user["last_user_message"] = text
