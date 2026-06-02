@@ -1,5 +1,6 @@
 const HTTP_API = "/astrbot_plugin_private_companion/page";
 const PAGE_ENDPOINT_PREFIX = "page";
+const TRANSPARENT_IMAGE = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
 const state = {
   overview: null,
@@ -15,6 +16,7 @@ const state = {
   selectedUserId: "",
   selectedGroupId: "",
   featureDraft: {},
+  selectedFeatureKey: "",
 };
 
 const providerLabels = {
@@ -35,7 +37,11 @@ const providerLabels = {
   GROUP_INTERJECT_PROVIDER_ID: "群聊主动插话",
   GROUP_EPISODE_PROVIDER_ID: "群聊片段整理",
   GROUP_SLANG_PROVIDER_ID: "群内黑话释义",
-  PRIVATE_READING_VISION_PROVIDER_ID: "夹层阅读视觉",
+  GROUP_FOLLOWUP_JUDGE_PROVIDER_ID: "群聊续接判断",
+  FORWARD_MESSAGE_PROVIDER_ID: "合并消息转述",
+  PRIVATE_READING_VISION_PROVIDER_ID: "总视觉模型",
+  NEWS_PROVIDER_ID: "新闻整理",
+  WEB_EXPLORATION_PROVIDER_ID: "网页探索",
 };
 
 const privateReadingConfigKeys = new Set([
@@ -47,8 +53,15 @@ const privateReadingConfigKeys = new Set([
   "private_reading_share_probability",
   "private_reading_ask_probability",
   "private_reading_default_keywords",
-  "PRIVATE_READING_VISION_PROVIDER_ID",
 ]);
+
+function isPrivateReadingAvailable() {
+  return Boolean(state.overview?.private_reading?.available);
+}
+
+function visibleConfigKey(key) {
+  return isPrivateReadingAvailable() || !privateReadingConfigKeys.has(key);
+}
 
 const providerDescriptions = {
   LLM_PROVIDER_ID: "基础兜底模型。主动消息、未指定模型的任务都会向这里回退。",
@@ -68,7 +81,11 @@ const providerDescriptions = {
   GROUP_INTERJECT_PROVIDER_ID: "群聊主动插话专用。建议选择短文本质量好、反应稳的模型。",
   GROUP_EPISODE_PROVIDER_ID: "整理群聊片段、群氛围和话题线，主要用于群聊观察。",
   GROUP_SLANG_PROVIDER_ID: "解释群内黑话、梗和成员称呼，适合用小模型。",
-  PRIVATE_READING_VISION_PROVIDER_ID: "观察私密阅读素材封面并形成非露骨的内部阅读印象。留空时尝试回退到工具转述模型。",
+  GROUP_FOLLOWUP_JUDGE_PROVIDER_ID: "判断群里用户后续没 @ 的话是否仍在和 Bot 对话。适合便宜、低延迟、YES/NO 分类稳定的小模型；留空只用规则，填写后只在模糊场景调用。",
+  FORWARD_MESSAGE_PROVIDER_ID: "合并消息适配方式选择“转述”时使用：先把合并转发读成自然记录，再交给主模型回应。适合长上下文整理稳定、成本较低的模型。",
+  PRIVATE_READING_VISION_PROVIDER_ID: "通用视觉理解模型。用于识屏、图片观察、素材封面和抽样页理解等看图任务；适合多模态能力稳定、能准确读图和识别画面文字的模型。",
+  NEWS_PROVIDER_ID: "从新闻候选里挑选适合分享的内容，并整理成 Bot 自己的内部印象。适合便宜、稳定、短 JSON 输出可靠的模型。",
+  WEB_EXPLORATION_PROVIDER_ID: "让 Bot 自己决定想搜索什么，并把 AstrBot 网页搜索结果整理成探索笔记。适合便宜、稳定、短 JSON 输出可靠的模型。",
 };
 
 const featureMeta = {
@@ -82,6 +99,7 @@ const featureMeta = {
   enable_relationship_state_machine: ["关系状态机", "维护陌生、熟悉、亲近等关系阶段。"],
   enable_dialogue_episode_memory: ["私聊片段", "把连续对话整理成共同经历和可续话头。"],
   enable_open_loop_tracking: ["未完话头", "记录用户提到的待办、约定、之后再说的事。"],
+  enable_semantic_message_debounce: ["语义收口等待", "被唤醒后短暂等待用户补完，把连续几句合成一轮理解。"],
   enable_environment_perception: ["环境感知", "注入当前时间、日期语境、平台、群聊/私聊和消息媒介信息。"],
   enable_holiday_perception: ["节假日感知", "识别工作日、周末、节假日和调休，影响生活节奏判断。"],
   enable_platform_perception: ["平台感知", "识别 QQ/平台、私聊/群聊、群号群名以及图片语音视频消息。"],
@@ -92,7 +110,9 @@ const featureMeta = {
   enable_group_slang_learning: ["群黑话学习", "记录群内常用梗、简称和特殊表达。"],
   enable_group_member_profiles: ["群成员画像", "记录成员发言习惯和群内角色，帮助判断气氛。"],
   enable_group_context_injection: ["群上下文注入", "在群聊回复时加入群氛围、话题和成员信息。"],
+  enable_forward_message_adaptation: ["合并消息阅读", "读取合并转发节点并整理成自然聊天记录，让 Bot 能理解转发里的发言顺序、人物和话题。"],
   enable_group_scene_awareness: ["群聊场景感知", "推断当前消息是在对 Bot、某个群友还是整个群说话，减少误以为别人都在问自己。"],
+  enable_group_conversation_followup: ["连续对话保持", "群里叫过 Bot 后，短时间内判断同一用户没继续 @ 的话是否仍在对 Bot 说。"],
   enable_group_interjection: ["群主动插话", "允许 Bot 在群聊里主动插一句。谨慎开启。"],
   enable_group_repeat_follow: ["复读处理", "同一句话连续复读超过三次时，可跟读一次或打断一次。"],
   enable_group_topic_threads: ["群话题线", "维护当前群聊正在聊什么，以及话题如何变化。"],
@@ -106,6 +126,10 @@ const featureMeta = {
   enable_livingmemory_integration: ["LivingMemory 协同", "引导模型按需调用长期记忆工具，避免重复造轮子。"],
   enable_bilibili_integration: ["B 站联动", "读取 B 站 Bot 观看日志，并在合适节点私聊分享。"],
   enable_bilibili_boredom_watch: ["无聊刷 B 站", "空档或无聊时低频触发 B 站 Bot 自己看视频。"],
+  enable_news_integration: ["新闻阅读", "低频读取 RSS/Atom 新闻源，形成近期见闻和主动分享素材。"],
+  enable_news_boredom_read: ["无聊看新闻", "空档或无聊时扫几条新闻，按人格决定是否私聊提起。"],
+  enable_web_exploration: ["主动搜索", "按人格兴趣、最近话题、日程和心情低频使用 AstrBot 网页搜索，形成探索笔记。"],
+  enable_web_exploration_boredom_search: ["空档自主搜索", "空闲或无聊时先自行决定搜索主题，再调用网页搜索了解新鲜事物。"],
   enable_qzone_integration: ["QQ 空间动态", "整合查看、点赞、评论和发布说说入口。"],
   enable_qzone_life_publish: ["生活说说", "根据状态、日程和日记余味低频发布公开生活动态。"],
   enable_private_reading_integration: ["夹层阅读素材", "检测到可用素材能力时，允许作为低频私下阅读来源。"],
@@ -131,6 +155,7 @@ const featureGroups = [
       "enable_relationship_state_machine",
       "enable_dialogue_episode_memory",
       "enable_open_loop_tracking",
+      "enable_semantic_message_debounce",
     ],
   },
   {
@@ -151,7 +176,9 @@ const featureGroups = [
     keys: [
       "enable_group_companion",
       "enable_group_context_injection",
+      "enable_forward_message_adaptation",
       "enable_group_scene_awareness",
+      "enable_group_conversation_followup",
       "enable_group_slang_learning",
       "enable_group_slang_meanings",
       "enable_group_member_profiles",
@@ -179,6 +206,8 @@ const featureGroups = [
     keys: [
       "enable_bilibili_integration",
       "enable_bilibili_boredom_watch",
+      "enable_news_integration",
+      "enable_web_exploration",
       "enable_qzone_integration",
       "enable_qzone_life_publish",
       "enable_private_reading_integration",
@@ -200,6 +229,7 @@ const safeFeatureKeys = [
   "enable_relationship_state_machine",
   "enable_dialogue_episode_memory",
   "enable_open_loop_tracking",
+  "enable_semantic_message_debounce",
   "enable_environment_perception",
   "enable_holiday_perception",
   "enable_platform_perception",
@@ -212,11 +242,26 @@ const configLabels = {
   user_count: "私聊对象总数",
   require_opt_in: "是否需要私聊确认",
   max_daily_messages: "每日主动上限",
+  inbound_message_debounce_seconds: "用户消息防抖秒数",
+  enable_semantic_message_debounce: "语义收口等待",
+  semantic_message_debounce_seconds: "收口等待秒数",
+  group_conversation_followup_seconds: "群聊续接判断秒数",
+  group_conversation_followup_max_turns: "群聊连续续接上限",
+  enable_group_conversation_followup: "启用连续对话保持",
+  forward_message_mode: "合并消息适配方式",
+  forward_message_max_messages: "合并消息最多读取条数",
+  forward_message_max_chars: "合并消息注入字数上限",
+  forward_message_parse_nested: "展开嵌套合并消息",
+  forward_message_image_vision: "合并消息图片视觉",
+  forward_message_image_limit: "合并消息视觉图片上限",
   daily_token_limit: "每日 Token 限额",
   worldview_adaptation_mode: "世界观适配模式",
   worldview_adaptation_prompt: "自定义世界观适配",
+  environment_perception_timezone: "环境感知时区",
+  holiday_country: "节假日地区",
   idle_minutes: "空闲门槛分钟",
   min_interval_minutes: "最小主动间隔分钟",
+  check_interval_seconds: "后台检查间隔秒",
   enabled: "群聊总开关",
   group_count: "群记录总数",
   enabled_group_count: "启用群数量",
@@ -225,6 +270,58 @@ const configLabels = {
   blacklist: "黑名单",
   interjection_enabled: "群主动插话",
   repeat_follow_enabled: "复读跟读",
+  group_interject_min_interval_minutes: "群插话最小间隔",
+  group_interject_max_daily: "每群每日插话上限",
+  group_repeat_follow_probability: "跟读初始概率",
+  group_repeat_interrupt_probability: "打断初始概率",
+  group_repeat_interrupt_probability_step: "概率共同递增",
+  group_repeat_interrupt_text: "打断文本",
+  group_repeat_interrupt_image_path: "打断表情包路径",
+  group_scene_recent_limit: "场景感知消息数",
+  worldbook_auto_import: "启动时刷新关系网",
+  worldbook_member_match_aliases: "允许别名辅助匹配",
+  worldbook_self_registration: "允许群聊自登记",
+  worldbook_auto_pending_observations: "低频待确认观察",
+  worldbook_member_inject_limit: "单次注入节点数",
+  worldbook_config_paths: "关系网配置路径",
+  atrelay_require_worldbook_first: "优先按关系网解析",
+  atrelay_member_cache_minutes: "群成员缓存分钟",
+  atrelay_sensitive_confirm: "敏感转述确认",
+  atrelay_default_relay_style: "默认转述方式",
+  atrelay_multi_target_limit: "多目标单次上限",
+  memory_refresh_interval_minutes: "长期画像整理间隔",
+  max_companion_memory_items: "长期画像条目上限",
+  max_learned_expression_items: "表达样本上限",
+  episode_memory_refresh_messages: "片段整理消息阈值",
+  episode_memory_refresh_minutes: "片段整理时间阈值",
+  max_dialogue_episodes: "私聊片段上限",
+  bilibili_boredom_min_interval_hours: "B 站触发间隔",
+  bilibili_share_probability: "视频分享概率",
+  bilibili_share_min_score: "视频分享最低评分",
+  news_min_interval_hours: "新闻读取间隔",
+  news_share_probability: "新闻分享概率",
+  news_max_items_per_source: "单源读取条数",
+  news_sources: "新闻源",
+  enable_news_daily_hot_read: "每日获取热点",
+  news_hot_sources: "热点来源",
+  news_hot_max_items: "热点候选数量",
+  web_exploration_min_interval_hours: "网页探索间隔",
+  web_exploration_share_probability: "探索分享概率",
+  web_exploration_max_results: "搜索结果数",
+  web_exploration_interests: "探索兴趣倾向",
+  qzone_life_publish_min_interval_hours: "说说最小间隔",
+  qzone_life_publish_probability: "说说触发概率",
+  private_reading_min_interval_hours: "阅读最小间隔",
+  private_reading_max_photo_count: "页数上限",
+  private_reading_share_probability: "主动提起概率",
+  private_reading_default_keywords: "默认搜索关键词",
+  private_reading_ask_probability: "征求推荐概率",
+  unanswered_screen_peek_after_minutes: "沉默多久后窥屏",
+  unanswered_screen_peek_cooldown_minutes: "沉默窥屏冷却",
+  creative_inspiration_probability: "创作灵感概率",
+  creative_share_probability: "创作透露概率",
+  creative_base_chars_per_hour: "基础写作速度",
+  creative_max_active_projects: "同时创作项目上限",
   active_projects: "进行中创作",
   project_count: "创作项目",
   boredom_watch_enabled: "无聊刷视频",
@@ -263,6 +360,9 @@ const tokenTaskLabels = {
   group_episode: "群聊片段",
   group_slang: "黑话释义",
   worldbook_registration: "关系网自登记",
+  web_exploration_query: "探索选题",
+  web_exploration_digest: "探索笔记",
+  news_digest: "新闻整理",
   creative_project: "创作立项",
   creative_writing: "小说创作",
   photo_prompt: "生图提示",
@@ -287,6 +387,61 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function bookshelfImageTag(src, alt) {
+  const imageSrc = String(src || "");
+  if (!imageSrc) return "";
+  return `<img src="${TRANSPARENT_IMAGE}" data-bookshelf-image-src="${escapeHtml(imageSrc)}" alt="${escapeHtml(alt || "书柜图片")}" loading="lazy" />`;
+}
+
+function bookshelfImageDataPath(src) {
+  const raw = String(src || "");
+  if (!raw) return "";
+  if (raw.startsWith("data:")) return raw;
+  try {
+    const url = new URL(raw, window.location.origin);
+    if (url.pathname.endsWith("/bookshelf/image")) {
+      return `/bookshelf/image_data${url.search}`;
+    }
+    const marker = "/bookshelf/image?";
+    const markerIndex = raw.indexOf(marker);
+    if (markerIndex >= 0) {
+      return `/bookshelf/image_data?${raw.slice(markerIndex + marker.length)}`;
+    }
+  } catch (error) {
+    const marker = "/bookshelf/image?";
+    const markerIndex = raw.indexOf(marker);
+    if (markerIndex >= 0) return `/bookshelf/image_data?${raw.slice(markerIndex + marker.length)}`;
+  }
+  return raw;
+}
+
+async function hydrateBookshelfImages(root = document) {
+  const images = [...root.querySelectorAll("img[data-bookshelf-image-src]")];
+  await Promise.all(images.map(async (img) => {
+    if (img.dataset.loaded === "1" || img.dataset.loading === "1") return;
+    const source = img.dataset.bookshelfImageSrc || "";
+    if (!source) return;
+    img.dataset.loading = "1";
+    const endpoint = bookshelfImageDataPath(source);
+    try {
+      if (endpoint.startsWith("data:")) {
+        img.src = endpoint;
+      } else if (endpoint.startsWith("/bookshelf/image_data")) {
+        const result = await fetchJson(endpoint);
+        if (result?.data_url) img.src = result.data_url;
+      } else {
+        img.src = source;
+      }
+      img.dataset.loaded = "1";
+    } catch (error) {
+      img.dataset.loaded = "0";
+      img.alt = `${img.alt || "书柜图片"}（加载失败）`;
+    } finally {
+      img.dataset.loading = "0";
+    }
+  }));
 }
 
 async function fetchJson(path, options = {}) {
@@ -444,6 +599,8 @@ function renderDashboard() {
   renderGroupBubbleChart();
   renderQuotaChart();
   renderFeatureMatrix();
+  renderNewsInsightPanel();
+  renderWebExplorationPanel();
   renderActivityHeatmap();
 }
 
@@ -516,6 +673,87 @@ function formatCompactNumber(value) {
   if (number >= 1000000) return `${(number / 1000000).toFixed(number >= 10000000 ? 0 : 1)}M`;
   if (number >= 1000) return `${(number / 1000).toFixed(number >= 10000 ? 0 : 1)}K`;
   return String(Math.round(number));
+}
+
+function insightStatus(value) {
+  const text = String(value || "").trim();
+  const labels = {
+    read: "已阅读",
+    explored: "已搜索",
+    no_items: "暂无候选",
+    no_results: "无结果",
+    digest_failed: "整理失败",
+    web_search_disabled_or_unconfigured: "搜索未配置",
+  };
+  return labels[text] || text || "暂无";
+}
+
+function renderNewsInsightPanel() {
+  const news = state.overview?.news || {};
+  const digest = news.last_digest || {};
+  const items = Array.isArray(news.latest_items) ? news.latest_items : [];
+  const enabled = Boolean(news.enabled);
+  const dailyHot = Boolean(news.daily_hot_enabled);
+  const headline = digest.headline || digest.topic || "暂无新闻见闻";
+  const impression = digest.impression || (enabled ? "等待下一次日程生成或新闻阅读。" : "新闻阅读未开启。");
+  const itemHtml = items.length
+    ? items.slice(0, 6).map((item) => `
+      <li>
+        <span>${escapeHtml(item.source || "来源")}</span>
+        <b>${escapeHtml(item.title || "未命名")}</b>
+      </li>
+    `).join("")
+    : `<li class="empty-line">暂无候选记录</li>`;
+  $("#newsInsightPanel").innerHTML = `
+    <div class="insight-head">
+      <div>
+        <span class="eyebrow">${enabled ? "新闻阅读" : "未开启"}</span>
+        <b>${escapeHtml(headline)}</b>
+      </div>
+      <small>${escapeHtml(news.last_read_at || "未阅读")}</small>
+    </div>
+    <p>${escapeHtml(impression)}</p>
+    <div class="insight-meta">
+      <span>${escapeHtml(insightStatus(news.last_status))}</span>
+      <span>${dailyHot ? "每日热点开启" : "每日热点关闭"}</span>
+      <span>${news.boredom_read_enabled ? "空档阅读开启" : "空档阅读关闭"}</span>
+    </div>
+    <ul class="insight-list">${itemHtml}</ul>
+  `;
+}
+
+function renderWebExplorationPanel() {
+  const exploration = state.overview?.web_exploration || {};
+  const digest = exploration.last_digest || {};
+  const query = exploration.last_query || {};
+  const notes = Array.isArray(exploration.recent_notes) ? exploration.recent_notes : [];
+  const enabled = Boolean(exploration.enabled);
+  const title = digest.topic || query.query || "暂无主动搜索记录";
+  const note = digest.note || (enabled ? "等待 Bot 在空档里按兴趣自行搜索。" : "主动搜索未开启。");
+  const noteHtml = notes.length
+    ? notes.slice().reverse().slice(0, 6).map((item) => `
+      <li>
+        <span>${escapeHtml(item.created_at || "")}</span>
+        <b>${escapeHtml(item.topic || item.query || "探索笔记")}</b>
+      </li>
+    `).join("")
+    : `<li class="empty-line">暂无搜索笔记</li>`;
+  $("#webExplorationPanel").innerHTML = `
+    <div class="insight-head">
+      <div>
+        <span class="eyebrow">${enabled ? "主动搜索" : "未开启"}</span>
+        <b>${escapeHtml(title)}</b>
+      </div>
+      <small>${escapeHtml(exploration.last_explore_at || "未搜索")}</small>
+    </div>
+    <p>${escapeHtml(note)}</p>
+    <div class="insight-meta">
+      <span>${escapeHtml(insightStatus(exploration.last_status))}</span>
+      <span>${exploration.available ? "网页搜索可用" : "网页搜索未配置"}</span>
+      <span>${exploration.boredom_search_enabled ? "空档搜索开启" : "空档搜索关闭"}</span>
+    </div>
+    <ul class="insight-list">${noteHtml}</ul>
+  `;
 }
 
 function moduleShortcutNote(settings) {
@@ -674,7 +912,6 @@ function renderGroupBubbleChart() {
 }
 
 function renderFeatureMatrix() {
-  const privateReadingAvailable = Boolean(state.overview?.private_reading?.available);
   const groups = [
     ["陪伴", ["enable_mai_style_integration", "enable_expression_learning", "enable_response_self_review", "enable_dialogue_episode_memory"]],
     ["群聊", ["enable_group_companion", "enable_group_context_injection", "enable_group_slang_learning", "enable_group_topic_threads", "enable_group_relationship_graph"]],
@@ -684,7 +921,7 @@ function renderFeatureMatrix() {
   $("#featureMatrix").innerHTML = groups.map(([label, keys]) => `
     <section>
       <h3>${escapeHtml(label)}</h3>
-      ${keys.filter((key) => privateReadingAvailable || !privateReadingConfigKeys.has(key)).map((key) => `<span class="feature-dot ${state.overview?.features?.[key] ? "on" : "off"}" title="${escapeHtml(key)}">${escapeHtml(key.replace(/^enable_/, ""))}</span>`).join("")}
+      ${keys.filter(visibleConfigKey).map((key) => `<span class="feature-dot ${state.overview?.features?.[key] ? "on" : "off"}" title="${escapeHtml(key)}">${escapeHtml(key.replace(/^enable_/, ""))}</span>`).join("")}
     </section>
   `).join("");
 }
@@ -1258,6 +1495,7 @@ function worldbookMemberCard(item) {
   const aliases = Array.isArray(item.aliases) ? item.aliases : [];
   const observed = Array.isArray(item.observed_names) ? item.observed_names : [];
   const memories = Array.isArray(item.important_memories) ? item.important_memories : [];
+  const pending = Array.isArray(item.pending_observations) ? item.pending_observations : [];
   const chips = [...aliases.map((name) => `别名：${name}`), ...observed.map((name) => `群名片：${name}`)].slice(0, 12);
   const sourceEntries = Array.isArray(item.source_entries) ? item.source_entries : [];
   const detailId = `worldbook-editor-${String(item.user_id || "").replace(/[^A-Za-z0-9_-]/g, "_")}`;
@@ -1281,6 +1519,7 @@ function worldbookMemberCard(item) {
         <span>${escapeHtml(aliases.length)} 个别名</span>
         <span>${escapeHtml(observed.length)} 个曾见群名片</span>
         <span>${escapeHtml((item.important_memories || []).length)} 条记忆</span>
+        ${pending.length ? `<span>${escapeHtml(pending.length)} 条待确认观察</span>` : ""}
         ${sourceEntries.length ? `<span>${escapeHtml(sourceEntries.slice(0, 2).join(" / "))}</span>` : ""}
       </div>
       ${previewItems.length ? `
@@ -1314,6 +1553,7 @@ function worldbookMemberCard(item) {
           <textarea data-worldbook-boundary-note="${escapeHtml(item.user_id || "")}" rows="3">${escapeHtml(item.boundary_note || "")}</textarea>
         </label>
         <div class="worldbook-memory-list">
+          ${pending.length ? pending.map((obs) => worldbookPendingObservationCard(item.user_id || "", obs)).join("") : ""}
           ${memories.length ? memories.map((memory, index) => worldbookMemoryCard(item.user_id || "", memory, index)).join("") : `<div class="empty small">暂无重要记忆</div>`}
         </div>
         <div class="worldbook-editor-actions">
@@ -1321,6 +1561,22 @@ function worldbookMemberCard(item) {
           <button type="button" data-worldbook-delete="${escapeHtml(item.user_id || "")}" class="danger-outline">删除节点</button>
         </div>
       </details>
+    </section>
+  `;
+}
+
+function worldbookPendingObservationCard(userId, obs) {
+  return `
+    <section class="worldbook-memory-card pending">
+      <div>
+        <b>${escapeHtml(obs.title || "待确认观察")}</b>
+        <p>${escapeHtml(obs.content || obs.evidence || "")}</p>
+        <span>${escapeHtml(obs.group_id ? `群 ${obs.group_id}` : "群聊观察")} · ${escapeHtml(obs.created_at || "")}${obs.count > 1 ? ` · ${escapeHtml(obs.count)} 次` : ""}</span>
+      </div>
+      <div class="actions compact">
+        <button type="button" data-worldbook-observation-accept="${escapeHtml(userId)}" data-observation-id="${escapeHtml(obs.id || "")}">确认</button>
+        <button type="button" class="danger-outline" data-worldbook-observation-reject="${escapeHtml(userId)}" data-observation-id="${escapeHtml(obs.id || "")}">忽略</button>
+      </div>
     </section>
   `;
 }
@@ -1423,6 +1679,17 @@ async function handleWorldbookMemberAction(button) {
     if (!userId || index < 0 || index >= memories.length) return;
     memories.splice(index, 1);
     await runAction(() => postJson("/worldbook/member/update", { user_id: userId, important_memories: memories }), "已删除重要记忆", button);
+    return;
+  }
+  if (button.dataset.worldbookObservationAccept !== undefined || button.dataset.worldbookObservationReject !== undefined) {
+    const accepting = button.dataset.worldbookObservationAccept !== undefined;
+    const userId = accepting ? button.dataset.worldbookObservationAccept : button.dataset.worldbookObservationReject;
+    const observationId = button.dataset.observationId || "";
+    if (!userId || !observationId) return;
+    await runAction(() => postJson("/worldbook/member/update", {
+      user_id: userId,
+      [accepting ? "accept_pending_observation_id" : "reject_pending_observation_id"]: observationId,
+    }), accepting ? "已写入重要记忆" : "已忽略待确认观察", button);
     return;
   }
   if (button.dataset.worldbookDelete !== undefined) {
@@ -1530,11 +1797,17 @@ function renderLifeHero(daily, life) {
   $("#lifeEnergyBar").style.width = `${pct}%`;
   $("#lifeMood").textContent = daily.mood_bias || "平稳";
   $("#lifeNote").textContent = daily.note || daily.sleep || "暂无额外备注";
-  $("#lifeLocation").textContent = daily.location || "未记录";
+  $("#lifeLocation").textContent = normalizeLocationText(daily.location);
   $("#lifeWeather").textContent = daily.weather || "暂无天气";
   const current = life.current_plan || {};
   $("#lifeCurrentActivity").textContent = current.activity || "暂无当前日程";
   $("#lifeCurrentSeed").textContent = [current.time, current.mood, current.message_seed].filter(Boolean).join(" · ") || "等待日程细化";
+}
+
+function normalizeLocationText(value) {
+  const text = String(value || "").trim();
+  if (!text || text === "地点感平稳") return "地点无明显变化";
+  return text;
 }
 
 function renderDreamCard(dream) {
@@ -1558,6 +1831,7 @@ function renderDreamCard(dream) {
 function renderStatePillBoard(daily) {
   const items = [
     ["睡眠", daily.sleep],
+    ["睡眠阶段", daily.sleep_phase || daily.sleep_runtime?.label],
     ["梦境", daily.dream],
     ["健康", daily.health],
     ["饥饿", daily.hunger],
@@ -1645,6 +1919,7 @@ function renderBookshelf() {
   const home = $("#bookcaseHome");
   if (home) home.hidden = state.bookshelfPage !== "shelf";
   renderBookDetailPanel();
+  void hydrateBookshelfImages(document);
 }
 
 function renderLockedDrawer(count) {
@@ -1667,9 +1942,11 @@ function renderUnlockedDrawer(items) {
     return `<div class="empty small">抽屉已经打开，但里面暂时还没有日记本或夹层藏书。</div>`;
   }
   const diaryBooks = items.filter((item) => item.kind === "diary");
-  const privateBooks = items.filter((item) => item.kind !== "diary");
+  const browsingBooks = items.filter((item) => item.kind === "browsing");
+  const privateBooks = items.filter((item) => item.kind !== "diary" && item.kind !== "browsing");
   const groups = [
     ["日记本", diaryBooks, "按日期收进同一本里"],
+    ["浏览记录", browsingBooks, "新闻阅读和主动搜索的留痕"],
     ["夹层藏书", privateBooks, "只保留标题和阅读印象"],
   ].filter(([, books]) => books.length);
   return groups.map(([title, books, note]) => `
@@ -1688,6 +1965,7 @@ function renderBookshelfBook(item) {
   const kindLabel = {
     creative: "创作",
     diary: "日记本",
+    browsing: "浏览记录",
     jm_album: "夹层藏书",
   }[kind] || kind;
   const bookId = bookshelfBookId(item);
@@ -1707,9 +1985,7 @@ function bookshelfBookId(item) {
 
 function renderBookCoverInner(book, kindLabel, title, progress = "") {
   const coverSrc = book.kind === "jm_album" ? String(book.cover_src || "") : "";
-  const image = coverSrc
-    ? `<img src="${escapeHtml(coverSrc)}" alt="${escapeHtml(title || "夹层藏书")}封面" loading="lazy" />`
-    : "";
+  const image = coverSrc ? bookshelfImageTag(coverSrc, `${title || "夹层藏书"}封面`) : "";
   return `
     ${image}
     <span>${escapeHtml(kindLabel)}</span>
@@ -1749,32 +2025,47 @@ function renderBookDetailPanel() {
   const kindLabel = {
     creative: "创作书",
     diary: "日记本",
+    browsing: "浏览记录",
     jm_album: "夹层藏书",
   }[book.kind] || "书";
-  const diaryEntries = book.kind === "diary" && Array.isArray(book.entries) ? book.entries : [];
+  const entryBook = ["diary", "browsing"].includes(book.kind || "");
+  const diaryEntries = entryBook && Array.isArray(book.entries) ? book.entries : [];
   const selectedDiaryDate = state.selectedDiaryDate || diaryEntries[diaryEntries.length - 1]?.date || "";
   const diaryEntry = diaryEntries.find((entry) => entry.date === selectedDiaryDate) || diaryEntries[diaryEntries.length - 1] || null;
-  if (book.kind === "diary" && diaryEntry && state.selectedDiaryDate !== diaryEntry.date) {
+  if (entryBook && diaryEntry && state.selectedDiaryDate !== diaryEntry.date) {
     state.selectedDiaryDate = diaryEntry.date;
   }
-  const displayTitle = book.kind === "diary" && diaryEntry ? `${diaryEntry.date} 的日记` : (book.title || "未命名");
-  const displayIntro = book.kind === "diary" && diaryEntry ? (diaryEntry.intro || book.intro) : (book.intro || book.progress || "这本书还没有简介。");
-  const displayContent = book.kind === "diary" && diaryEntry ? (diaryEntry.content || diaryEntry.intro || book.content) : (book.content || book.intro || "这本书暂时没有正文。");
+  const displayTitle = entryBook && diaryEntry
+    ? (book.kind === "diary" ? `${diaryEntry.date} 的日记` : (diaryEntry.title || diaryEntry.date || "浏览记录"))
+    : (book.title || "未命名");
+  const displayIntro = entryBook && diaryEntry ? (diaryEntry.intro || book.intro) : (book.intro || book.progress || "这本书还没有简介。");
+  const displayContent = entryBook && diaryEntry ? (diaryEntry.content || diaryEntry.intro || book.content) : (book.content || book.intro || "这本书暂时没有正文。");
   const diarySelector = diaryEntries.length
     ? `
       <label class="diary-date-picker">
-        <span>日期</span>
+        <span>${book.kind === "diary" ? "日期" : "记录"}</span>
         <select data-diary-date>
           ${diaryEntries.slice().reverse().map((entry) => `<option value="${escapeHtml(entry.date)}"${entry.date === state.selectedDiaryDate ? " selected" : ""}>${escapeHtml(entry.date)}</option>`).join("")}
         </select>
       </label>
     `
     : "";
-  const activeTags = book.kind === "diary" && diaryEntry ? diaryEntry.tags : book.tags;
+  const activeTags = entryBook && diaryEntry ? diaryEntry.tags : book.tags;
   const tags = Array.isArray(activeTags) && activeTags.length
     ? `<div class="book-tags">${activeTags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div>`
     : "";
-  const manageActions = `
+  const readingImpressionText = book.kind === "jm_album"
+    ? String(book.reading_impression || book.content || displayIntro || "").replace(/^读后感[:：]\s*/, "").trim()
+    : "";
+  const readingImpression = readingImpressionText
+    ? `
+      <section class="book-reading-impression">
+        <span>Bot 的读后感</span>
+        <p>${escapeHtml(readingImpressionText)}</p>
+      </section>
+    `
+    : "";
+  const manageActions = book.kind === "browsing" ? "" : `
     <div class="book-manage-actions">
       <button type="button" class="danger-outline" data-book-delete
         data-book-kind="${escapeHtml(book.kind || "")}"
@@ -1788,7 +2079,8 @@ function renderBookDetailPanel() {
   `;
   panel.hidden = false;
   if (state.bookshelfPage === "reader" && book.kind === "jm_album" && Array.isArray(book.pages) && book.pages.length) {
-    panel.innerHTML = renderJmAlbumReader(book, kindLabel, displayTitle, displayIntro);
+    panel.innerHTML = renderJmAlbumReader(book, kindLabel, displayTitle, displayIntro, readingImpression);
+    void hydrateBookshelfImages(panel);
     return;
   }
   panel.innerHTML = state.bookshelfPage === "reader"
@@ -1849,15 +2141,17 @@ function renderBookDetailPanel() {
             ${book.progress ? `<div><dt>进度</dt><dd>${escapeHtml(book.progress)}</dd></div>` : ""}
             ${book.created ? `<div><dt>入柜</dt><dd>${escapeHtml(book.created)}</dd></div>` : ""}
           </dl>
+          ${readingImpression}
           ${tags}
           ${manageActions}
           <button type="button" class="read-button" data-book-read>开始阅读</button>
         </div>
       </article>
     `;
+  void hydrateBookshelfImages(panel);
 }
 
-function renderJmAlbumReader(book, kindLabel, displayTitle, displayIntro) {
+function renderJmAlbumReader(book, kindLabel, displayTitle, displayIntro, readingImpression = "") {
   const pages = Array.isArray(book.pages) ? book.pages : [];
   const maxStart = Math.max(0, pages.length - (pages.length % 2 === 0 ? 2 : 1));
   const start = Math.min(Math.max(0, Number(state.selectedBookSpreadIndex || 0)), maxStart);
@@ -1895,10 +2189,11 @@ function renderJmAlbumReader(book, kindLabel, displayTitle, displayIntro) {
               data-book-title="${escapeHtml(book.title || "")}">从书柜移除</button>
           </div>
         </header>
+        ${readingImpression}
         <div class="manga-spread">
           ${spread.map((page) => `
             <figure class="manga-page">
-              <img src="${escapeHtml(page.src)}" alt="${escapeHtml(book.title || "夹层藏书")} 第 ${escapeHtml(page.index)} 页" loading="lazy" />
+              ${bookshelfImageTag(page.src, `${book.title || "夹层藏书"} 第 ${page.index} 页`)}
               <figcaption>${escapeHtml(page.index)} / ${escapeHtml(pages.length)}</figcaption>
             </figure>
           `).join("")}
@@ -1932,10 +2227,10 @@ function renderProactiveCandidates() {
   const counts = data.counts || {};
   const items = data.items || [];
   $("#proactiveSummary").innerHTML = [
-    proactiveSummaryCard("候选总数", data.total || 0, "最近 36 小时内保留"),
+    proactiveSummaryCard("候选总数", data.total || 0, `${data.visible_total || 0} 条合并记录`),
     proactiveSummaryCard("已进入计划", counts.accepted || 0, "当前或历史接受候选"),
     proactiveSummaryCard("已发送", counts.sent || 0, "实际发出的主动"),
-    proactiveSummaryCard("被拦截", counts.blocked || 0, "去重、配额或已有更早计划"),
+    proactiveSummaryCard("被拦截", counts.blocked || 0, "同类拦截已合并计数"),
   ].join("");
   $("#proactiveSourceChart").innerHTML = donutChart(data.source_counts || {});
   $("#proactiveStatusChart").innerHTML = donutChart(counts || {});
@@ -1945,6 +2240,7 @@ function renderProactiveCandidates() {
   }
   $("#proactiveCandidateList").innerHTML = items.map((item) => {
     const status = proactiveStatusLabel(item.status);
+    const repeat = Number(item.repeat_count || 1);
     return `
       <section class="proactive-candidate ${escapeHtml(item.status || "unknown")}">
         <div class="proactive-candidate-head">
@@ -1952,13 +2248,14 @@ function renderProactiveCandidates() {
             <b>${escapeHtml(item.topic || item.reason || "未命名候选")}</b>
             <span>${escapeHtml(item.source || "-")} · ${escapeHtml(item.reason || "-")} · ${escapeHtml(item.action || "message")}</span>
           </div>
-          <span class="badge">${escapeHtml(status)}</span>
+          <span class="badge">${escapeHtml(repeat > 1 ? `${status} x${repeat}` : status)}</span>
         </div>
         <p>${escapeHtml(item.motive || "暂无动机记录")}</p>
         <div class="proactive-meta">
           <span>用户：${escapeHtml(item.user_id || "-")}</span>
           <span>计划：${escapeHtml(item.scheduled || "-")}</span>
           <span>创建：${escapeHtml(item.created || "-")}</span>
+          ${repeat > 1 ? `<span>最近：${escapeHtml(item.last_seen || "-")}</span>` : ""}
           <span>评分：${escapeHtml(item.score || 0)}</span>
           ${item.note ? `<span>说明：${escapeHtml(item.note)}</span>` : ""}
         </div>
@@ -2206,7 +2503,6 @@ function renderConfig() {
 
 function renderModuleSettings() {
   const settings = state.overview?.settings || {};
-  const privateReadingAvailable = Boolean(state.overview?.private_reading?.available);
   renderModuleSummary(settings);
   fillForm("#quickModuleForm", settings);
   fillForm("#environmentModuleForm", settings);
@@ -2215,7 +2511,7 @@ function renderModuleSettings() {
   fillForm("#worldbookModuleForm", settings);
   fillForm("#memoryModuleForm", settings);
   fillForm("#longTermModuleForm", settings);
-  setPrivateReadingConfigVisible(privateReadingAvailable);
+  setPrivateReadingConfigVisible(isPrivateReadingAvailable());
   const targetBox = document.querySelector('#quickModuleForm [name="target_user_ids"]');
   if (targetBox) targetBox.value = Array.isArray(settings.target_user_ids) ? settings.target_user_ids.join("\n") : "";
   document.querySelectorAll(".module-form").forEach((form) => markModuleFormClean(form));
@@ -2225,7 +2521,6 @@ function renderModuleSettings() {
 function renderModuleSummary(settings) {
   const features = state.overview?.features || {};
   const groups = state.overview?.group || {};
-  const privateReadingAvailable = Boolean(state.overview?.private_reading?.available);
   const cards = [
     {
       label: "私聊主动",
@@ -2263,10 +2558,10 @@ function renderModuleSummary(settings) {
       note: [
         settings.enable_bilibili_boredom_watch ? "B 站" : "",
         settings.enable_qzone_life_publish ? "空间说说" : "",
-        privateReadingAvailable && settings.enable_private_reading_boredom_read ? "夹层阅读" : "",
-        privateReadingAvailable && settings.enable_private_reading_ask_recommendation ? "征求推荐" : "",
+        isPrivateReadingAvailable() && settings.enable_private_reading_boredom_read ? "夹层阅读" : "",
+        isPrivateReadingAvailable() && settings.enable_private_reading_ask_recommendation ? "征求推荐" : "",
       ].filter(Boolean).join(" / ") || "联动关闭",
-      tone: settings.enable_creative_writing || settings.enable_bilibili_boredom_watch || settings.enable_qzone_life_publish || (privateReadingAvailable && (settings.enable_private_reading_boredom_read || settings.enable_private_reading_ask_recommendation)) ? "ok" : "off",
+      tone: settings.enable_creative_writing || settings.enable_bilibili_boredom_watch || settings.enable_qzone_life_publish || (isPrivateReadingAvailable() && (settings.enable_private_reading_boredom_read || settings.enable_private_reading_ask_recommendation)) ? "ok" : "off",
     },
   ];
   $("#moduleSummary").innerHTML = cards.map((item) => `
@@ -2476,16 +2771,15 @@ function renderListCoverage(group, draft = null) {
 
 function renderFeatureSwitches() {
   const filter = ($("#featureFilter")?.value || "").trim().toLowerCase();
-  const privateReadingAvailable = Boolean(state.overview?.private_reading?.available);
   const knownKeys = new Set(featureGroups.flatMap((group) => group.keys));
-  const extraKeys = Object.keys(state.featureDraft || {}).filter((key) => !knownKeys.has(key) && (privateReadingAvailable || !privateReadingConfigKeys.has(key)));
+  const extraKeys = Object.keys(state.featureDraft || {}).filter((key) => !knownKeys.has(key) && visibleConfigKey(key));
   const groups = extraKeys.length
     ? [...featureGroups, { title: "其他", note: "来自配置但暂未归入固定分组的开关。", keys: extraKeys }]
     : featureGroups;
-  const visibleDraftKeys = Object.keys(state.featureDraft || {}).filter((key) => privateReadingAvailable || !privateReadingConfigKeys.has(key));
+  const visibleDraftKeys = Object.keys(state.featureDraft || {}).filter(visibleConfigKey);
   const total = visibleDraftKeys.length;
   const enabled = visibleDraftKeys.filter((key) => state.featureDraft[key]).length;
-  const riskyEnabled = ["enable_group_interjection", "enable_bilibili_boredom_watch", privateReadingAvailable ? "enable_private_reading_boredom_read" : "", privateReadingAvailable ? "enable_private_reading_ask_recommendation" : "", "enable_unanswered_screen_peek_followup"]
+  const riskyEnabled = ["enable_group_interjection", "enable_bilibili_boredom_watch", isPrivateReadingAvailable() ? "enable_private_reading_boredom_read" : "", isPrivateReadingAvailable() ? "enable_private_reading_ask_recommendation" : "", "enable_unanswered_screen_peek_followup"]
     .filter((key) => state.featureDraft[key]).length;
   $("#featureSwitchSummary").innerHTML = `
     <section class="feature-summary-card ok">
@@ -2505,9 +2799,18 @@ function renderFeatureSwitches() {
     </section>
   `;
 
+  if (state.selectedFeatureKey && !visibleConfigKey(state.selectedFeatureKey)) {
+    state.selectedFeatureKey = "";
+  }
+  if (state.selectedFeatureKey && Object.prototype.hasOwnProperty.call(state.featureDraft, state.selectedFeatureKey)) {
+    $("#featureFlags").innerHTML = featureDetailPage(state.selectedFeatureKey);
+    bindFeatureDetailActions();
+    return;
+  }
+
   const board = groups.map((group) => {
     const visibleKeys = group.keys.filter((key) => {
-      if (!privateReadingAvailable && privateReadingConfigKeys.has(key)) return false;
+      if (!visibleConfigKey(key)) return false;
       if (!filter) return true;
       const haystack = `${key} ${featureLabel(key)} ${featureDescription(key)}`.toLowerCase();
       return haystack.includes(filter);
@@ -2535,28 +2838,256 @@ function renderFeatureSwitches() {
       renderFeatureSwitches();
     });
   });
+  document.querySelectorAll("[data-feature-open]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedFeatureKey = button.dataset.featureOpen || "";
+      renderFeatureSwitches();
+    });
+  });
 }
 
 function featureSwitchItem(key) {
   const checked = Boolean(state.featureDraft[key]);
   return `
-    <label class="feature-switch-item ${checked ? "on" : "off"}" title="${escapeHtml(featureDescription(key))}">
-      <input type="checkbox" data-feature-key="${escapeHtml(key)}" ${checked ? "checked" : ""}>
-      <span class="feature-toggle-visual"></span>
-      <span class="feature-switch-text">
+    <section class="feature-switch-item ${checked ? "on" : "off"}" title="${escapeHtml(featureDescription(key))}">
+      <label class="feature-toggle-hit" aria-label="${escapeHtml(featureLabel(key))}">
+        <input type="checkbox" data-feature-key="${escapeHtml(key)}" ${checked ? "checked" : ""}>
+        <span class="feature-toggle-visual"></span>
+      </label>
+      <button type="button" class="feature-switch-text" data-feature-open="${escapeHtml(key)}">
         <b>${escapeHtml(featureLabel(key))}</b>
+        <span class="feature-state-text">${escapeHtml(checked ? "开启" : "关闭")}</span>
         <small>${escapeHtml(key)}</small>
-      </span>
-    </label>
+      </button>
+    </section>
   `;
+}
+
+function featureGroupForKey(key) {
+  const group = featureGroups.find((item) => item.keys.includes(key));
+  return group ? group.title : "其他";
+}
+
+function featureRelatedSettings(key) {
+  const settings = state.overview?.settings || {};
+  const groups = {
+    enable_environment_perception: ["environment_perception_timezone", "holiday_country"],
+    enable_holiday_perception: ["holiday_country"],
+    enable_group_interjection: ["group_interject_min_interval_minutes", "group_interject_max_daily"],
+    enable_group_repeat_follow: ["group_repeat_follow_probability", "group_repeat_interrupt_probability", "group_repeat_interrupt_probability_step", "group_repeat_interrupt_text", "group_repeat_interrupt_image_path"],
+    enable_group_scene_awareness: ["group_scene_recent_limit", "group_conversation_followup_seconds", "group_conversation_followup_max_turns"],
+    enable_group_conversation_followup: ["group_conversation_followup_seconds", "group_conversation_followup_max_turns"],
+    enable_forward_message_adaptation: ["forward_message_mode", "forward_message_max_messages", "forward_message_max_chars", "forward_message_parse_nested", "forward_message_image_vision", "forward_message_image_limit"],
+    enable_worldbook_member_recognition: ["worldbook_auto_import", "worldbook_member_match_aliases", "worldbook_self_registration", "worldbook_auto_pending_observations", "worldbook_member_inject_limit", "worldbook_config_paths"],
+    enable_atrelay_tools: ["atrelay_require_worldbook_first", "atrelay_member_cache_minutes", "atrelay_sensitive_confirm", "atrelay_default_relay_style", "atrelay_multi_target_limit"],
+    enable_bilibili_boredom_watch: ["bilibili_boredom_min_interval_hours", "bilibili_share_probability", "bilibili_share_min_score"],
+    enable_news_integration: ["enable_news_daily_hot_read", "news_hot_sources", "news_hot_max_items", "news_sources", "news_min_interval_hours", "news_share_probability", "news_max_items_per_source"],
+    enable_news_boredom_read: ["news_min_interval_hours", "news_share_probability", "news_max_items_per_source"],
+    enable_web_exploration: ["web_exploration_interests", "web_exploration_min_interval_hours", "web_exploration_share_probability", "web_exploration_max_results"],
+    enable_web_exploration_boredom_search: ["web_exploration_interests", "web_exploration_min_interval_hours", "web_exploration_max_results"],
+    enable_qzone_life_publish: ["qzone_life_publish_min_interval_hours", "qzone_life_publish_probability"],
+    enable_private_reading_boredom_read: ["private_reading_min_interval_hours", "private_reading_max_photo_count", "private_reading_share_probability", "private_reading_default_keywords"],
+    enable_private_reading_ask_recommendation: ["private_reading_ask_probability"],
+    enable_unanswered_screen_peek_followup: ["unanswered_screen_peek_after_minutes", "unanswered_screen_peek_cooldown_minutes"],
+    enable_creative_writing: ["creative_inspiration_probability", "creative_share_probability", "creative_base_chars_per_hour", "creative_max_active_projects"],
+    creative_hidden_mode: ["creative_share_probability"],
+    enable_companion_memory: ["memory_refresh_interval_minutes", "max_companion_memory_items"],
+    enable_expression_learning: ["max_learned_expression_items"],
+    enable_dialogue_episode_memory: ["episode_memory_refresh_messages", "episode_memory_refresh_minutes", "max_dialogue_episodes"],
+    enable_semantic_message_debounce: ["inbound_message_debounce_seconds", "semantic_message_debounce_seconds"],
+  };
+  const keys = groups[key] || [];
+  return keys
+    .filter((item) => Object.prototype.hasOwnProperty.call(settings, item))
+    .map((item) => [item, settings[item]]);
+}
+
+function featureDependencyLines(key) {
+  const dependencies = [];
+  if (key !== "enable_group_companion" && key.startsWith("enable_group_")) dependencies.push(["依赖", "群聊总开关开启后才会在群聊中生效"]);
+  if (key === "enable_group_conversation_followup") dependencies.push(["依赖", "需要群聊场景感知能判断当前消息是否仍然指向 Bot"]);
+  if (["enable_companion_memory", "enable_expression_learning", "enable_companion_reply_planner", "enable_intent_emotion_analysis", "enable_response_self_review", "enable_passive_topic_suppression", "enable_relationship_state_machine", "enable_dialogue_episode_memory", "enable_open_loop_tracking"].includes(key)) {
+    dependencies.push(["依赖", "陪伴风格整合开启后注入效果更完整"]);
+  }
+  if (["enable_bilibili_boredom_watch"].includes(key)) dependencies.push(["依赖", "需要对应整合能力开启且外部服务可用"]);
+  if (["enable_web_exploration", "enable_web_exploration_boredom_search"].includes(key)) dependencies.push(["依赖", "需要先在 AstrBot 全局 provider_settings 中开启网页搜索，并配置可用的 Tavily、Bocha、Brave、Firecrawl 或百度 AI 搜索"]);
+  if (["enable_qzone_life_publish"].includes(key)) dependencies.push(["依赖", "需要 QQ 空间动态层可用"]);
+  if (key.startsWith("enable_private_reading_")) dependencies.push(["依赖", "检测到可用素材能力后才显示并生效"]);
+  if (["enable_group_interjection", "enable_bilibili_boredom_watch", "enable_news_boredom_read", "enable_web_exploration_boredom_search", "enable_private_reading_boredom_read", "enable_private_reading_ask_recommendation", "enable_unanswered_screen_peek_followup"].includes(key)) {
+    dependencies.push(["注意", "属于高主动项，建议结合频率、冷却和每日额度观察"]);
+  }
+  return dependencies;
+}
+
+function featureDetailExplanation(key) {
+  const specific = {
+    enable_mai_style_integration: "把本插件整理出的关系状态、用户画像、表达习惯、未完话头和当前生活状态注入到 Bot 回复上下文里。关闭后，这些陪伴侧信息仍可能被记录，但不会系统性地参与回复生成。",
+    enable_companion_memory: "从私聊中提取稳定事实和长期偏好，例如称呼、雷点、常聊主题、关系边界。它不是逐字保存聊天，而是整理成后续回复可引用的画像条目。",
+    enable_expression_learning: "记录用户常用的称呼、短句、语气和互动方式，让 Bot 在长期相处后更懂用户平时怎么说话。关闭后不会继续学习新的表达样本。",
+    enable_companion_reply_planner: "在生成回复前先判断本轮应该安慰、接梗、解释、转移话题还是简短回应，用来减少机械问答和不合时宜的长篇回复。",
+    enable_intent_emotion_analysis: "分析用户消息里的情绪、真实意图和关系信号，例如撒娇、吐槽、求助、试探或普通闲聊。结果会影响关系分、语气和是否继续追问。",
+    enable_response_self_review: "回复生成后再检查一遍是否生硬、越界、重复、像系统提示或不符合人设。开启后会多一次模型调用，但能降低奇怪回复的概率。",
+    enable_passive_topic_suppression: "记录近期已经主动提过的话题，避免 Bot 在短时间内反复提同一个日程、梦境、创作或问候内容。",
+    enable_relationship_state_machine: "根据互动频率、回应情况、情绪反馈和长期记忆维护关系阶段，例如陌生、熟悉、亲近、冷却。阶段会影响主动频率和说话距离感。",
+    enable_dialogue_episode_memory: "把一段连续私聊整理成“发生过的一段事”，保存摘要、情绪和可继续接的话头。适合承接上次聊天，而不是只记住零散关键词。",
+    enable_open_loop_tracking: "识别用户说的待办、约定、之后再说、还没解决的问题。Bot 后续可以在合适时候自然接上，而不是把未完成话题丢掉。",
+    enable_semantic_message_debounce: "Bot 被唤醒后先短暂收口，不急着立刻回复。用户连续补充的几句话会被合成同一轮理解，适合“先发图再说明”“一句话拆成几条发”的场景，也能减少重复模型调用。",
+    enable_environment_perception: "注入当前时间、日期、平台、群聊/私聊和消息媒介，让 Bot 的判断更贴近日常场景。它会影响日程、状态、回复和主动消息。",
+    enable_holiday_perception: "识别节假日、周末、调休和工作日，影响日程、问候、日记和主动消息的生活节奏。",
+    enable_platform_perception: "识别当前消息来自哪个平台、私聊还是群聊、是否带图片/语音/视频等媒介信息。用于调整回复方式和上下文描述。",
+    enable_lunar_perception: "在可用时注入农历日期，帮助日程、梦境、日记和节日氛围更贴近中文生活语境。",
+    enable_solar_term_perception: "注入当天或临近节气，例如立春、芒种、冬至。主要影响日程细节、生活观察和表达氛围。",
+    enable_almanac_perception: "生成轻量宜/忌氛围标签，用作生活化调味。默认建议谨慎使用，避免 Bot 表现得过于玄学。",
+    enable_group_companion: "控制插件是否接收并维护群聊侧的观察数据。关闭后，群聊黑话、群成员画像、话题线、关系网、群插话等群聊能力都会失去基础输入。",
+    enable_group_context_injection: "当 Bot 在群里回复时，把近期话题、群氛围、相关成员和关系网信息注入上下文，让回复知道当前群里正在发生什么。",
+    enable_forward_message_adaptation: "当用户发送或引用合并转发时，插件会读取合并消息节点。可选择“注入”把整理后的原始记录直接交给主模型，也可选择“转述”先用专门模型压成自然记录再交给主模型。Bot 会把它当作被转来的聊天记录来读，而不是把里面每句话都当成当前用户本人说的内容。",
+    enable_group_scene_awareness: "让 Bot 判断当前消息是在对 Bot、某个群友还是整个群说话。它会参考 @、回复对象、最近发言和文本语气，减少误接别人话的情况。",
+    enable_group_conversation_followup: "用户在群里明确叫过 Bot 后，后续短时间内即使没有继续 @，插件也会结合场景、插话者、指代词和最近上下文判断是否仍在和 Bot 对话。它有连续续接上限，避免对话链无限延长。",
+    enable_group_slang_learning: "从群聊消息中记录高频梗、简称、黑话和特殊表达，保存出现次数和最近出现时间。它只负责收集词，不负责解释含义。",
+    enable_group_slang_meanings: "在收集到群黑话后，尝试用模型解释它在当前群里的含义。解释结果会用于群聊理解，不等于对外公开发言。",
+    enable_group_member_profiles: "为群成员维护轻量画像，例如常用名字、发言频率、最近活跃、常见语气和是否经常与 Bot 互动。用于判断群氛围和说话对象。",
+    enable_group_topic_threads: "把群聊中连续讨论的内容整理成话题线，记录参与者、最近例句和话题变化。后续群聊总结和私聊分享会用到它。",
+    enable_group_episode_memory: "把一段时间内的群聊整理成摘要片段，保留有趣事件、重要讨论和群氛围。它比最近消息窗口保存得更久。",
+    enable_group_relationship_graph: "记录群友之间的互动边，用于观察常一起说话的人、常见组合和群内关系氛围。",
+    enable_group_interjection: "允许 Bot 在群聊里主动插一句。它会参考群氛围、最近话题、冷却和每日上限，不是每次有消息都发言。",
+    enable_group_repeat_follow: "检测群聊中同一句话连续复读。达到阈值后，Bot 可能只跟读一次，也可能用文本或表情包打断复读。",
+    enable_group_interjection_feedback: "记录 Bot 主动插话后群友是接话、无视、笑还是反感，用来调整之后插话的保守程度。",
+    enable_group_privacy_guard: "防止 Bot 把私聊记忆、私下关系、书柜夹层和用户私人信息泄露到群聊。建议长期保持开启。",
+    enable_worldbook_member_recognition: "以 QQ 号作为身份锚点维护关系网，让 Bot 在群聊和转述中知道“谁是谁”。昵称、群名片和别名只作为辅助线索，避免用户改名后认错人。",
+    enable_atrelay_tools: "为模型提供跨群转述、查询群成员、解析 @ 对象等工具。开启后，Bot 可以结合关系网把用户口中的名字或别名解析成稳定 QQ 身份；转述时默认按人格和双方关系改写，用户要求原话时也可保留原话。",
+    enable_livingmemory_integration: "允许 Bot 在需要长期事实时调用 LivingMemory，而不是只依赖本插件自己的画像。适合复用已有长期记忆，避免多套记忆互相打架。",
+    enable_bilibili_integration: "读取已整合的 B 站相关能力状态和观看记录，让 Bot 知道自己看过什么视频，并能在合适时机提起。",
+    enable_bilibili_boredom_watch: "当 Bot 空闲或无聊时，低频触发 B 站观看行为，并可能在合适节点向用户分享看过的内容。",
+    enable_news_integration: "新闻阅读负责让 Bot 每天知道外界发生了什么。默认会在日程生成那一轮一起获取公开热点，并合并 RSS/Atom 新闻源，只抓取标题、摘要、链接和发布时间。整理后的见闻会进入内部留痕，可影响日记、状态余味和后续主动搜索。",
+    enable_news_boredom_read: "当 Bot 的日程和状态显示比较空、无聊、休息或有好奇心时，低频读取新闻源。读取后不一定主动发给用户，也可能只是作为近期见闻留存。",
+    enable_web_exploration: "主动搜索负责 Bot 自己的好奇心。它会使用 AstrBot 全局网页搜索，根据人设兴趣、最近聊天、当前日程、心情和今日新闻见闻自行选一个搜索主题，再整理成内部探索笔记，留下搜索词、摘要、来源和时间。",
+    enable_web_exploration_boredom_search: "当 Bot 处在空档、无聊、休息或有好奇心的状态时触发主动搜索。它不是固定搜索新闻，而是可以按人格去查作品、技术、生活知识、流行梗、时讯或最近聊天里引出的内容。",
+    enable_qzone_integration: "启用 QQ 空间动态层，让 Bot 可以查看、点赞、评论或发布动态。具体是否执行取决于可用服务和工具调用。",
+    enable_qzone_life_publish: "让 Bot 根据日程、状态和日记余味低频发布生活动态。它属于公开表达，不等同于私聊主动消息。",
+    enable_private_reading_integration: "检测并接入书柜夹层的私下阅读素材能力。开启后，相关素材可以作为 Bot 的私下长期行为来源。",
+    enable_private_reading_boredom_read: "当 Bot 空闲、无聊或夜里状态合适时，低频自己找内容阅读，并把阅读记录放入书柜夹层。",
+    enable_private_reading_ask_recommendation: "当 Bot 想补充私下阅读素材时，低频私聊询问用户有没有推荐。是否害羞、坦率或绕开话题由人设决定。",
+    enable_unanswered_screen_peek_followup: "当 Bot 主动找用户后长时间没有回应，且状态上有无聊/在意倾向时，允许额外识屏看看用户在做什么。",
+    enable_creative_writing: "让 Bot 因生活小事、梦境或状态灵感开小说/文本坑，并按人设对应的速度慢慢写入书柜。",
+    creative_hidden_mode: "让创作默认作为 Bot 自己私下进行的长期行为，只在节点、被问到近况或合适时机自然提起。",
+  };
+  if (specific[key]) return specific[key];
+  if (key.startsWith("enable_group_")) return "群聊观察模块的一项子能力，会读取群聊近期消息和成员信息，并影响群聊回复、转述、插话或关系网注入。";
+  if (key.startsWith("enable_private_reading_")) return "书柜夹层相关的长期行为。只有检测到对应素材能力可用时才会显示并触发，记录会进入书柜夹层。";
+  if (key.startsWith("enable_bilibili_")) return "外部内容消费相关能力，用于让 Bot 在空闲时形成自己的经历，并在合适时机转化为分享素材。";
+  if (key.startsWith("enable_qzone_")) return "QQ 空间动态相关能力，用于查看、互动或发布生活动态。";
+  return featureDescription(key);
+}
+
+function featureImpactLines(key) {
+  const lines = [];
+  const group = featureGroupForKey(key);
+  lines.push(["影响范围", group]);
+  if (key.startsWith("enable_group_") || key === "enable_atrelay_tools" || key === "enable_worldbook_member_recognition") {
+    lines.push(["主要场景", "群聊、转述、关系网注入"]);
+  } else if (key.startsWith("enable_bilibili_") || key.startsWith("enable_news_") || key.startsWith("enable_web_exploration") || key.startsWith("enable_qzone_") || key.startsWith("enable_private_reading_") || key === "enable_creative_writing" || key === "creative_hidden_mode") {
+    lines.push(["主要场景", "长线主动行为、书柜、私聊分享"]);
+  } else if (key.startsWith("enable_environment_") || key.includes("perception")) {
+    lines.push(["主要场景", "日程、状态、回复上下文"]);
+  } else {
+    lines.push(["主要场景", "私聊陪伴、记忆和回复生成"]);
+  }
+  lines.push(["保存方式", "切换后需要点击“保存功能开关”写入配置"]);
+  return lines;
+}
+
+function configLabel(name) {
+  return configLabels[name] || name.replace(/^enable_/, "").replaceAll("_", " ");
+}
+
+function featureDetailPage(key) {
+  const enabled = Boolean(state.featureDraft[key]);
+  const related = featureRelatedSettings(key);
+  const dependencies = featureDependencyLines(key);
+  const impacts = featureImpactLines(key);
+  const settingsRows = related.length
+    ? related.map(([name, value]) => `
+      <section class="feature-param-row">
+        <div>
+          <b>${escapeHtml(configLabel(name))}</b>
+          <code>${escapeHtml(name)}</code>
+        </div>
+        <span>${escapeHtml(formatValue(value))}</span>
+      </section>
+    `).join("")
+    : `<div class="feature-param-empty">暂无关联参数</div>`;
+  const dependencyRows = dependencies.length
+    ? dependencies.map(([name, value]) => `<div><dt>${escapeHtml(name)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")
+    : `<div><dt>-</dt><dd>无额外依赖</dd></div>`;
+  const impactRows = impacts.map(([name, value]) => `<div><dt>${escapeHtml(name)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("");
+  return `
+    <section class="feature-detail-page ${enabled ? "on" : "off"}">
+      <nav class="feature-detail-breadcrumb">
+        <button type="button" data-feature-back>功能开关</button>
+        <span>/ ${escapeHtml(featureGroupForKey(key))}</span>
+      </nav>
+      <div class="feature-state-strip ${enabled ? "on" : "off"}">
+        <b>${escapeHtml(enabled ? "当前已开启" : "当前已关闭")}</b>
+        <span>${escapeHtml(enabled ? "保存后该能力会继续生效" : "保存后该能力不会触发")}</span>
+      </div>
+      <header class="feature-detail-head">
+        <div>
+          <span class="module-badge">${escapeHtml(featureGroupForKey(key))}</span>
+          <h2>${escapeHtml(featureLabel(key))}</h2>
+          <p>${escapeHtml(featureDetailExplanation(key))}</p>
+        </div>
+        <label class="feature-detail-toggle">
+          <input type="checkbox" data-feature-detail-toggle="${escapeHtml(key)}" ${enabled ? "checked" : ""}>
+          <span class="feature-toggle-visual"></span>
+          <b>${escapeHtml(enabled ? "开启" : "关闭")}</b>
+        </label>
+      </header>
+      <div class="feature-detail-grid">
+        <article class="feature-detail-card">
+          <h3>基础信息</h3>
+          <dl>
+            <div><dt>配置键</dt><dd>${escapeHtml(key)}</dd></div>
+            <div><dt>所属模块</dt><dd>${escapeHtml(featureGroupForKey(key))}</dd></div>
+            <div><dt>当前状态</dt><dd>${escapeHtml(enabled ? "开启" : "关闭")}</dd></div>
+          </dl>
+        </article>
+        <article class="feature-detail-card">
+          <h3>影响范围</h3>
+          <dl>${impactRows}</dl>
+        </article>
+        <article class="feature-detail-card">
+          <h3>关联参数</h3>
+          <div class="feature-param-list">${settingsRows}</div>
+        </article>
+        <article class="feature-detail-card">
+          <h3>依赖与注意</h3>
+          <dl>${dependencyRows}</dl>
+        </article>
+      </div>
+    </section>
+  `;
+}
+
+function bindFeatureDetailActions() {
+  document.querySelectorAll("[data-feature-back]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedFeatureKey = "";
+      renderFeatureSwitches();
+    });
+  });
+  document.querySelectorAll("[data-feature-detail-toggle]").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.featureDraft[input.dataset.featureDetailToggle] = input.checked;
+      renderFeatureSwitches();
+    });
+  });
 }
 
 function renderProviders() {
   const providers = state.overview?.providers || {};
-  const privateReadingAvailable = Boolean(state.overview?.private_reading?.available);
   renderProviderFlow(providers);
   $("#providerForm").innerHTML = Object.entries(providerLabels)
-    .filter(([key]) => privateReadingAvailable || !privateReadingConfigKeys.has(key))
+    .filter(([key]) => visibleConfigKey(key))
     .map(([key, label]) => `
     <label class="provider-card">
       <span>${escapeHtml(label)}</span>
@@ -2651,13 +3182,12 @@ async function testProvider(key) {
 }
 
 function renderProviderFlow(providers) {
-  const privateReadingAvailable = Boolean(state.overview?.private_reading?.available);
   const main = providers.LLM_PROVIDER_ID || "AstrBot 默认模型";
   const mai = providers.MAI_STYLE_PROVIDER_ID || main;
   const tasks = Object.entries(providerLabels).filter(([key]) => (
     key !== "LLM_PROVIDER_ID"
     && key !== "MAI_STYLE_PROVIDER_ID"
-    && (privateReadingAvailable || !privateReadingConfigKeys.has(key))
+    && visibleConfigKey(key)
   ));
   $("#providerFlow").innerHTML = `
     <div class="flow-lane">
@@ -2898,6 +3428,8 @@ function featureDescription(key) {
 }
 
 function formatValue(value) {
+  if (value === "inject") return "注入";
+  if (value === "transcribe") return "转述";
   if (Array.isArray(value)) return value.join(", ");
   if (value && typeof value === "object") return JSON.stringify(value, null, 2);
   return value ?? "";
@@ -3295,7 +3827,8 @@ $("#accessQuickGroups").addEventListener("click", async (event) => {
 });
 
 $("#saveFeaturesBtn").addEventListener("click", async () => {
-  await runAction(() => postJson("/settings/update", { features: state.featureDraft }), "已保存功能开关", $("#saveFeaturesBtn"));
+  const features = Object.fromEntries(Object.entries(state.featureDraft).filter(([key]) => visibleConfigKey(key)));
+  await runAction(() => postJson("/settings/update", { features }), "已保存功能开关", $("#saveFeaturesBtn"));
 });
 
 $("#enableSafeFeaturesBtn").addEventListener("click", () => {
@@ -3316,7 +3849,7 @@ $("#saveProvidersBtn").addEventListener("click", async () => {
 });
 
 $("#testAllProvidersBtn").addEventListener("click", async () => {
-  for (const key of Object.keys(providerLabels)) {
+  for (const key of Object.keys(providerLabels).filter(visibleConfigKey)) {
     await testProvider(key);
   }
 });

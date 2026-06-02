@@ -257,10 +257,24 @@
     "default": "",
     "_special": "select_provider"
   },
-  "PRIVATE_READING_VISION_PROVIDER_ID": {
-    "description": "夹层阅读视觉模型（留空跟随工具结果转述模型）",
+  "GROUP_FOLLOWUP_JUDGE_PROVIDER_ID": {
+    "description": "群聊续接判断模型",
     "type": "string",
-    "hint": "仅在夹层阅读素材能力开启时使用，用于观察封面和抽样正文页并生成内部阅读印象。留空会回退到 NARRATION_PROVIDER_ID。",
+    "hint": "用于群聊续接判断：判断用户后续没 @ 的发言是否仍在和 Bot 对话。适合便宜、低延迟、指令遵循稳定、YES/NO 分类准确的小模型。留空时只使用规则判断；填写后仅在规则不确定时调用。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "FORWARD_MESSAGE_PROVIDER_ID": {
+    "description": "合并消息转述模型",
+    "type": "string",
+    "hint": "当合并消息适配方式选择“转述”时使用，先把合并转发读成自然记录再交给主模型。适合长上下文整理稳定、成本较低、能保留人物和时间线的模型。留空会回退到陪伴通用模型。",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "PRIVATE_READING_VISION_PROVIDER_ID": {
+    "description": "总视觉模型（留空跟随工具结果转述模型）",
+    "type": "string",
+    "hint": "用于视觉理解任务：识屏、图片观察、素材封面/抽样页理解等需要看图的环节。适合多模态能力稳定、能准确描述画面与文字信息、输出克制的视觉模型。留空会回退到 NARRATION_PROVIDER_ID 或相关工具默认模型。",
     "default": "",
     "_special": "select_provider"
   },
@@ -279,6 +293,68 @@
       "step": 1
     },
     "default": 8
+  },
+  "inbound_message_debounce_seconds": {
+    "description": "用户消息防抖秒数",
+    "type": "float",
+    "hint": "拦截平台或适配器短时间重复上报的同一条用户消息。优先按 message_id 做约 60 秒去重；没有 message_id 时按会话、发送者、原始消息和组件指纹做短窗口判断。设为 0 可关闭。",
+    "slider": {
+      "min": 0,
+      "max": 10,
+      "step": 0.5
+    },
+    "default": 3
+  },
+  "enable_semantic_message_debounce": {
+    "description": "启用语义收口等待",
+    "type": "bool",
+    "hint": "开启后，Bot 被唤醒后的短时间内会等待用户补完，把连续几句当作同一轮完整发言理解，减少抢答和多次调用模型。",
+    "default": true
+  },
+  "semantic_message_debounce_seconds": {
+    "description": "语义收口等待秒数",
+    "type": "float",
+    "hint": "从用户第一条消息到达插件时开始计算的收口窗口。默认 8 秒，更适合先发图片再补充说明；视觉转述和平台处理耗时会自然抵扣，不会额外完整等待 8 秒。",
+    "slider": {
+      "min": 0,
+      "max": 8,
+      "step": 0.1
+    },
+    "default": 8,
+    "condition": "enable_semantic_message_debounce"
+  },
+  "enable_group_conversation_followup": {
+    "description": "启用群聊连续对话保持",
+    "type": "bool",
+    "hint": "开启后，用户在群里明确叫过 Bot 之后，后续短时间内即使没有继续 @，插件也会结合上下文判断是否仍在和 Bot 对话。关闭后，没 @ 或没回复 Bot 的群消息不会被自动续接。",
+    "default": true,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "group_conversation_followup_seconds": {
+    "description": "群聊上下文续接判断秒数",
+    "type": "int",
+    "hint": "群里用户 @/回复 Bot 后，在这段时间内会结合上下文判断同一用户后续没 @ 的话是否仍在对 Bot 说；如果期间明显转向别人或群里已有其他人插入，则不会强行续接。设为 0 可关闭。",
+    "slider": {
+      "min": 0,
+      "max": 600,
+      "step": 5
+    },
+    "default": 120,
+    "condition": "enable_group_conversation_followup"
+  },
+  "group_conversation_followup_max_turns": {
+    "description": "群聊连续续接上限",
+    "type": "int",
+    "hint": "同一用户在不继续 @/回复 Bot 的情况下，最多连续续接多少轮。达到上限后自动断开，除非用户再次明确叫 Bot。设为 0 可关闭无 @ 续接。",
+    "slider": {
+      "min": 0,
+      "max": 10,
+      "step": 1
+    },
+    "default": 1,
+    "condition": "enable_group_conversation_followup"
   },
   "idle_minutes": {
     "description": "空闲多久后可主动问候（分钟）",
@@ -758,6 +834,190 @@
       "enable_bilibili_integration": true
     }
   },
+  "enable_news_integration": {
+    "description": "启用新闻阅读",
+    "type": "bool",
+    "hint": "开启后 Bot 可在空档或无聊时低频读取配置的 RSS/Atom 新闻源，形成自己的内部印象，并可能作为主动私聊素材。",
+    "default": false
+  },
+  "enable_news_boredom_read": {
+    "description": "无聊时看新闻",
+    "type": "bool",
+    "hint": "当状态和日程显示 Bot 比较空、无聊或在休息时，低频抓取新闻源。读取后不一定分享，也可能只是记作近期见闻。",
+    "default": true,
+    "condition": {
+      "enable_news_integration": true
+    }
+  },
+  "NEWS_PROVIDER_ID": {
+    "description": "新闻整理模型（留空跟随主动转述/主模型）",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "用于从抓到的新闻标题和摘要中挑一条适合分享的内容，并整理成 Bot 的内部印象。适合便宜、稳定、擅长短 JSON 的模型。",
+    "condition": {
+      "enable_news_integration": true
+    }
+  },
+  "news_sources": {
+    "description": "新闻 RSS/Atom 源",
+    "type": "textarea",
+    "hint": "每行一个新闻源，格式为 名称|URL；也可以只填 URL。插件只读取标题、摘要、链接和发布时间，不抓取新闻正文。",
+    "default": "BBC中文|https://feeds.bbci.co.uk/zhongwen/simp/rss.xml\nGoogle新闻中文|https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans\nSolidot|https://www.solidot.org/index.rss",
+    "condition": {
+      "enable_news_integration": true
+    }
+  },
+  "news_min_interval_hours": {
+    "description": "看新闻最小间隔（小时）",
+    "type": "int",
+    "hint": "两次主动看新闻之间的最小间隔。建议不要太短，避免频繁访问新闻源。",
+    "slider": {
+      "min": 1,
+      "max": 72,
+      "step": 1
+    },
+    "default": 6,
+    "condition": {
+      "enable_news_boredom_read": true
+    }
+  },
+  "news_share_probability": {
+    "description": "新闻私聊分享概率",
+    "type": "float",
+    "hint": "Bot 读到新闻后安排主动私聊分享的基础概率。即使不分享，也会记录最近看过的新闻印象。",
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "default": 0.22,
+    "condition": {
+      "enable_news_integration": true
+    }
+  },
+  "news_max_items_per_source": {
+    "description": "单源最多读取条数",
+    "type": "int",
+    "hint": "每个新闻源最多读取多少条候选。数值越大，整理模型看到的候选越多。",
+    "slider": {
+      "min": 1,
+      "max": 20,
+      "step": 1
+    },
+    "default": 5,
+    "condition": {
+      "enable_news_integration": true
+    }
+  },
+  "enable_web_exploration": {
+    "description": "启用主动搜索",
+    "type": "bool",
+    "hint": "开启后 Bot 可按自己的人格、兴趣、当前状态、日程心情和最近话题，低频使用 AstrBot 全局网页搜索了解新鲜事物，并留下探索笔记。",
+    "default": false
+  },
+  "enable_web_exploration_boredom_search": {
+    "description": "空档时自主搜索",
+    "type": "bool",
+    "hint": "当 Bot 比较空、无聊、休息或有好奇心时，先让模型决定想搜索什么，再调用 AstrBot 配置中的网页搜索。",
+    "default": true,
+    "condition": {
+      "enable_web_exploration": true
+    }
+  },
+  "WEB_EXPLORATION_PROVIDER_ID": {
+    "description": "网页探索模型（留空跟随新闻整理/主模型）",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "用于决定 Bot 想搜索什么，以及把搜索结果整理成探索笔记。适合便宜、稳定、短 JSON 输出可靠的模型。",
+    "condition": {
+      "enable_web_exploration": true
+    }
+  },
+  "web_exploration_interests": {
+    "description": "探索兴趣倾向",
+    "type": "textarea",
+    "hint": "告诉 Bot 自主搜索时可以偏向哪些方向。不是硬名单，Bot 仍会结合人设、日程、最近聊天和心情自行决定。",
+    "default": "按 Bot 人格自行决定；可偏向最近聊天、日程、人设兴趣、作品、技术、生活小知识、流行梗、时讯、新鲜事物。",
+    "condition": {
+      "enable_web_exploration": true
+    }
+  },
+  "enable_news_daily_hot_read": {
+    "description": "每日获取热点",
+    "type": "bool",
+    "hint": "新闻阅读开启后，默认在每日生成日程时一起获取公开热点，形成今天的外界见闻。不会单独作为第三个主动功能。",
+    "default": true,
+    "condition": {
+      "enable_news_integration": true
+    }
+  },
+  "news_hot_sources": {
+    "description": "热点来源",
+    "type": "string",
+    "hint": "逗号或换行分隔。当前支持 weibo、hackernews。热点会和 RSS 新闻一起整理成今日见闻。",
+    "default": "weibo,hackernews",
+    "condition": {
+      "enable_news_daily_hot_read": true
+    }
+  },
+  "news_hot_max_items": {
+    "description": "热点候选数量",
+    "type": "int",
+    "hint": "每日最多保留多少条公开热点候选。数值越大，新闻整理模型看到的信息越多。",
+    "slider": {
+      "min": 3,
+      "max": 30,
+      "step": 1
+    },
+    "default": 12,
+    "condition": {
+      "enable_news_daily_hot_read": true
+    }
+  },
+  "web_exploration_min_interval_hours": {
+    "description": "网页探索最小间隔（小时）",
+    "type": "int",
+    "hint": "两次自主网页搜索之间的最小间隔。建议不要太短，避免频繁调用搜索 API。",
+    "slider": {
+      "min": 1,
+      "max": 168,
+      "step": 1
+    },
+    "default": 8,
+    "condition": {
+      "enable_web_exploration_boredom_search": true
+    }
+  },
+  "web_exploration_share_probability": {
+    "description": "探索后私聊分享概率",
+    "type": "float",
+    "hint": "Bot 完成一次探索后，是否安排主动私聊分享的基础概率。不分享时也会保留探索笔记。",
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "default": 0.18,
+    "condition": {
+      "enable_web_exploration": true
+    }
+  },
+  "web_exploration_max_results": {
+    "description": "网页搜索结果数",
+    "type": "int",
+    "hint": "每次自主搜索最多读取多少条结果。不同搜索 provider 的上限不同，插件会自动裁剪。",
+    "slider": {
+      "min": 3,
+      "max": 20,
+      "step": 1
+    },
+    "default": 6,
+    "condition": {
+      "enable_web_exploration": true
+    }
+  },
   "enable_qzone_integration": {
     "description": "启用 QQ 空间动态层",
     "type": "bool",
@@ -945,6 +1205,89 @@
       "enable_group_companion": true
     }
   },
+  "enable_forward_message_adaptation": {
+    "description": "启用合并消息自然阅读",
+    "type": "bool",
+    "hint": "当本轮消息或引用消息中包含合并转发时，自动读取节点并整理成聊天记录上下文，让 Bot 按发言顺序、人物和话题自然理解。",
+    "default": true
+  },
+  "forward_message_mode": {
+    "description": "合并消息适配方式",
+    "type": "string",
+    "hint": "注入：把整理后的原始聊天记录直接交给主模型阅读；转述：先用合并消息转述模型压成自然记录，再交给主模型。二选一。",
+    "options": [
+      "inject",
+      "transcribe"
+    ],
+    "labels": [
+      "注入",
+      "转述"
+    ],
+    "default": "inject",
+    "condition": {
+      "enable_forward_message_adaptation": true
+    }
+  },
+  "forward_message_max_messages": {
+    "description": "合并消息最多读取条数",
+    "type": "int",
+    "hint": "单次最多展开多少条合并消息节点。条数越多越完整，但会增加上下文长度。",
+    "slider": {
+      "min": 5,
+      "max": 300,
+      "step": 5
+    },
+    "default": 80,
+    "condition": {
+      "enable_forward_message_adaptation": true
+    }
+  },
+  "forward_message_max_chars": {
+    "description": "合并消息注入字数上限",
+    "type": "int",
+    "hint": "整理后的合并消息上下文最多注入多少字符。超过后会截断，避免长聊天记录压垮主模型上下文。",
+    "slider": {
+      "min": 800,
+      "max": 20000,
+      "step": 200
+    },
+    "default": 5000,
+    "condition": {
+      "enable_forward_message_adaptation": true
+    }
+  },
+  "forward_message_parse_nested": {
+    "description": "展开嵌套合并消息",
+    "type": "bool",
+    "hint": "合并消息中再次包含合并消息时，尝试继续展开。默认开启，但最多只做浅层展开。",
+    "default": true,
+    "condition": {
+      "enable_forward_message_adaptation": true
+    }
+  },
+  "forward_message_image_vision": {
+    "description": "合并消息图片交给视觉模型",
+    "type": "bool",
+    "hint": "默认只在合并消息中标记 [图片]，不额外调用视觉模型。开启后会把少量图片 URL 附加到本轮请求中，成本会明显上升。",
+    "default": false,
+    "condition": {
+      "enable_forward_message_adaptation": true
+    }
+  },
+  "forward_message_image_limit": {
+    "description": "合并消息视觉图片上限",
+    "type": "int",
+    "hint": "开启合并消息图片视觉后，最多附加多少张图片给模型。",
+    "slider": {
+      "min": 0,
+      "max": 12,
+      "step": 1
+    },
+    "default": 4,
+    "condition": {
+      "forward_message_image_vision": true
+    }
+  },
   "enable_group_scene_awareness": {
     "description": "启用群聊场景感知",
     "type": "bool",
@@ -1067,6 +1410,15 @@
       "enable_worldbook_member_recognition": true
     }
   },
+  "worldbook_auto_pending_observations": {
+    "description": "低频生成待确认观察",
+    "type": "bool",
+    "hint": "开启后，Bot 会从群聊互动中低频提取轻量印象，只放入关系节点的待确认区；用户确认前不会写入重要记忆，也不会作为固定资料注入。",
+    "default": true,
+    "condition": {
+      "enable_worldbook_member_recognition": true
+    }
+  },
   "worldbook_member_inject_limit": {
     "description": "关系节点单次注入上限",
     "type": "int",
@@ -1118,6 +1470,48 @@
       "step": 5
     },
     "default": 60,
+    "condition": {
+      "enable_atrelay_tools": true
+    }
+  },
+  "atrelay_sensitive_confirm": {
+    "description": "敏感转述发送前确认",
+    "type": "bool",
+    "hint": "开启后，私密、强情绪、告白、金钱、健康等内容不会被直接跨会话发送；Bot 会先询问原样带过去还是委婉转述。",
+    "default": true,
+    "condition": {
+      "enable_atrelay_tools": true
+    }
+  },
+  "atrelay_default_relay_style": {
+    "description": "默认转述方式",
+    "type": "string",
+    "hint": "persona：按 Bot 人格和关系自然改写；soft：更委婉；original：尽量按原话。用户明确要求原话时会覆盖该设置。",
+    "options": [
+      "persona",
+      "soft",
+      "original"
+    ],
+    "labels": [
+      "人格转译",
+      "委婉转述",
+      "原话模式"
+    ],
+    "default": "persona",
+    "condition": {
+      "enable_atrelay_tools": true
+    }
+  },
+  "atrelay_multi_target_limit": {
+    "description": "多目标转述单次上限",
+    "type": "int",
+    "hint": "一次多目标转述最多发送到多少个 QQ 或群。用于避免模型循环调用导致刷屏。",
+    "slider": {
+      "min": 1,
+      "max": 20,
+      "step": 1
+    },
+    "default": 5,
     "condition": {
       "enable_atrelay_tools": true
     }

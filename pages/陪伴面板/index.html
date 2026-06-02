@@ -68,6 +68,14 @@
             <div id="featureMatrix" class="feature-matrix"></div>
           </article>
           <article class="wide">
+            <h2>今日新闻见闻</h2>
+            <div id="newsInsightPanel" class="insight-panel"></div>
+          </article>
+          <article class="wide">
+            <h2>主动搜索记录</h2>
+            <div id="webExplorationPanel" class="insight-panel"></div>
+          </article>
+          <article class="wide">
             <h2>最近活跃热力</h2>
             <div id="activityHeatmap" class="heatmap"></div>
           </article>
@@ -457,6 +465,9 @@
               <label>空闲门槛分钟 <input name="idle_minutes" type="number" min="0" /></label>
               <label>最小主动间隔分钟 <input name="min_interval_minutes" type="number" min="0" /></label>
               <label>后台检查间隔秒 <input name="check_interval_seconds" type="number" min="30" /></label>
+              <label>重复消息防抖秒数 <input name="inbound_message_debounce_seconds" type="number" min="0" max="30" step="0.5" /></label>
+              <label class="toggle-row"><input name="enable_semantic_message_debounce" type="checkbox" /> <span>启用语义收口等待</span></label>
+              <label>语义收口等待秒数 <input name="semantic_message_debounce_seconds" type="number" min="0" max="15" step="0.1" /></label>
               <label class="toggle-row"><input name="enable_unanswered_screen_peek_followup" type="checkbox" /> <span>主动后沉默时可窥屏</span></label>
               <label>沉默多久后窥屏 <input name="unanswered_screen_peek_after_minutes" type="number" min="10" max="240" /></label>
               <label>沉默窥屏冷却分钟 <input name="unanswered_screen_peek_cooldown_minutes" type="number" min="30" max="1440" /></label>
@@ -479,7 +490,22 @@
               <label>打断文本 <input name="group_repeat_interrupt_text" placeholder="禁止复读" /></label>
               <label class="wide-field">打断表情包路径 <input name="group_repeat_interrupt_image_path" placeholder="C:\\path\\to\\meme.png" /></label>
               <label class="toggle-row"><input name="enable_group_repeat_follow" type="checkbox" /> <span>启用复读跟读</span></label>
+              <label class="toggle-row"><input name="enable_group_conversation_followup" type="checkbox" /> <span>启用连续对话保持</span></label>
+              <label>连续对话判断秒数 <input name="group_conversation_followup_seconds" type="number" min="0" max="600" /></label>
+              <label>连续续接上限 <input name="group_conversation_followup_max_turns" type="number" min="0" max="10" /></label>
               <label>场景感知最近消息数 <input name="group_scene_recent_limit" type="number" min="2" max="12" /></label>
+              <label class="toggle-row"><input name="enable_forward_message_adaptation" type="checkbox" /> <span>启用合并消息阅读</span></label>
+              <label>合并消息适配方式
+                <select name="forward_message_mode">
+                  <option value="inject">注入</option>
+                  <option value="transcribe">转述</option>
+                </select>
+              </label>
+              <label>合并消息最多读取条数 <input name="forward_message_max_messages" type="number" min="5" max="300" /></label>
+              <label>合并消息注入字数上限 <input name="forward_message_max_chars" type="number" min="800" max="20000" /></label>
+              <label>合并消息视觉图片上限 <input name="forward_message_image_limit" type="number" min="0" max="12" /></label>
+              <label class="toggle-row"><input name="forward_message_parse_nested" type="checkbox" /> <span>展开嵌套合并消息</span></label>
+              <label class="toggle-row"><input name="forward_message_image_vision" type="checkbox" /> <span>合并消息图片交给视觉模型</span></label>
               <label>最近消息保留数 <input name="max_group_recent_messages" type="number" min="20" /></label>
               <label>黑话保留数 <input name="max_group_slang_terms" type="number" min="8" /></label>
               <button type="submit">保存群聊观察</button>

@@ -93,6 +93,8 @@ _DATA_STORE_KEYS = (
     "worldbook_member_profiles",
     "worldbook_group_profiles",
     "worldbook_import_state",
+    "atrelay_send_log",
+    "inbound_debounce_stats",
 )
 
 # 触发原因 - 真人化表达
@@ -305,7 +307,9 @@ _DEFAULT_GROUP_TEMPLATE = {
     "interjection_feedback": {},
     "last_bot_interjection": {},
     "repeat_follow_state": {},
+    "pending_atrelay_tasks": [],
     "last_speaker": {},
+    "active_bot_conversation": {},
     "atmosphere": {},
     "last_summary_at": 0,
     "last_episode_refresh_at": 0,
