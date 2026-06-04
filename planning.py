@@ -490,6 +490,7 @@ def build_daily_plan_prompt(plugin, now: str) -> str:
     schedule_adjustments = plugin._format_schedule_adjustments_for_prompt()
     recent_plan_history = plugin._format_recent_daily_plan_history_for_prompt()
     skill_growth_context = plugin._format_skill_growth_schedule_context()
+    user_habits = plugin._format_all_user_behavior_habits_for_schedule()
     try:
         now_dt = datetime.strptime(now, "%Y-%m-%d %H:%M")
         weekday_text = "一二三四五六日"[now_dt.weekday()]
@@ -506,6 +507,7 @@ def build_daily_plan_prompt(plugin, now: str) -> str:
             humanized_state=humanized_state,
             schedule_adjustments=schedule_adjustments,
             skill_growth_context=skill_growth_context,
+            user_habits=user_habits,
             recent_plan_history=recent_plan_history,
             calendar_context=calendar_context,
             recent_diaries=recent_diaries,
@@ -587,6 +589,9 @@ Bot 名字：{plugin.bot_name}
 技能成长对日程的能力边界影响：
 {skill_growth_context or "暂无技能倾向。"}
 
+用户行为习惯线索：
+{user_habits}
+
 最近日程骨架（今天要避免照抄）：
 {recent_plan_history}
 
@@ -619,6 +624,7 @@ def build_detail_enhancement_prompt(
     weather_info = plugin._weather_summary_text(plugin.data.get("daily_weather", {}))
     calendar_context = plugin._format_calendar_context_for_prompt()
     schedule_adjustments = plugin._format_schedule_adjustments_for_prompt()
+    user_habits = plugin._format_all_user_behavior_habits_for_schedule()
     return f"""
 你现在是 Private Companion 的日程细化生成器,要把最新命中的时间区间放大来看。不要当成策划会,要像旁观角色真实度过了这一小段。
 
@@ -711,6 +717,9 @@ def build_detail_enhancement_prompt(
 
 【今日互动造成的日程偏移】
 {schedule_adjustments}
+
+【用户行为习惯线索】
+{user_habits}
 
 【天气】
 {weather_info}

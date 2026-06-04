@@ -49,6 +49,7 @@ class PrivateCompanionPageApi:
             ("/worldbook/member/update", self.update_worldbook_member, ["POST"], "Private Companion Page update worldbook member"),
             ("/worldbook/group/update", self.update_worldbook_group, ["POST"], "Private Companion Page update worldbook group"),
             ("/skill/update", self.update_skill_growth, ["POST"], "Private Companion Page update skill growth"),
+            ("/external_ability/update", self.update_external_ability, ["POST"], "Private Companion Page update external proactive ability"),
             ("/preset/apply", self.apply_preset, ["POST"], "Private Companion Page apply preset"),
             ("/providers/available", self.list_available_providers, ["GET"], "Private Companion Page available providers"),
             ("/provider/test", self.test_provider, ["POST"], "Private Companion Page test provider"),
@@ -108,6 +109,7 @@ class PrivateCompanionPageApi:
                     "creative": self._creative_summary(data),
                     "bookshelf": await self._bookshelf_summary(data, unlocked=False),
                     "skill_growth": self._skill_growth_summary(data),
+                    "external_abilities": self._external_ability_summary(data),
                     "life_observation": self._life_observation_summary(data),
                     "daily_state": self._daily_state_summary(data.get("daily_state")),
                     "daily_timeline": self._daily_timeline_summary(data),
@@ -164,6 +166,7 @@ class PrivateCompanionPageApi:
                     "expression_profile": user.get("expression_profile") if isinstance(user.get("expression_profile"), dict) else {},
                     "intent_profile": user.get("intent_profile") if isinstance(user.get("intent_profile"), dict) else {},
                     "relationship_state": user.get("relationship_state") if isinstance(user.get("relationship_state"), dict) else {},
+                    "behavior_habits": self._behavior_habit_summary(user),
                     "dialogue_episodes": self._limited_list(user.get("dialogue_episodes"), 12),
                     "open_loops": self._limited_list(user.get("open_loops"), 12),
                     "recent_reply_topics": self._limited_list(user.get("recent_reply_topics"), 16),
@@ -288,6 +291,7 @@ class PrivateCompanionPageApi:
                     "relationship_edges": group.get("relationship_edges") if isinstance(group.get("relationship_edges"), dict) else {},
                     "interjection_feedback": group.get("interjection_feedback") if isinstance(group.get("interjection_feedback"), dict) else {},
                     "last_bot_interjection": group.get("last_bot_interjection") if isinstance(group.get("last_bot_interjection"), dict) else {},
+                    "group_wakeup_logs": self._group_wakeup_logs(group),
                     "formatted": {
                         "status": self.plugin._format_group_status(group),
                         "feedback": self.plugin._format_group_interjection_feedback(group),
@@ -952,6 +956,44 @@ class PrivateCompanionPageApi:
             logger.error(f"[PrivateCompanionPage] 更新技能失败: {exc}", exc_info=True)
             return self._error(str(exc))
 
+    async def update_external_ability(self) -> dict[str, Any]:
+        payload = await request.get_json(silent=True) or {}
+        normalizer = getattr(self.plugin, "_normalize_external_ability_name", None)
+        name = self._single_line(payload.get("name"), 80)
+        name = normalizer(name) if callable(normalizer) else name
+        if not name:
+            return self._error("缺少外部能力名称")
+        try:
+            async with self.plugin._data_lock:
+                store_getter = getattr(self.plugin, "_external_ability_store", None)
+                store = store_getter() if callable(store_getter) else self.plugin.data.setdefault("external_proactive_abilities", {})
+                if not isinstance(store, dict):
+                    store = {}
+                    self.plugin.data["external_proactive_abilities"] = store
+                item = store.get(name) if isinstance(store.get(name), dict) else {"name": name}
+                if "enabled" in payload:
+                    item["enabled"] = bool(payload.get("enabled"))
+                if "share_probability" in payload:
+                    item["share_probability"] = max(0.0, min(1.0, self._float(payload.get("share_probability"))))
+                if "min_interval_hours" in payload:
+                    item["min_interval_hours"] = max(0.0, self._float(payload.get("min_interval_hours")))
+                if "config" in payload:
+                    config = payload.get("config")
+                    if isinstance(config, str):
+                        import json
+                        config = json.loads(config or "{}")
+                    if not isinstance(config, dict):
+                        return self._error("自定义配置必须是 JSON 对象")
+                    item["config"] = config
+                item["updated_ts"] = time.time()
+                store[name] = item
+                self.plugin._save_data_sync()
+                data = deepcopy(self.plugin.data)
+            return self._ok({"message": "已保存外部主动能力", "external_abilities": self._external_ability_summary(data)})
+        except Exception as exc:
+            logger.error(f"[PrivateCompanionPage] 更新外部主动能力失败: {exc}", exc_info=True)
+            return self._error(str(exc))
+
     async def list_available_providers(self) -> dict[str, Any]:
         try:
             items = self._available_provider_items()
@@ -1062,11 +1104,99 @@ class PrivateCompanionPageApi:
             "memory_items": self._memory_item_count(user.get("companion_memory")),
             "dialogue_episode_count": len(user.get("dialogue_episodes") or []),
             "open_loop_count": len(user.get("open_loops") or []),
+            "habit_count": len(self._behavior_habit_summary(user).get("items", [])),
+        }
+
+    def _behavior_habit_summary(self, user: dict[str, Any]) -> dict[str, Any]:
+        formatter = getattr(self.plugin, "_qualified_user_behavior_habits", None)
+        if callable(formatter):
+            try:
+                items = formatter(user)
+            except Exception:
+                items = []
+        else:
+            raw = user.get("behavior_habits") if isinstance(user.get("behavior_habits"), dict) else {}
+            patterns = raw.get("patterns") if isinstance(raw.get("patterns"), list) else []
+            items = [item for item in patterns if isinstance(item, dict)]
+        normalized = []
+        for item in items[:12]:
+            if not isinstance(item, dict):
+                continue
+            normalized.append(
+                {
+                    "bucket": self._single_line(item.get("bucket"), 12),
+                    "category": self._single_line(item.get("category"), 20),
+                    "topic": self._single_line(item.get("topic"), 80),
+                    "count": self._int(item.get("count")),
+                    "avg_time": self.plugin._format_user_habit_time(item.get("avg_minute")) if hasattr(self.plugin, "_format_user_habit_time") else "",
+                    "last_seen": self.plugin._format_timestamp_elapsed(item.get("last_seen_ts", 0)),
+                    "last_seen_text": self._single_line(item.get("last_seen_text"), 100),
+                }
+            )
+        raw_habits = user.get("behavior_habits") if isinstance(user.get("behavior_habits"), dict) else {}
+        return {
+            "enabled": bool(getattr(self.plugin, "enable_user_habit_learning", False)),
+            "updated_at": self._single_line(raw_habits.get("updated_at"), 30) if isinstance(raw_habits, dict) else "",
+            "items": normalized,
         }
 
     @classmethod
     def _display_message_text(cls, value: Any, limit: int = 500) -> str:
         return cls._single_line(_strip_internal_message_blocks(value), limit)
+
+    def _group_wakeup_runtime(self, group: dict[str, Any]) -> dict[str, Any]:
+        fatigue = group.get("group_wakeup_fatigue") if isinstance(group.get("group_wakeup_fatigue"), dict) else {}
+        value = self._float(fatigue.get("value"))
+        limit = self._int(fatigue.get("limit")) or int(getattr(self.plugin, "group_wakeup_fatigue_limit", 5) or 5)
+        ratio = max(0.0, min(1.0, value / max(1, limit)))
+        if ratio >= 1.0:
+            label = "疲劳高"
+            level = "high"
+        elif ratio >= 0.55:
+            label = "有点累"
+            level = "medium"
+        elif value >= 0.4:
+            label = "轻微"
+            level = "low"
+        else:
+            label = "无"
+            level = "none"
+        return {
+            "value": round(value, 2),
+            "limit": limit,
+            "ratio": round(ratio, 3),
+            "label": label,
+            "level": level,
+            "updated": self.plugin._format_timestamp_elapsed(fatigue.get("updated_ts", 0)),
+        }
+
+    def _group_wakeup_logs(self, group: dict[str, Any], limit: int = 30) -> list[dict[str, Any]]:
+        logs = group.get("group_wakeup_logs") if isinstance(group.get("group_wakeup_logs"), list) else []
+        items: list[dict[str, Any]] = []
+        for raw in reversed(logs[-limit:]):
+            if not isinstance(raw, dict):
+                continue
+            items.append(
+                {
+                    "ts": self._float(raw.get("ts")),
+                    "time": self.plugin._format_timestamp_elapsed(raw.get("ts", 0)),
+                    "result": self._single_line(raw.get("result"), 32),
+                    "type": self._single_line(raw.get("type"), 40),
+                    "word": self._single_line(raw.get("word"), 60),
+                    "strength": self._single_line(raw.get("strength"), 24),
+                    "strength_label": self._single_line(raw.get("strength_label"), 24),
+                    "probability": round(self._float(raw.get("probability")), 3),
+                    "reason": self._single_line(raw.get("reason"), 80),
+                    "topic_weight": raw.get("topic_weight") if isinstance(raw.get("topic_weight"), dict) else {},
+                    "note": self._single_line(raw.get("note"), 180),
+                    "sender_id": self._single_line(raw.get("sender_id"), 40),
+                    "sender_name": self._single_line(raw.get("sender_name"), 40),
+                    "text": self._display_message_text(raw.get("text"), 160),
+                    "fatigue_value": round(self._float(raw.get("fatigue_value")), 2),
+                    "fatigue_label": self._single_line(raw.get("fatigue_label"), 20),
+                }
+            )
+        return items
 
     def _group_summary(self, group_id: str, group: dict[str, Any]) -> dict[str, Any]:
         atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
@@ -1081,6 +1211,8 @@ class PrivateCompanionPageApi:
                 pass
         members = group.get("members") if isinstance(group.get("members"), dict) else {}
         identity_count = sum(1 for item in members.values() if isinstance(item, dict) and item.get("identity_known"))
+        wakeup_logs = group.get("group_wakeup_logs") if isinstance(group.get("group_wakeup_logs"), list) else []
+        last_wakeup = group.get("last_group_wakeup") if isinstance(group.get("last_group_wakeup"), dict) else {}
         return {
             "group_id": str(group_id),
             "enabled": bool(group.get("enabled", True)),
@@ -1098,6 +1230,16 @@ class PrivateCompanionPageApi:
             "relationship_edge_count": len(group.get("relationship_edges") or {}),
             "interject_today": group.get("interject_today", 0),
             "last_interject": self.plugin._format_timestamp_elapsed(group.get("last_interject_at", 0)),
+            "wakeup_log_count": len(wakeup_logs),
+            "wakeup_fatigue": self._group_wakeup_runtime(group),
+            "last_group_wakeup": {
+                "time": self.plugin._format_timestamp_elapsed(last_wakeup.get("ts", 0)),
+                "type": self._single_line(last_wakeup.get("type"), 40),
+                "word": self._single_line(last_wakeup.get("word"), 60),
+                "strength_label": self._single_line(last_wakeup.get("strength_label"), 24),
+                "sender_name": self._single_line(last_wakeup.get("sender_name"), 40),
+                "text": self._display_message_text(last_wakeup.get("text"), 120),
+            } if last_wakeup else {},
             "atmosphere": {
                 "mood": atmosphere.get("mood", ""),
                 "heat": atmosphere.get("heat", ""),
@@ -1232,6 +1374,51 @@ class PrivateCompanionPageApi:
             "items": items[:24],
         }
 
+    def _external_ability_summary(self, data: dict[str, Any]) -> dict[str, Any]:
+        runtime_getter = getattr(self.plugin, "external_proactive_abilities", None)
+        if callable(runtime_getter):
+            raw_items = runtime_getter()
+        else:
+            store = data.get("external_proactive_abilities") if isinstance(data.get("external_proactive_abilities"), dict) else {}
+            raw_items = list(store.values()) if isinstance(store, dict) else []
+        items: list[dict[str, Any]] = []
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            config = raw.get("config") if isinstance(raw.get("config"), dict) else {}
+            schema = raw.get("config_schema") if isinstance(raw.get("config_schema"), dict) else {}
+            items.append(
+                {
+                    "name": self._single_line(raw.get("name"), 64),
+                    "module": self._single_line(raw.get("module"), 24) or "外部主动能力",
+                    "label": self._single_line(raw.get("label"), 32) or self._single_line(raw.get("name"), 64),
+                    "description": self._single_line(raw.get("description"), 180),
+                    "when": self._single_line(raw.get("when"), 140),
+                    "use_for": self._single_line(raw.get("use_for"), 140),
+                    "avoid": self._single_line(raw.get("avoid"), 140),
+                    "enabled": bool(raw.get("enabled")),
+                    "available": bool(raw.get("available")),
+                    "registered": bool(raw.get("registered")),
+                    "share_probability": max(0.0, min(1.0, self._float(raw.get("share_probability")))),
+                    "min_interval_hours": max(0.0, self._float(raw.get("min_interval_hours"))),
+                    "config": config,
+                    "config_schema": schema,
+                    "last_executed": self.plugin._format_timestamp_elapsed(raw.get("last_executed_ts", 0)),
+                    "last_status": self._single_line(raw.get("last_status"), 160),
+                    "last_summary": self._single_line(raw.get("last_summary"), 160),
+                    "success_count": self._int(raw.get("success_count")),
+                    "failure_count": self._int(raw.get("failure_count")),
+                    "updated": self.plugin._format_timestamp_elapsed(raw.get("updated_ts", 0)),
+                }
+            )
+        items.sort(key=lambda item: (not item["enabled"], not item["available"], item["module"], item["label"]))
+        return {
+            "total": len(items),
+            "enabled_count": sum(1 for item in items if item["enabled"]),
+            "available_count": sum(1 for item in items if item["available"]),
+            "items": items,
+        }
+
     def _feature_flags(self) -> dict[str, bool]:
         keys = [
             "enable_mai_style_integration",
@@ -1244,13 +1431,16 @@ class PrivateCompanionPageApi:
             "enable_relationship_state_machine",
             "enable_dialogue_episode_memory",
             "enable_open_loop_tracking",
+            "enable_user_habit_learning",
             "enable_humanized_states",
+            "enable_segmented_proactive_reply",
             "inject_passive_states",
             "enable_cycle_state",
             "enable_skill_growth_simulation",
             "enable_environment_perception",
             "enable_holiday_perception",
             "enable_platform_perception",
+            "enable_model_perception",
             "enable_lunar_perception",
             "enable_solar_term_perception",
             "enable_almanac_perception",
@@ -1260,6 +1450,7 @@ class PrivateCompanionPageApi:
             "enable_group_context_injection",
             "enable_forward_message_adaptation",
             "enable_group_scene_awareness",
+            "enable_group_wakeup_enhancement",
             "enable_semantic_message_debounce",
             "enable_group_conversation_followup",
             "enable_group_interjection",
@@ -1276,7 +1467,9 @@ class PrivateCompanionPageApi:
             "enable_bilibili_integration",
             "enable_bilibili_boredom_watch",
             "enable_news_integration",
+            "enable_news_daily_hot_read",
             "enable_news_boredom_read",
+            "enable_external_event_self_link",
             "enable_web_exploration",
             "enable_web_exploration_boredom_search",
             "enable_qzone_integration",
@@ -1426,6 +1619,7 @@ class PrivateCompanionPageApi:
             "enable_environment_perception",
             "enable_holiday_perception",
             "enable_platform_perception",
+            "enable_model_perception",
             "enable_lunar_perception",
             "enable_solar_term_perception",
             "enable_almanac_perception",
@@ -1443,6 +1637,21 @@ class PrivateCompanionPageApi:
             "inbound_message_debounce_seconds",
             "enable_semantic_message_debounce",
             "semantic_message_debounce_seconds",
+            "enable_segmented_proactive_reply",
+            "segmented_proactive_scope",
+            "segmented_proactive_threshold",
+            "segmented_proactive_min_segment_chars",
+            "segmented_proactive_max_segments",
+            "segmented_proactive_split_mode",
+            "segmented_proactive_regex",
+            "segmented_proactive_split_words",
+            "enable_segmented_proactive_content_cleanup",
+            "segmented_proactive_content_cleanup_rule",
+            "segmented_proactive_content_cleanup_words",
+            "segmented_proactive_interval_method",
+            "segmented_proactive_interval_min",
+            "segmented_proactive_interval_max",
+            "segmented_proactive_log_base",
             "group_conversation_followup_seconds",
             "group_conversation_followup_max_turns",
             "enable_group_conversation_followup",
@@ -1455,6 +1664,17 @@ class PrivateCompanionPageApi:
             "group_repeat_interrupt_text",
             "group_repeat_interrupt_image_path",
             "group_scene_recent_limit",
+            "group_wakeup_direct_words",
+            "group_wakeup_context_words",
+            "group_wakeup_interest_keywords",
+            "group_wakeup_interest_probability",
+            "group_wakeup_cooldown_seconds",
+            "group_wakeup_generated_keyword_limit",
+            "group_wakeup_topic_interest_max_boost",
+            "group_wakeup_debounce_pending_penalty",
+            "group_wakeup_fatigue_limit",
+            "group_wakeup_fatigue_decay_minutes",
+            "group_wakeup_log_limit",
             "enable_forward_message_adaptation",
             "forward_message_mode",
             "forward_message_max_messages",
@@ -1470,6 +1690,8 @@ class PrivateCompanionPageApi:
             "max_companion_memory_items",
             "max_learned_expression_items",
             "max_dialogue_episodes",
+            "user_habit_min_count",
+            "user_habit_max_items",
             "enable_skill_growth_simulation",
             "skill_growth_rate",
             "skill_growth_custom_skills",
@@ -1483,8 +1705,11 @@ class PrivateCompanionPageApi:
             "enable_news_integration",
             "enable_news_boredom_read",
             "enable_news_daily_hot_read",
+            "enable_external_event_self_link",
             "news_min_interval_hours",
             "news_share_probability",
+            "external_event_self_link_probability",
+            "external_event_self_link_cooldown_hours",
             "news_max_items_per_source",
             "news_sources",
             "news_hot_sources",
@@ -1847,7 +2072,8 @@ class PrivateCompanionPageApi:
             setattr(self.plugin, private_reading_attr_map[key], value)
             return
         if key in {"group_repeat_follow_probability", "group_repeat_interrupt_probability", "group_repeat_interrupt_probability_step"}:
-            setattr(self.plugin, key, max(0.0, min(1.0, float(value or 0))))
+            raw = float(value or 0)
+            setattr(self.plugin, key, max(0.0, min(1.0, raw / 100.0 if raw > 1 else raw)))
             return
         if key in self._allowed_feature_keys():
             setattr(self.plugin, key, bool(value))
@@ -1912,12 +2138,16 @@ class PrivateCompanionPageApi:
             "enable_relationship_state_machine",
             "enable_dialogue_episode_memory",
             "enable_open_loop_tracking",
+            "enable_user_habit_learning",
             "enable_humanized_states",
+            "enable_segmented_proactive_reply",
             "inject_passive_states",
             "enable_cycle_state",
+            "enable_skill_growth_simulation",
             "enable_environment_perception",
             "enable_holiday_perception",
             "enable_platform_perception",
+            "enable_model_perception",
             "enable_lunar_perception",
             "enable_solar_term_perception",
             "enable_almanac_perception",
@@ -1926,6 +2156,7 @@ class PrivateCompanionPageApi:
             "enable_group_member_profiles",
             "enable_group_context_injection",
             "enable_forward_message_adaptation",
+            "enable_group_wakeup_enhancement",
             "enable_semantic_message_debounce",
             "enable_group_conversation_followup",
             "enable_group_interjection",
@@ -1945,6 +2176,7 @@ class PrivateCompanionPageApi:
             "enable_news_integration",
             "enable_news_boredom_read",
             "enable_news_daily_hot_read",
+            "enable_external_event_self_link",
             "enable_web_exploration",
             "enable_web_exploration_boredom_search",
             "enable_qzone_integration",
@@ -1995,6 +2227,7 @@ class PrivateCompanionPageApi:
             "enable_environment_perception",
             "enable_holiday_perception",
             "enable_platform_perception",
+            "enable_model_perception",
             "enable_lunar_perception",
             "enable_solar_term_perception",
             "enable_almanac_perception",
@@ -2004,6 +2237,7 @@ class PrivateCompanionPageApi:
             "worldview_adaptation_prompt",
             "quiet_hours",
             "daily_token_limit",
+            "humanized_state_intensity",
             "check_interval_seconds",
             "idle_minutes",
             "min_interval_minutes",
@@ -2011,6 +2245,21 @@ class PrivateCompanionPageApi:
             "inbound_message_debounce_seconds",
             "enable_semantic_message_debounce",
             "semantic_message_debounce_seconds",
+            "enable_segmented_proactive_reply",
+            "segmented_proactive_scope",
+            "segmented_proactive_threshold",
+            "segmented_proactive_min_segment_chars",
+            "segmented_proactive_max_segments",
+            "segmented_proactive_split_mode",
+            "segmented_proactive_regex",
+            "segmented_proactive_split_words",
+            "enable_segmented_proactive_content_cleanup",
+            "segmented_proactive_content_cleanup_rule",
+            "segmented_proactive_content_cleanup_words",
+            "segmented_proactive_interval_method",
+            "segmented_proactive_interval_min",
+            "segmented_proactive_interval_max",
+            "segmented_proactive_log_base",
             "group_conversation_followup_seconds",
             "group_conversation_followup_max_turns",
             "enable_group_conversation_followup",
@@ -2023,6 +2272,17 @@ class PrivateCompanionPageApi:
             "group_repeat_interrupt_text",
             "group_repeat_interrupt_image_path",
             "group_scene_recent_limit",
+            "group_wakeup_direct_words",
+            "group_wakeup_context_words",
+            "group_wakeup_interest_keywords",
+            "group_wakeup_interest_probability",
+            "group_wakeup_cooldown_seconds",
+            "group_wakeup_generated_keyword_limit",
+            "group_wakeup_topic_interest_max_boost",
+            "group_wakeup_debounce_pending_penalty",
+            "group_wakeup_fatigue_limit",
+            "group_wakeup_fatigue_decay_minutes",
+            "group_wakeup_log_limit",
             "enable_forward_message_adaptation",
             "forward_message_mode",
             "forward_message_max_messages",
@@ -2038,6 +2298,8 @@ class PrivateCompanionPageApi:
             "max_companion_memory_items",
             "max_learned_expression_items",
             "max_dialogue_episodes",
+            "user_habit_min_count",
+            "user_habit_max_items",
             "enable_skill_growth_simulation",
             "skill_growth_rate",
             "skill_growth_custom_skills",
@@ -2051,8 +2313,11 @@ class PrivateCompanionPageApi:
             "enable_news_integration",
             "enable_news_boredom_read",
             "enable_news_daily_hot_read",
+            "enable_external_event_self_link",
             "news_min_interval_hours",
             "news_share_probability",
+            "external_event_self_link_probability",
+            "external_event_self_link_cooldown_hours",
             "news_max_items_per_source",
             "news_sources",
             "news_hot_sources",
@@ -2061,6 +2326,8 @@ class PrivateCompanionPageApi:
             "enable_web_exploration_boredom_search",
             "web_exploration_min_interval_hours",
             "web_exploration_share_probability",
+            "external_event_self_link_probability",
+            "external_event_self_link_cooldown_hours",
             "web_exploration_max_results",
             "web_exploration_interests",
             "enable_qzone_integration",
@@ -2105,6 +2372,8 @@ class PrivateCompanionPageApi:
             return self._normalize_id_list(value)
         if key == "worldbook_config_paths":
             return str(value or "").strip()[:1000]
+        if key in {"group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords"}:
+            return str(value or "").strip()[:1200]
         if key == "worldview_adaptation_mode":
             mode = str(value or "auto").strip()
             return mode if mode in {"auto", "modern", "fantasy", "sci_fi", "custom", "off"} else "auto"
@@ -2115,6 +2384,50 @@ class PrivateCompanionPageApi:
             if mode in {"转述", "summary", "summarize", "narrate", "relay"}:
                 return "transcribe"
             return mode if mode in {"inject", "transcribe"} else "inject"
+        if key == "segmented_proactive_split_mode":
+            mode = str(value or "regex").strip().lower()
+            return mode if mode in {"regex", "words"} else "regex"
+        if key == "segmented_proactive_scope":
+            mode = str(value or "proactive_only").strip().lower()
+            aliases = {
+                "plugin": "proactive_only",
+                "plugins": "proactive_only",
+                "proactive": "proactive_only",
+                "插件": "proactive_only",
+                "插件主动": "proactive_only",
+                "all": "all_llm",
+                "llm": "all_llm",
+                "全部": "all_llm",
+                "全部分段": "all_llm",
+            }
+            mode = aliases.get(mode, mode)
+            return mode if mode in {"proactive_only", "all_llm"} else "proactive_only"
+        if key == "segmented_proactive_interval_method":
+            mode = str(value or "log").strip().lower()
+            return mode if mode in {"log", "random"} else "log"
+        if key in {"segmented_proactive_split_words", "segmented_proactive_content_cleanup_words"}:
+            def _decode_segmented_word(raw: Any) -> str:
+                text = str(raw or "")
+                stripped = text.strip()
+                lowered = stripped.lower()
+                if lowered in {"<space>", "{space}", "[space]", "\\s", "\\u0020", "空格"}:
+                    return " "
+                if lowered in {"<newline>", "{newline}", "[newline]", "\\n", "换行"}:
+                    return "\n"
+                if lowered in {"<tab>", "{tab}", "[tab]", "\\t", "tab"}:
+                    return "\t"
+                if text and text.isspace():
+                    return text[:1]
+                return stripped
+
+            if isinstance(value, list):
+                words = [_decode_segmented_word(item) for item in value]
+            else:
+                words = [_decode_segmented_word(part) for part in re.split(r"[\n,，、]+", str(value or ""))]
+            words = [word for word in words if word != ""]
+            return words[:80]
+        if key in {"segmented_proactive_regex", "segmented_proactive_content_cleanup_rule"}:
+            return str(value or "").strip()[:800]
         if key == "atrelay_default_relay_style":
             mode = str(value or "persona").strip()
             return mode if mode in {"persona", "soft", "original"} else "persona"
@@ -2131,11 +2444,21 @@ class PrivateCompanionPageApi:
             "idle_minutes",
             "min_interval_minutes",
             "max_daily_messages",
+            "segmented_proactive_threshold",
+            "segmented_proactive_min_segment_chars",
+            "segmented_proactive_max_segments",
             "group_conversation_followup_seconds",
             "group_conversation_followup_max_turns",
             "group_interject_min_interval_minutes",
             "group_interject_max_daily",
             "group_scene_recent_limit",
+            "group_wakeup_cooldown_seconds",
+            "group_wakeup_generated_keyword_limit",
+            "group_wakeup_topic_interest_max_boost",
+            "group_wakeup_debounce_pending_penalty",
+            "group_wakeup_fatigue_limit",
+            "group_wakeup_fatigue_decay_minutes",
+            "group_wakeup_log_limit",
             "forward_message_max_messages",
             "forward_message_max_chars",
             "forward_message_image_limit",
@@ -2147,11 +2470,14 @@ class PrivateCompanionPageApi:
             "max_companion_memory_items",
             "max_learned_expression_items",
             "max_dialogue_episodes",
+            "user_habit_min_count",
+            "user_habit_max_items",
             "bilibili_boredom_min_interval_hours",
             "bilibili_share_min_score",
             "news_min_interval_hours",
             "news_max_items_per_source",
             "news_hot_max_items",
+            "external_event_self_link_cooldown_hours",
             "web_exploration_min_interval_hours",
             "web_exploration_max_results",
             "qzone_life_publish_min_interval_hours",
@@ -2167,6 +2493,12 @@ class PrivateCompanionPageApi:
         }:
             try:
                 return max(0, int(value))
+            except (TypeError, ValueError):
+                return 0
+        if key == "group_wakeup_interest_probability":
+            try:
+                raw = float(value)
+                return max(0, min(100, int(round(raw * 100 if 0 <= raw <= 1 else raw))))
             except (TypeError, ValueError):
                 return 0
         if key == "inbound_message_debounce_seconds":
@@ -2186,12 +2518,13 @@ class PrivateCompanionPageApi:
         }:
             try:
                 raw = float(value)
-                return max(0.0, min(1.0, raw / 100.0 if raw > 1 else raw))
+                return max(0, min(100, int(round(raw * 100 if 0 <= raw <= 1 else raw))))
             except (TypeError, ValueError):
-                return 0.0
+                return 0
         if key in {
             "bilibili_share_probability",
             "news_share_probability",
+            "external_event_self_link_probability",
             "web_exploration_share_probability",
             "qzone_life_publish_probability",
             "private_reading_share_probability",
@@ -2210,11 +2543,24 @@ class PrivateCompanionPageApi:
             except (TypeError, ValueError):
                 return 1.0
         if key in {
+            "segmented_proactive_interval_min",
+            "segmented_proactive_interval_max",
+            "segmented_proactive_log_base",
+        }:
+            try:
+                raw = float(value)
+                if key == "segmented_proactive_log_base":
+                    return max(1.1, min(10.0, raw))
+                return max(0.1, min(30.0, raw))
+            except (TypeError, ValueError):
+                return 1.8 if key == "segmented_proactive_log_base" else 1.5
+        if key in {
             "enable_bilibili_integration",
             "enable_bilibili_boredom_watch",
             "enable_news_integration",
             "enable_news_boredom_read",
             "enable_news_daily_hot_read",
+            "enable_external_event_self_link",
             "enable_web_exploration",
             "enable_web_exploration_boredom_search",
             "enable_qzone_integration",
@@ -2228,6 +2574,7 @@ class PrivateCompanionPageApi:
             "enable_environment_perception",
             "enable_holiday_perception",
             "enable_platform_perception",
+            "enable_model_perception",
             "enable_lunar_perception",
             "enable_solar_term_perception",
             "enable_almanac_perception",
@@ -2236,6 +2583,7 @@ class PrivateCompanionPageApi:
             "enable_cycle_state",
             "enable_worldbook_member_recognition",
             "enable_group_scene_awareness",
+            "enable_group_wakeup_enhancement",
             "enable_group_repeat_follow",
             "enable_forward_message_adaptation",
             "enable_skill_growth_simulation",
@@ -2243,6 +2591,8 @@ class PrivateCompanionPageApi:
             "forward_message_parse_nested",
             "forward_message_image_vision",
             "enable_semantic_message_debounce",
+            "enable_segmented_proactive_reply",
+            "enable_segmented_proactive_content_cleanup",
             "enable_humanized_states",
             "inject_passive_states",
             "enable_cycle_state",
@@ -2529,10 +2879,32 @@ class PrivateCompanionPageApi:
         for item in [note for note in web_notes if isinstance(note, dict)]:
             topic = self._single_line(item.get("topic"), 100)
             query = self._single_line(item.get("query"), 100)
-            note = self._single_line(item.get("note"), 1000)
+            note = self._single_line(
+                item.get("note")
+                or item.get("summary")
+                or item.get("impression")
+                or item.get("content"),
+                1000,
+            )
             source_title = self._single_line(item.get("source_title"), 120)
             source_url = self._single_line(item.get("source_url"), 400)
             created_ts = self._float(item.get("created_ts"))
+            result_lines = []
+            raw_results = item.get("results") if isinstance(item.get("results"), list) else []
+            for result in raw_results[:4]:
+                if not isinstance(result, dict):
+                    continue
+                title = self._single_line(result.get("title"), 100)
+                snippet = self._single_line(result.get("snippet"), 180)
+                if title and snippet:
+                    result_lines.append(f"{title}：{snippet}")
+                elif title:
+                    result_lines.append(title)
+                elif snippet:
+                    result_lines.append(snippet)
+            result_excerpt = self._single_line("；".join(result_lines), 1000)
+            if not note:
+                note = result_excerpt
             entries.append(
                 {
                     "_ts": created_ts,
@@ -2549,6 +2921,7 @@ class PrivateCompanionPageApi:
                             f"搜索词：{query}" if query else "",
                             f"搜索动机：{self._single_line(item.get('reason'), 160)}" if self._single_line(item.get("reason"), 160) else "",
                             f"笔记：{note}" if note else "",
+                            f"结果摘录：{result_excerpt}" if result_excerpt and result_excerpt != note else "",
                             f"主要来源：{source_title}" if source_title else "",
                             f"链接：{source_url}" if source_url else "",
                         )
@@ -2667,6 +3040,7 @@ class PrivateCompanionPageApi:
                 }
             )
         public_books = []
+        browsing_entries = self._browsing_history_entries(data)
         for item in [project for project in projects if isinstance(project, dict)][-12:]:
             chunks = item.get("draft_chunks") if isinstance(item.get("draft_chunks"), list) else []
             full_text = "\n\n".join(
@@ -2680,6 +3054,8 @@ class PrivateCompanionPageApi:
                 {
                     "id": self._single_line(item.get("id"), 32) or f"creative-{len(public_books)}",
                     "kind": "creative",
+                    "category": self._single_line(item.get("work_type"), 30) or "创作",
+                    "work_type": self._single_line(item.get("work_type"), 30) or "短篇小说",
                     "title": self._single_line(item.get("title"), 60) or "未定标题",
                     "intro": self._single_line(item.get("premise"), 240) or "这本书还没整理出简介。",
                     "status": status,
@@ -2688,6 +3064,22 @@ class PrivateCompanionPageApi:
                     "progress": progress,
                     "content": full_text or self._single_line(chunks[-1].get("text") if chunks else "", 2000) or "这本书还没有正文。",
                     "created": self.plugin._format_timestamp_elapsed(item.get("created_at", 0)),
+                }
+            )
+        if browsing_entries:
+            latest = browsing_entries[-1]
+            public_books.append(
+                {
+                    "id": "browsing-history-main",
+                    "kind": "browsing",
+                    "category": "浏览记录",
+                    "title": "浏览记录",
+                    "intro": f"这里收着 {len(browsing_entries)} 条新闻阅读和主动搜索记录。打开后可以选择记录。",
+                    "content": self._single_line(latest.get("content"), 2000) or self._single_line(latest.get("intro"), 1200),
+                    "entries": browsing_entries,
+                    "created": self._single_line(latest.get("generated_at") or latest.get("date"), 32),
+                    "progress": f"{len(browsing_entries)} 条记录",
+                    "tags": ["新闻阅读", "主动搜索"],
                 }
             )
         locked_count = (1 if diaries else 0) + len(jm_items)
@@ -2716,6 +3108,7 @@ class PrivateCompanionPageApi:
                     {
                         "id": "diary-main",
                         "kind": "diary",
+                        "category": "日记",
                         "title": "日记本",
                         "intro": f"这里收着 {len(diary_entries)} 天的日记。打开后可以选择日期。",
                         "content": diary_entries[-1].get("content") or "这本日记暂时没有可读内容。",
@@ -2788,6 +3181,7 @@ class PrivateCompanionPageApi:
                     {
                         "id": f"jm-{album_id or len(secret_books)}",
                         "kind": "jm_album",
+                        "category": "夹层藏书",
                         "album_id": album_id,
                         "title": self._single_line(item.get("title"), 100) or "未命名藏书",
                         "intro": self._single_line(album_description, 600),
@@ -2951,6 +3345,7 @@ class PrivateCompanionPageApi:
                 {
                     "id": self._single_line(item.get("id"), 20),
                     "title": self._single_line(item.get("title"), 60),
+                    "work_type": self._single_line(item.get("work_type"), 30) or "短篇小说",
                     "premise": self._single_line(item.get("premise"), 160),
                     "tone": self._single_line(item.get("tone"), 40),
                     "point_of_view": self._single_line(item.get("point_of_view"), 40) or "第三人称有限视角",

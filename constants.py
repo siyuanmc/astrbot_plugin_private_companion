@@ -89,6 +89,7 @@ _DATA_STORE_KEYS = (
     "qq_presence_state",
     "creative_projects",
     "proactive_candidate_pool",
+    "external_proactive_abilities",
     "worldbook_entries",
     "worldbook_member_profiles",
     "worldbook_group_profiles",

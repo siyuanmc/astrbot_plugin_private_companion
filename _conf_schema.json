@@ -75,6 +75,13 @@
     "default": true,
     "condition": "enable_environment_perception"
   },
+  "enable_model_perception": {
+    "description": "感知当前模型配置",
+    "type": "bool",
+    "hint": "把当前会话 LLM、插件任务模型覆盖和视觉转述模型配置作为环境信息注入。不同会话、不同任务和不同 AstrBot 配置下模型可能不同；该信息只供 Bot 判断自身能力边界和表达方式，不要求主动报告模型名。",
+    "default": true,
+    "condition": "enable_environment_perception"
+  },
   "enable_lunar_perception": {
     "description": "感知农历",
     "type": "bool",
@@ -176,7 +183,7 @@
   "CREATIVE_PROVIDER_ID": {
     "description": "私下创作模型（留空跟随陪伴通用模型）",
     "type": "string",
-    "hint": "用于生成小说项目设定和按人格速度续写正文。建议选择文风稳定、能遵守人设身份边界的模型。",
+    "hint": "用于生成创作项目设定和按人格速度续写正文。作品可以是小说、诗、随笔、剧本、设定集等文本。建议选择文风稳定、能遵守人设身份边界的模型。",
     "default": "",
     "_special": "select_provider"
   },
@@ -488,15 +495,15 @@
     "default": 45
   },
   "enable_creative_writing": {
-    "description": "启用小说创作行为",
+    "description": "启用私下创作行为",
     "type": "bool",
-    "hint": "开启后，Bot 会因为生活小事、日记碎片或梦境余温产生小说灵感，并按人格对应的速度慢慢写，不会一次写完整篇。",
+    "hint": "开启后，Bot 会因为生活小事、日记碎片或梦境余温产生创作灵感，可能写小说、诗、随笔、剧本、设定集等文本，并按人格对应的速度慢慢写，不会一次写完整篇。",
     "default": true
   },
   "creative_inspiration_probability": {
     "description": "创作灵感触发概率",
     "type": "float",
-    "hint": "每轮调度中尝试开启新小说坑的概率。仍受冷却、活动项目数量和是否有灵感来源影响。",
+    "hint": "每轮调度中尝试开启新创作项目的概率。仍受冷却、活动项目数量和是否有灵感来源影响。",
     "slider": {
       "min": 0,
       "max": 1,
@@ -510,7 +517,7 @@
   "creative_share_probability": {
     "description": "小说节点透露概率",
     "type": "float",
-    "hint": "Bot 写到开头、过半、完稿或想听读后感觉时，是否找时机向用户透露/征求观感的基础概率。用户反馈只作为灵感参考，创作方向仍由 Bot 自己决定。普通写作进度不会直接分享。",
+    "hint": "Bot 写到开头、过半、完稿或想听读后感觉时，是否找时机向用户透露/征求观感的基础概率。用户反馈只作为灵感参考，创作方向仍由 Bot 自己决定。普通创作进度不会直接分享。",
     "slider": {
       "min": 0,
       "max": 1,
@@ -524,7 +531,7 @@
   "creative_base_chars_per_hour": {
     "description": "基础写作速度（字/小时）",
     "type": "int",
-    "hint": "小说创作的基础行文速度。实际速度会根据人格关键词、聊天风格和当天能量上下浮动。",
+    "hint": "文本创作的基础行文速度。实际速度会根据人格关键词、聊天风格和当天能量上下浮动。",
     "slider": {
       "min": 60,
       "max": 1200,
@@ -538,7 +545,7 @@
   "creative_max_active_projects": {
     "description": "最多同时创作项目数",
     "type": "int",
-    "hint": "限制同时进行的小说坑数量，避免灵感过多导致状态发散。",
+    "hint": "限制同时进行的创作项目数量，避免灵感过多导致状态发散。",
     "slider": {
       "min": 1,
       "max": 5,
@@ -552,7 +559,7 @@
   "creative_hidden_mode": {
     "description": "创作默认低调进行",
     "type": "bool",
-    "hint": "开启后，小说创作不会作为普通日常频繁分享，只在达到节点、想听读后感觉，或用户主动询问最近在做什么时作为可选回答素材。不会把故事走向交给用户决定。",
+    "hint": "开启后，创作不会作为普通日常频繁分享，只在达到节点、想听读后感觉，或用户主动询问最近在做什么时作为可选回答素材。不会把作品走向交给用户决定。",
     "default": true,
     "condition": {
       "enable_creative_writing": true
@@ -680,6 +687,43 @@
     "default": 18,
     "condition": {
       "enable_expression_learning": true
+    }
+  },
+  "enable_user_habit_learning": {
+    "description": "启用用户习惯画像",
+    "type": "bool",
+    "hint": "记录用户常在什么时段做什么、问什么，并作为软线索影响日程细化和主动理解。不会把统计过程暴露给用户，也不会硬编码固定回答。",
+    "default": true,
+    "condition": {
+      "enable_mai_style_integration": true
+    }
+  },
+  "user_habit_min_count": {
+    "description": "习惯成型次数",
+    "type": "int",
+    "hint": "同一时段同类行为至少出现多少次，才会作为用户习惯注入提示词。",
+    "slider": {
+      "min": 2,
+      "max": 20,
+      "step": 1
+    },
+    "default": 3,
+    "condition": {
+      "enable_user_habit_learning": true
+    }
+  },
+  "user_habit_max_items": {
+    "description": "习惯条目上限",
+    "type": "int",
+    "hint": "每个私聊对象最多保留多少条行为习惯模式，超过后优先保留高频和近期条目。",
+    "slider": {
+      "min": 8,
+      "max": 80,
+      "step": 4
+    },
+    "default": 24,
+    "condition": {
+      "enable_user_habit_learning": true
     }
   },
   "enable_companion_reply_planner": {
@@ -913,10 +957,10 @@
     }
   },
   "news_sources": {
-    "description": "新闻 RSS/Atom 源",
+    "description": "新闻源",
     "type": "string",
-    "hint": "每行一个新闻源，格式为 名称|URL；也可以只填 URL。插件只读取标题、摘要、链接和发布时间，不抓取新闻正文。",
-    "default": "BBC中文|https://feeds.bbci.co.uk/zhongwen/simp/rss.xml\nGoogle新闻中文|https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans\nSolidot|https://www.solidot.org/index.rss",
+    "hint": "每行一个新闻源，格式为 名称|URL、名称|bilibili:UID、名称|bvid:BV...，也可以直接填 RSS/Atom URL、B 站空间链接或 B 站视频链接。默认包含综合中文新闻、科技新闻源和一个 AI 早报 B 站源；B 站源会读取公开视频标题、简介、链接和发布时间，若简介里有文字版链接会优先抓取并阅读完整文字版正文，失败才退回视频简介。",
+    "default": "BBC中文|https://feeds.bbci.co.uk/zhongwen/simp/rss.xml\nGoogle新闻中文|https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans\nSolidot|https://www.solidot.org/index.rss\nHacker News|https://hnrss.org/frontpage\nMIT Technology Review|https://www.technologyreview.com/feed/\nArs Technica|https://feeds.arstechnica.com/arstechnica/index\nB站 AI早报|bilibili:285286947",
     "condition": {
       "enable_news_integration": true
     }
@@ -947,6 +991,40 @@
     "default": 0.22,
     "condition": {
       "enable_news_integration": true
+    }
+  },
+  "enable_external_event_self_link": {
+    "description": "外界信息自我关联",
+    "type": "bool",
+    "hint": "开启后，Bot 读到新闻或主动搜索结果时，会先判断这件事是否与自己的模型、能力、兴趣、创作、日程或关系有关，再决定是否产生找用户说说的意愿。不是关键词硬触发。",
+    "default": true
+  },
+  "external_event_self_link_probability": {
+    "description": "自我关联分享欲倍率",
+    "type": "float",
+    "hint": "外界信息通过自我关联判断后，进入主动候选的概率倍率。数值越高，Bot 越容易因为读到与自己有关的新鲜事而来找用户。",
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "default": 0.62,
+    "condition": {
+      "enable_external_event_self_link": true
+    }
+  },
+  "external_event_self_link_cooldown_hours": {
+    "description": "自我关联冷却（小时）",
+    "type": "int",
+    "hint": "同一用户两次因新闻/搜索自我关联而主动找人的最小间隔，避免外界消息连续触发分享欲。",
+    "slider": {
+      "min": 1,
+      "max": 168,
+      "step": 1
+    },
+    "default": 12,
+    "condition": {
+      "enable_external_event_self_link": true
     }
   },
   "news_max_items_per_source": {
@@ -1371,6 +1449,157 @@
     "default": 5,
     "condition": {
       "enable_group_scene_awareness": true
+    }
+  },
+  "enable_group_wakeup_enhancement": {
+    "description": "启用群聊唤醒强化",
+    "type": "bool",
+    "hint": "让 Bot 除了被 @ 外，也能通过强唤醒词、弱相关唤醒词和兴趣关键词进入群聊回复链。命中后会注入“这不是直接私聊提问，而是在群里被提到/碰到兴趣话题”的场景提示。",
+    "default": true,
+    "condition": {
+      "enable_group_companion": true
+    }
+  },
+  "group_wakeup_direct_words": {
+    "description": "强唤醒词",
+    "type": "list",
+    "hint": "群聊消息中出现任一词就直接唤醒 Bot。适合填写 Bot 名字、昵称、固定称呼。Bot 名字会自动加入，即使这里留空也可生效。",
+    "default": [],
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_wakeup_context_words": {
+    "description": "弱相关唤醒词",
+    "type": "list",
+    "hint": "与 Bot 身份、称呼或设定弱相关的关键词。命中后不会直接回复，而是先结合群聊上下文、关系网和句式判断是否适合自然接话。适合填写“机器人”“bot”、外号、作品名、设定称呼或常被拿来指代 Bot 的梗；不适合填写“你怎么看”“问问你”这类泛请求句。",
+    "default": [
+      "机器人",
+      "bot"
+    ],
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_wakeup_interest_keywords": {
+    "description": "手动兴趣关键词",
+    "type": "list",
+    "hint": "补充 Bot 感兴趣的话题。命中后按概率唤醒，不会每次抢话。插件也会从人格兴趣、技能、群话题和黑话里自动抽取一批兴趣词。",
+    "default": [],
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_wakeup_interest_probability": {
+    "description": "兴趣唤醒概率",
+    "type": "int",
+    "hint": "群聊出现兴趣关键词时进入回复链的基础概率，按百分比填写。群聊很热闹或正在别人对话中时会自动降低。",
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 1
+    },
+    "default": 18,
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_wakeup_cooldown_seconds": {
+    "description": "唤醒冷却秒数",
+    "type": "int",
+    "hint": "判断唤醒和兴趣唤醒的冷却时间，防止群聊连续关键词导致频繁响应。强唤醒词不受该冷却限制。",
+    "slider": {
+      "min": 0,
+      "max": 3600,
+      "step": 10
+    },
+    "default": 90,
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_wakeup_generated_keyword_limit": {
+    "description": "自动兴趣词上限",
+    "type": "int",
+    "hint": "最多从人格兴趣、技能、群聊话题和群黑话中抽取多少个兴趣关键词参与判断。",
+    "slider": {
+      "min": 4,
+      "max": 80,
+      "step": 2
+    },
+    "default": 24,
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_wakeup_topic_interest_max_boost": {
+    "description": "话题兴趣权重上限",
+    "type": "int",
+    "hint": "兴趣词出现在当前句、近几句或活跃话题线中时，最多额外提高多少百分比的兴趣唤醒概率。设为 0 表示只按基础概率判断。",
+    "slider": {
+      "min": 0,
+      "max": 150,
+      "step": 5
+    },
+    "default": 45,
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_wakeup_debounce_pending_penalty": {
+    "description": "收口等待兴趣降权",
+    "type": "int",
+    "hint": "同一群友正在语义收口等待时，兴趣唤醒概率降低多少百分比，避免 Bot 等用户补充时又因兴趣词额外抢话。",
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 5
+    },
+    "default": 65,
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_wakeup_fatigue_limit": {
+    "description": "唤醒疲劳阈值",
+    "type": "int",
+    "hint": "群聊短时间多次唤醒会累计疲劳。达到阈值后，判断唤醒和兴趣唤醒会更保守，回复也更省力；强唤醒词仍可叫到 Bot。",
+    "slider": {
+      "min": 1,
+      "max": 20,
+      "step": 1
+    },
+    "default": 5,
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_wakeup_fatigue_decay_minutes": {
+    "description": "唤醒疲劳恢复分钟",
+    "type": "int",
+    "hint": "每经过这么多分钟，唤醒疲劳大约自然下降 1 点。数值越大，Bot 越容易保留“刚才一直被叫”的感觉。",
+    "slider": {
+      "min": 5,
+      "max": 720,
+      "step": 5
+    },
+    "default": 90,
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_wakeup_log_limit": {
+    "description": "唤醒记录上限",
+    "type": "int",
+    "hint": "每个群保留多少条唤醒命中、冷却拦截或兴趣未触发记录，用于拓展页观察和调试。",
+    "slider": {
+      "min": 10,
+      "max": 300,
+      "step": 10
+    },
+    "default": 80,
+    "condition": {
+      "enable_group_wakeup_enhancement": true
     }
   },
   "enable_group_slang_learning": {
@@ -2351,6 +2580,19 @@
     "hint": "开启后，较短且无图片/附加组件的主动文本会按配置切分为多条短消息发送。默认关闭，避免主动消息显得过于打扰。",
     "default": false
   },
+  "segmented_proactive_scope": {
+    "description": "分段作用范围",
+    "type": "string",
+    "hint": "插件主动：只拆插件主动消息；全部 LLM 回复：普通模型纯文本回复也按同一规则拆分，图片、语音、AT 等复杂消息不会拆。",
+    "options": [
+      "proactive_only",
+      "all_llm"
+    ],
+    "default": "proactive_only",
+    "condition": {
+      "enable_segmented_proactive_reply": true
+    }
+  },
   "segmented_proactive_threshold": {
     "description": "主动文本不分段字数阈值",
     "type": "int",
@@ -2361,6 +2603,34 @@
       "step": 2
     },
     "default": 120,
+    "condition": {
+      "enable_segmented_proactive_reply": true
+    }
+  },
+  "segmented_proactive_min_segment_chars": {
+    "description": "主动短片段合并阈值",
+    "type": "int",
+    "hint": "分段后短于该字数的片段会自动并入相邻消息，避免“哈哈”“我也觉得”这类短句单独发成一条。",
+    "slider": {
+      "min": 1,
+      "max": 40,
+      "step": 1
+    },
+    "default": 8,
+    "condition": {
+      "enable_segmented_proactive_reply": true
+    }
+  },
+  "segmented_proactive_max_segments": {
+    "description": "主动最多分段数",
+    "type": "int",
+    "hint": "单条主动文本最多拆成几条消息。默认 2，防止一条短主动被拆成刷屏。",
+    "slider": {
+      "min": 1,
+      "max": 8,
+      "step": 1
+    },
+    "default": 2,
     "condition": {
       "enable_segmented_proactive_reply": true
     }
@@ -2393,7 +2663,7 @@
   "segmented_proactive_split_words": {
     "description": "主动分段词列表",
     "type": "list",
-    "hint": "仅在分段模式为 words 时生效；检测到列表中的任意词时切分，并保留分隔符。",
+    "hint": "仅在分段模式为 words 时生效；检测到列表中的任意词时切分，并保留分隔符。网址会自动保护，不会因为点号、斜杠或冒号被拆开。",
     "condition": {
       "segmented_proactive_split_mode": "words"
     },
@@ -2408,7 +2678,7 @@
   "enable_segmented_proactive_content_cleanup": {
     "description": "主动分段内容清理",
     "type": "bool",
-    "hint": "开启后，在每个分段发送前移除指定内容。括号和双引号内的内容会被保留。",
+    "hint": "开启后，在每个分段发送前移除指定内容。括号、双引号和网址内的内容会被保留。",
     "default": false,
     "condition": {
       "enable_segmented_proactive_reply": true

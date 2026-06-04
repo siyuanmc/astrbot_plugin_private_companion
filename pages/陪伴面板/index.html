@@ -342,7 +342,7 @@
                 </div>
                 <dl id="creativeSettings"></dl>
               </div>
-              <div id="bookshelfPublicBooks" class="book-row"></div>
+              <div id="bookshelfPublicBooks" class="book-category-list"></div>
             </article>
             <article class="drawer-cabinet">
               <div class="drawer-head">
@@ -370,6 +370,17 @@
           <div class="actions compact">
             <button id="resetTokenStatsBtn" class="danger-outline" type="button">清空统计</button>
           </div>
+        </div>
+        <div class="token-toolbar">
+          <div class="token-view-switch" role="group" aria-label="Token 统计视图">
+            <button type="button" data-token-view="today" class="is-active">今日</button>
+            <button type="button" data-token-view="total">总计</button>
+            <button type="button" data-token-view="date">按日期</button>
+          </div>
+          <label class="token-date-filter">
+            <span>日期</span>
+            <select id="tokenDateSelect"></select>
+          </label>
         </div>
         <div class="token-summary" id="tokenSummary"></div>
         <div class="dashboard-grid token-grid">
@@ -423,6 +434,7 @@
           <a href="#module-worldbook">关系网</a>
           <a href="#module-memory">记忆学习</a>
           <a href="#module-longterm">长线联动</a>
+          <a href="#module-external-abilities">外部能力</a>
         </nav>
         <div class="module-grid">
           <article class="wide module-card" id="module-presets">
@@ -475,6 +487,7 @@
               <label class="toggle-row"><input name="enable_environment_perception" type="checkbox" /> <span>启用环境感知</span></label>
               <label class="toggle-row"><input name="enable_holiday_perception" type="checkbox" /> <span>节假日/工作日</span></label>
               <label class="toggle-row"><input name="enable_platform_perception" type="checkbox" /> <span>平台与消息类型</span></label>
+              <label class="toggle-row"><input name="enable_model_perception" type="checkbox" /> <span>当前模型配置</span></label>
               <label class="toggle-row"><input name="enable_lunar_perception" type="checkbox" /> <span>农历</span></label>
               <label class="toggle-row"><input name="enable_solar_term_perception" type="checkbox" /> <span>节气</span></label>
               <label class="toggle-row"><input name="enable_almanac_perception" type="checkbox" /> <span>轻量黄历</span></label>
@@ -499,6 +512,52 @@
               <label class="toggle-row"><input name="enable_unanswered_screen_peek_followup" type="checkbox" /> <span>主动后沉默时可窥屏</span></label>
               <label>沉默多久后窥屏 <input name="unanswered_screen_peek_after_minutes" type="number" min="10" max="240" /></label>
               <label>沉默窥屏冷却分钟 <input name="unanswered_screen_peek_cooldown_minutes" type="number" min="30" max="1440" /></label>
+              <div class="module-subgroup wide-field">
+                <h3>主动分段</h3>
+                <label class="toggle-row"><input name="enable_segmented_proactive_reply" type="checkbox" /> <span>启用主动分段发送</span></label>
+                <label>分段作用范围
+                  <select name="segmented_proactive_scope">
+                    <option value="proactive_only">仅插件主动</option>
+                    <option value="all_llm">全部 LLM 纯文本回复</option>
+                  </select>
+                </label>
+                <label>不分段字数阈值 <input name="segmented_proactive_threshold" type="number" min="20" max="500" /></label>
+                <label>短片段合并阈值 <input name="segmented_proactive_min_segment_chars" type="number" min="1" max="40" /></label>
+                <label>最多分段数 <input name="segmented_proactive_max_segments" type="number" min="1" max="8" /></label>
+                <label>分段模式
+                  <select name="segmented_proactive_split_mode">
+                    <option value="regex">正则</option>
+                    <option value="words">分段词列表</option>
+                  </select>
+                </label>
+                <label class="wide-field">分段正则 <textarea name="segmented_proactive_regex" rows="2" placeholder="仅 regex 模式使用"></textarea></label>
+                <label class="wide-field">分段词列表 <textarea name="segmented_proactive_split_words" rows="3" placeholder="仅 words 模式使用；一行一个或逗号分隔"></textarea></label>
+                <label class="toggle-row"><input name="enable_segmented_proactive_content_cleanup" type="checkbox" /> <span>启用分段内容清理</span></label>
+                <label class="wide-field">清理正则 <textarea name="segmented_proactive_content_cleanup_rule" rows="2" placeholder="仅 regex 模式使用"></textarea></label>
+                <label class="wide-field">清理词列表 <textarea name="segmented_proactive_content_cleanup_words" rows="3" placeholder="仅 words 模式使用；例如句号、空格或换行"></textarea></label>
+                <label>分段间隔方式
+                  <select name="segmented_proactive_interval_method">
+                    <option value="log">按字数对数</option>
+                    <option value="random">随机</option>
+                  </select>
+                </label>
+                <label>最小间隔秒数 <input name="segmented_proactive_interval_min" type="number" min="0.1" step="0.1" /></label>
+                <label>最大间隔秒数 <input name="segmented_proactive_interval_max" type="number" min="0.1" step="0.1" /></label>
+                <label>对数间隔底数 <input name="segmented_proactive_log_base" type="number" min="1.1" step="0.1" /></label>
+                <section class="segmented-preview-panel wide-field">
+                  <header>
+                    <div>
+                      <h4>分段效果预览</h4>
+                    </div>
+                    <div class="segmented-preview-actions">
+                      <button type="button" data-segmented-example="simple">简单示例</button>
+                      <button type="button" data-segmented-example="complex">复杂示例</button>
+                    </div>
+                  </header>
+                  <textarea id="segmentedPreviewInput" rows="4"></textarea>
+                  <div id="segmentedPreviewOutput" class="segmented-preview-output"></div>
+                </section>
+              </div>
               <button type="submit">保存私聊主动</button>
             </form>
           </article>
@@ -605,6 +664,19 @@
                 <label>生活说说最小间隔小时 <input name="qzone_life_publish_min_interval_hours" type="number" min="4" max="168" /></label>
                 <label>生活说说触发概率 <input name="qzone_life_publish_probability" type="number" min="0" max="1" step="0.05" /></label>
               </div>
+              <div class="module-subgroup">
+                <h3>新闻阅读</h3>
+                <label class="toggle-row"><input name="enable_news_integration" type="checkbox" /> <span>启用新闻阅读</span></label>
+                <label class="toggle-row"><input name="enable_news_daily_hot_read" type="checkbox" /> <span>每日获取热点</span></label>
+                <label class="toggle-row"><input name="enable_news_boredom_read" type="checkbox" /> <span>无聊时看新闻</span></label>
+                <label>新闻读取间隔小时 <input name="news_min_interval_hours" type="number" min="1" max="72" /></label>
+                <label>新闻分享概率 <input name="news_share_probability" type="number" min="0" max="1" step="0.05" /></label>
+                <label>单源读取条数 <input name="news_max_items_per_source" type="number" min="1" max="30" /></label>
+                <label>热点来源 <input name="news_hot_sources" type="text" maxlength="120" /></label>
+                <label>热点候选数量 <input name="news_hot_max_items" type="number" min="1" max="50" /></label>
+                <textarea name="news_sources" id="newsSourcesRaw" hidden></textarea>
+                <div class="wide-field news-source-manager" id="newsSourceManager"></div>
+              </div>
               <div class="module-subgroup" id="privateReadingModuleGroup">
                 <h3>夹层阅读素材</h3>
                 <label class="toggle-row"><input name="enable_private_reading_integration" type="checkbox" /> <span>启用夹层阅读素材</span></label>
@@ -628,6 +700,15 @@
               </div>
               <button type="submit">保存长线主动</button>
             </form>
+          </article>
+          <article class="wide module-card" id="module-external-abilities">
+            <div class="module-card-head">
+              <div>
+                <h2>外部主动能力</h2>
+              </div>
+              <span class="module-badge">扩展</span>
+            </div>
+            <div id="externalAbilityList" class="external-ability-grid"></div>
           </article>
         </div>
       </section>

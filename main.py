@@ -107,6 +107,62 @@ from .planning import (
     pick_detail_segment,
 )
 
+_private_companion_plugin: Any | None = None
+
+DEFAULT_NEWS_SOURCES = "\n".join(
+    [
+        "BBC中文|https://feeds.bbci.co.uk/zhongwen/simp/rss.xml",
+        "Google新闻中文|https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
+        "Solidot|https://www.solidot.org/index.rss",
+        "Hacker News|https://hnrss.org/frontpage",
+        "MIT Technology Review|https://www.technologyreview.com/feed/",
+        "Ars Technica|https://feeds.arstechnica.com/arstechnica/index",
+        "B站 AI早报|bilibili:285286947",
+    ]
+)
+
+LEGACY_DEFAULT_NEWS_SOURCES = "\n".join(
+    [
+        "BBC中文|https://feeds.bbci.co.uk/zhongwen/simp/rss.xml",
+        "Google新闻中文|https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
+        "Solidot|https://www.solidot.org/index.rss",
+    ]
+)
+
+PREVIOUS_TECH_DEFAULT_NEWS_SOURCES = "\n".join(
+    [
+        "BBC中文|https://feeds.bbci.co.uk/zhongwen/simp/rss.xml",
+        "Google新闻中文|https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
+        "Solidot|https://www.solidot.org/index.rss",
+        "Hacker News|https://hnrss.org/frontpage",
+        "MIT Technology Review|https://www.technologyreview.com/feed/",
+        "Ars Technica|https://feeds.arstechnica.com/arstechnica/index",
+    ]
+)
+
+
+def get_private_companion_api() -> Any | None:
+    plugin = _private_companion_plugin
+    if plugin is None:
+        return None
+    return getattr(plugin, "extension_api", None)
+
+
+class PrivateCompanionExtensionAPI:
+    """Lightweight integration API for external AstrBot plugins."""
+
+    def __init__(self, plugin: "PrivateCompanionPlugin") -> None:
+        self._plugin = plugin
+
+    def register_proactive_ability(self, spec: dict[str, Any]) -> bool:
+        return self._plugin.register_external_proactive_ability(spec)
+
+    def unregister_proactive_ability(self, name: str) -> bool:
+        return self._plugin.unregister_external_proactive_ability(name)
+
+    def list_proactive_abilities(self) -> list[dict[str, Any]]:
+        return self._plugin.external_proactive_abilities()
+
 _LUNAR_MONTH_NAMES = [
     "正月",
     "二月",
@@ -240,7 +296,7 @@ class _CapturedSendMessageCall:
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "2.6.0",
+    "2.8.0",
 )
 class PrivateCompanionPlugin(Star):
     @staticmethod
@@ -261,6 +317,10 @@ class PrivateCompanionPlugin(Star):
 
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
+        global _private_companion_plugin
+        _private_companion_plugin = self
+        self.extension_api = PrivateCompanionExtensionAPI(self)
+        self._external_proactive_abilities: dict[str, dict[str, Any]] = {}
         self.config = config
         c = config
 
@@ -297,6 +357,7 @@ class PrivateCompanionPlugin(Star):
         self.enable_holiday_perception = self._cfg_bool(c, "enable_holiday_perception", True)
         self.holiday_country = self._cfg_str(c, "holiday_country", "CN", "CN").upper()
         self.enable_platform_perception = self._cfg_bool(c, "enable_platform_perception", True)
+        self.enable_model_perception = self._cfg_bool(c, "enable_model_perception", True)
         self.enable_lunar_perception = self._cfg_bool(c, "enable_lunar_perception", True)
         self.enable_solar_term_perception = self._cfg_bool(c, "enable_solar_term_perception", True)
         self.enable_almanac_perception = self._cfg_bool(c, "enable_almanac_perception", False)
@@ -352,7 +413,12 @@ class PrivateCompanionPlugin(Star):
         self.enable_proactive_decorating_hooks = self._cfg_bool(c, "enable_proactive_decorating_hooks", True)
         self.enable_precise_platform_send = self._cfg_bool(c, "enable_precise_platform_send", True)
         self.enable_segmented_proactive_reply = self._cfg_bool(c, "enable_segmented_proactive_reply", False)
+        self.segmented_proactive_scope = self._cfg_str(c, "segmented_proactive_scope", "proactive_only", "proactive_only")
+        if self.segmented_proactive_scope not in {"proactive_only", "all_llm"}:
+            self.segmented_proactive_scope = "proactive_only"
         self.segmented_proactive_threshold = self._cfg_int(c, "segmented_proactive_threshold", 120, 20, 500)
+        self.segmented_proactive_min_segment_chars = self._cfg_int(c, "segmented_proactive_min_segment_chars", 8, 1, 40)
+        self.segmented_proactive_max_segments = self._cfg_int(c, "segmented_proactive_max_segments", 2, 1, 8)
         self.segmented_proactive_split_mode = self._cfg_str(c, "segmented_proactive_split_mode", "regex", "regex")
         if self.segmented_proactive_split_mode not in {"regex", "words"}:
             self.segmented_proactive_split_mode = "regex"
@@ -444,6 +510,9 @@ class PrivateCompanionPlugin(Star):
         self.enable_relationship_state_machine = self._cfg_bool(c, "enable_relationship_state_machine", True)
         self.enable_dialogue_episode_memory = self._cfg_bool(c, "enable_dialogue_episode_memory", True)
         self.enable_open_loop_tracking = self._cfg_bool(c, "enable_open_loop_tracking", True)
+        self.enable_user_habit_learning = self._cfg_bool(c, "enable_user_habit_learning", True)
+        self.user_habit_min_count = self._cfg_int(c, "user_habit_min_count", 3, 2, 20)
+        self.user_habit_max_items = self._cfg_int(c, "user_habit_max_items", 24, 8, 80)
         self.enable_skill_growth_simulation = self._cfg_bool(c, "enable_skill_growth_simulation", True)
         self.skill_growth_rate = self._cfg_float(c, "skill_growth_rate", 1.0, 0.1)
         self.skill_growth_custom_skills = self._cfg_str(c, "skill_growth_custom_skills", "")
@@ -489,6 +558,22 @@ class PrivateCompanionPlugin(Star):
         self.forward_message_image_limit = self._cfg_int(c, "forward_message_image_limit", 4, 0, 12)
         self.enable_group_scene_awareness = self._cfg_bool(c, "enable_group_scene_awareness", True)
         self.group_scene_recent_limit = self._cfg_int(c, "group_scene_recent_limit", 5, 2, 12)
+        self.enable_group_wakeup_enhancement = self._cfg_bool(c, "enable_group_wakeup_enhancement", True)
+        self.group_wakeup_direct_words = self._parse_text_list_config(c.get("group_wakeup_direct_words", []))
+        self.group_wakeup_context_words = self._parse_text_list_config(
+            c.get("group_wakeup_context_words", ["机器人", "bot"])
+        )
+        if self.group_wakeup_context_words == ["有人叫你", "提到你", "说到你", "机器人", "AI"]:
+            self.group_wakeup_context_words = ["机器人", "bot"]
+        self.group_wakeup_interest_keywords = self._parse_text_list_config(c.get("group_wakeup_interest_keywords", []))
+        self.group_wakeup_interest_probability = self._cfg_int(c, "group_wakeup_interest_probability", 18, 0, 100) / 100
+        self.group_wakeup_cooldown_seconds = self._cfg_int(c, "group_wakeup_cooldown_seconds", 90, 0, 3600)
+        self.group_wakeup_generated_keyword_limit = self._cfg_int(c, "group_wakeup_generated_keyword_limit", 24, 4, 80)
+        self.group_wakeup_topic_interest_max_boost = self._cfg_int(c, "group_wakeup_topic_interest_max_boost", 45, 0, 150) / 100
+        self.group_wakeup_debounce_pending_penalty = self._cfg_int(c, "group_wakeup_debounce_pending_penalty", 65, 0, 100) / 100
+        self.group_wakeup_fatigue_limit = self._cfg_int(c, "group_wakeup_fatigue_limit", 5, 1, 20)
+        self.group_wakeup_fatigue_decay_minutes = self._cfg_int(c, "group_wakeup_fatigue_decay_minutes", 90, 5, 720)
+        self.group_wakeup_log_limit = self._cfg_int(c, "group_wakeup_log_limit", 80, 10, 300)
         self.enable_group_interjection = self._cfg_bool(c, "enable_group_interjection", False)
         self.enable_group_repeat_follow = self._cfg_bool(c, "enable_group_repeat_follow", True)
         self.group_repeat_follow_probability = self._cfg_int(c, "group_repeat_follow_probability", 18, 0, 100) / 100
@@ -535,14 +620,19 @@ class PrivateCompanionPlugin(Star):
         self.enable_news_daily_hot_read = self._cfg_bool(c, "enable_news_daily_hot_read", self._cfg_bool(c, "enable_hot_trend_sources", True))
         self.news_min_interval_hours = self._cfg_int(c, "news_min_interval_hours", 6, 1, 72)
         self.news_share_probability = min(1.0, self._cfg_float(c, "news_share_probability", 0.22, 0.0))
+        self.enable_external_event_self_link = self._cfg_bool(c, "enable_external_event_self_link", True)
+        self.external_event_self_link_probability = min(1.0, self._cfg_float(c, "external_event_self_link_probability", 0.62, 0.0))
+        self.external_event_self_link_cooldown_hours = self._cfg_int(c, "external_event_self_link_cooldown_hours", 12, 1, 168)
         self.news_max_items_per_source = self._cfg_int(c, "news_max_items_per_source", 5, 1, 20)
         self.news_hot_sources = self._cfg_str(c, "news_hot_sources", self._cfg_str(c, "hot_trend_sources", "weibo,hackernews"))
         self.news_hot_max_items = self._cfg_int(c, "news_hot_max_items", self._cfg_int(c, "hot_trend_max_items", 12, 3, 30), 3, 30)
         self.news_sources = self._cfg_str(
             c,
             "news_sources",
-            "BBC中文|https://feeds.bbci.co.uk/zhongwen/simp/rss.xml\nGoogle新闻中文|https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans\nSolidot|https://www.solidot.org/index.rss",
+            DEFAULT_NEWS_SOURCES,
         )
+        if str(self.news_sources or "").strip() in {LEGACY_DEFAULT_NEWS_SOURCES, PREVIOUS_TECH_DEFAULT_NEWS_SOURCES}:
+            self.news_sources = DEFAULT_NEWS_SOURCES
         self.news_provider_id = self._cfg_str(c, "NEWS_PROVIDER_ID", "")
         self.enable_web_exploration = self._cfg_bool(c, "enable_web_exploration", False)
         self.enable_web_exploration_boredom_search = self._cfg_bool(c, "enable_web_exploration_boredom_search", True)
@@ -799,6 +889,7 @@ class PrivateCompanionPlugin(Star):
         )
 
     async def terminate(self):
+        global _private_companion_plugin
         self._stop_event.set()
         if self._task:
             self._task.cancel()
@@ -808,6 +899,8 @@ class PrivateCompanionPlugin(Star):
                 pass
         async with self._data_lock:
             self._save_data_sync()
+        if _private_companion_plugin is self:
+            _private_companion_plugin = None
 
     def _new_store(self) -> dict[str, Any]:
         return {
@@ -843,6 +936,7 @@ class PrivateCompanionPlugin(Star):
             "bookshelf_secret": {},
             "creative_projects": [],
             "proactive_candidate_pool": [],
+            "external_proactive_abilities": {},
             "worldbook_entries": [],
             "worldbook_member_profiles": {},
             "worldbook_group_profiles": {},
@@ -884,6 +978,7 @@ class PrivateCompanionPlugin(Star):
         data.setdefault("bookshelf_secret", {})
         data.setdefault("creative_projects", [])
         data.setdefault("proactive_candidate_pool", [])
+        data.setdefault("external_proactive_abilities", {})
         data.setdefault("worldbook_entries", [])
         data.setdefault("worldbook_member_profiles", {})
         data.setdefault("worldbook_group_profiles", {})
@@ -1031,6 +1126,29 @@ class PrivateCompanionPlugin(Star):
             if group_id and group_id.isdigit() and group_id not in ids:
                 ids.append(group_id)
         return ids
+
+    @staticmethod
+    def _parse_text_list_config(raw: Any, *, limit: int = 120) -> list[str]:
+        if isinstance(raw, str):
+            parts = re.split(r"[\n,，、;；]+", raw)
+        elif isinstance(raw, list):
+            parts = raw
+        else:
+            parts = []
+        values: list[str] = []
+        seen: set[str] = set()
+        for part in parts:
+            value = _single_line(part, 60)
+            if not value:
+                continue
+            key = value.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            values.append(value)
+            if len(values) >= limit:
+                break
+        return values
 
     def _configured_group_ids(self) -> list[str]:
         # Backward compatibility: old target_group_ids is now treated as whitelist.
@@ -1650,6 +1768,35 @@ class PrivateCompanionPlugin(Star):
     def _semantic_buffer_key(self, scope: str, sender_id: str) -> str:
         return f"{scope}:{sender_id}"
 
+    def _semantic_buffer_active_snapshot(self, key: str) -> dict[str, Any]:
+        wait = max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))
+        if not self.enable_semantic_message_debounce or wait <= 0:
+            return {}
+        buffers = getattr(self, "_semantic_message_buffers", None)
+        if not isinstance(buffers, dict):
+            return {}
+        buffer = buffers.get(key)
+        if not isinstance(buffer, dict):
+            return {}
+        now = _now_ts()
+        first_ts = _safe_float(buffer.get("first_ts"), 0.0, 0.0)
+        if first_ts <= 0 or now - first_ts > wait + 0.8:
+            return {}
+        messages = buffer.get("messages") if isinstance(buffer.get("messages"), list) else []
+        texts = []
+        for item in messages[-8:]:
+            if isinstance(item, dict):
+                text = _single_line(item.get("text"), 260)
+                if text:
+                    texts.append(text)
+        return {
+            "active": True,
+            "first_ts": first_ts,
+            "updated_ts": _safe_float(buffer.get("updated_ts"), first_ts, first_ts),
+            "remaining": max(0.0, first_ts + wait - now),
+            "texts": texts,
+        }
+
     def _note_semantic_message_buffer(self, key: str, text: str, *, sender_name: str = "", now: float | None = None) -> bool:
         if not self.enable_semantic_message_debounce:
             return False
@@ -1973,6 +2120,38 @@ class PrivateCompanionPlugin(Star):
             "vision_text": _single_line(buffer.pop("vision_text", ""), 600),
         }
 
+    async def _send_delayed_private_image_only_event(
+        self,
+        event: AstrMessageEvent,
+        user_id: str,
+        buffer: dict[str, Any],
+    ) -> None:
+        images = buffer.get("images") if isinstance(buffer.get("images"), list) else []
+        vision_task = buffer.get("vision_task")
+        vision_text = _single_line(buffer.get("vision_text"), 600)
+        if not vision_text and isinstance(vision_task, asyncio.Task):
+            try:
+                vision_text = _single_line(await asyncio.wait_for(asyncio.shield(vision_task), timeout=2.5), 600)
+            except asyncio.TimeoutError:
+                logger.info("[PrivateCompanion] 私聊单图延迟处理时视觉转述仍未完成: user=%s", user_id)
+            except Exception as exc:
+                logger.info("[PrivateCompanion] 私聊单图延迟视觉转述失败: user=%s error=%s", user_id, _single_line(exc, 120))
+        setattr(event, "private_companion_deferred_private_image_only_ready", True)
+        setattr(event, "private_companion_deferred_private_image_only", False)
+        setattr(event, "private_companion_delayed_image_vision_text", vision_text)
+        setattr(event, "private_companion_delayed_image_sources", [str(item) for item in images[:4] if str(item or "").strip()])
+        prompt = _single_line(getattr(event, "message_str", ""), 120) or "[图片]"
+        try:
+            await event.send(
+                event.request_llm(
+                    prompt=prompt,
+                    session_id=event.session_id,
+                )
+            )
+            logger.info("[PrivateCompanion] 私聊单图无补充说明,已延迟交给原生 LLM 链路: user=%s images=%s", user_id, len(images))
+        except Exception as exc:
+            logger.warning("[PrivateCompanion] 私聊单图延迟回复失败: user=%s error=%s", user_id, exc, exc_info=True)
+
     async def _finalize_private_image_buffer_after_wait(self, key: str, user_id: str, first_ts: float) -> None:
         wait = max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0))
         remaining = max(0.0, first_ts + wait - _now_ts())
@@ -1993,11 +2172,15 @@ class PrivateCompanionPlugin(Star):
         if has_followup:
             logger.info("[PrivateCompanion] 私聊单图已由补充消息接管: user=%s", user_id)
             return
+        buffers.pop(key, None)
+        original_event = buffer.get("original_event")
+        if isinstance(original_event, AstrMessageEvent):
+            await self._send_delayed_private_image_only_event(original_event, user_id, buffer)
+            return
         vision_task = buffer.get("vision_task")
         if isinstance(vision_task, asyncio.Task) and not vision_task.done():
             vision_task.cancel()
-        buffers.pop(key, None)
-        logger.info("[PrivateCompanion] 私聊单图等待补充后无文字指示,已终止原图事件: user=%s", user_id)
+        logger.info("[PrivateCompanion] 私聊单图等待补充后无文字指示,但原事件不可用: user=%s", user_id)
 
     def _group_active_conversation(self, group: dict[str, Any]) -> dict[str, Any]:
         active = group.setdefault("active_bot_conversation", {})
@@ -2708,6 +2891,447 @@ class PrivateCompanionPlugin(Star):
                     reply_to_id = str(value).strip()
         return {"self_id": self_id, "at_targets": at_targets, "at_all": at_all, "reply_to_id": reply_to_id}
 
+    @staticmethod
+    def _text_contains_wakeup_word(text: str, word: str) -> bool:
+        cleaned = _single_line(text, 260)
+        token = _single_line(word, 60)
+        if not cleaned or not token:
+            return False
+        if re.fullmatch(r"[A-Za-z0-9_\-]{2,}", token):
+            return bool(re.search(rf"(?<![A-Za-z0-9_\-]){re.escape(token)}(?![A-Za-z0-9_\-])", cleaned, re.IGNORECASE))
+        return token in cleaned
+
+    def _configured_group_direct_wakeup_words(self) -> list[str]:
+        words = list(self.group_wakeup_direct_words or [])
+        bot_name = _single_line(self.bot_name, 40)
+        if bot_name and bot_name not in words:
+            words.insert(0, bot_name)
+        return list(dict.fromkeys(word for word in words if _single_line(word, 60)))
+
+    def _generated_group_interest_keywords(self, group: dict[str, Any] | None = None) -> list[str]:
+        words: list[str] = []
+
+        def add(value: Any) -> None:
+            text = _single_line(value, 32)
+            if not text or len(text) < 2:
+                return
+            if text.isdigit():
+                return
+            if text in {"暂无", "未知", "平稳", "群聊", "用户", "大家", "有人", "什么", "怎么"}:
+                return
+            words.append(text)
+
+        for item in self._parse_text_list_config(self.web_exploration_interests, limit=40):
+            add(item)
+        skill_state = self.data.get("skill_growth") if isinstance(getattr(self, "data", None), dict) else {}
+        skills = skill_state.get("skills") if isinstance(skill_state, dict) and isinstance(skill_state.get("skills"), dict) else {}
+        for item in list(skills.values())[:16]:
+            if isinstance(item, dict):
+                add(item.get("name"))
+        if isinstance(group, dict):
+            slang = group.get("slang_terms") if isinstance(group.get("slang_terms"), list) else []
+            for item in slang[:20]:
+                if isinstance(item, dict) and _safe_int(item.get("count"), 0, 0) >= 2:
+                    add(item.get("term"))
+            threads = group.get("topic_threads") if isinstance(group.get("topic_threads"), list) else []
+            for item in threads[:12]:
+                if isinstance(item, dict):
+                    add(item.get("topic") or item.get("title"))
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for word in words:
+            key = word.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(word)
+            if len(cleaned) >= self.group_wakeup_generated_keyword_limit:
+                break
+        return cleaned
+
+    def _group_wakeup_interest_words(self, group: dict[str, Any] | None = None) -> list[str]:
+        manual = list(self.group_wakeup_interest_keywords or [])
+        generated = self._generated_group_interest_keywords(group)
+        values: list[str] = []
+        seen: set[str] = set()
+        for word in manual + generated:
+            word = _single_line(word, 40)
+            key = word.lower()
+            if not word or key in seen:
+                continue
+            seen.add(key)
+            values.append(word)
+        return values[: max(1, self.group_wakeup_generated_keyword_limit + len(manual))]
+
+    def _group_wakeup_context_should_reply(
+        self,
+        group: dict[str, Any],
+        *,
+        scene: dict[str, Any],
+        sender_id: str,
+        sender_name: str,
+        text: str,
+        matched_word: str,
+    ) -> bool:
+        cleaned = _single_line(text, 260)
+        if not cleaned:
+            return False
+        if re.search(r"(别回|不要回|不用回|不是叫你|不是问你|别理|不要理)", cleaned):
+            return False
+        if str(scene.get("talking_to") or "") not in {"group", "bot"}:
+            return False
+        if str(scene.get("trigger") or "") in {"at_other", "reply_other"}:
+            return False
+        relation_hit = bool(self._select_worldbook_member_profiles_for_group(group, sender_id=sender_id, text=cleaned))
+        requestish = bool(re.search(r"(怎么看|怎么说|觉得|帮|问|叫|找|救|解释|回答|评价|要不要|可不可以|吗|呢|？|\?)", cleaned))
+        mentions_bot = any(self._text_contains_wakeup_word(cleaned, word) for word in self._configured_group_direct_wakeup_words())
+        short_call = len(cleaned) <= 40 and bool(matched_word)
+        return bool(requestish or mentions_bot or relation_hit or short_call)
+
+    def _group_wakeup_fatigue(self, group: dict[str, Any]) -> dict[str, Any]:
+        raw = group.get("group_wakeup_fatigue") if isinstance(group.get("group_wakeup_fatigue"), dict) else {}
+        now = _now_ts()
+        value = _safe_float(raw.get("value"), 0.0, 0.0)
+        last_ts = _safe_float(raw.get("updated_ts"), 0.0, 0.0)
+        decay_minutes = max(5, _safe_int(getattr(self, "group_wakeup_fatigue_decay_minutes", 90), 90, 5))
+        if last_ts > 0 and now > last_ts:
+            value = max(0.0, value - ((now - last_ts) / max(1.0, decay_minutes * 60.0)))
+        limit = max(1.0, float(getattr(self, "group_wakeup_fatigue_limit", 5) or 5))
+        ratio = value / limit
+        if ratio >= 1.0:
+            level = "high"
+            label = "疲劳高"
+        elif ratio >= 0.55:
+            level = "medium"
+            label = "有点累"
+        elif value >= 0.4:
+            level = "low"
+            label = "轻微"
+        else:
+            level = "none"
+            label = "无"
+        return {
+            "value": round(value, 2),
+            "limit": int(limit),
+            "ratio": round(min(1.0, max(0.0, ratio)), 3),
+            "level": level,
+            "label": label,
+            "updated_ts": now,
+        }
+
+    def _bump_group_wakeup_fatigue(self, group: dict[str, Any], wakeup_type: str) -> dict[str, Any]:
+        fatigue = self._group_wakeup_fatigue(group)
+        weight = 0.6 if wakeup_type == "interest" else (1.2 if wakeup_type == "direct_word" else 1.0)
+        limit = max(1.0, float(fatigue.get("limit") or getattr(self, "group_wakeup_fatigue_limit", 5) or 5))
+        value = min(limit + 2.0, _safe_float(fatigue.get("value"), 0.0, 0.0) + weight)
+        group["group_wakeup_fatigue"] = {
+            "value": round(value, 2),
+            "limit": int(limit),
+            "updated_ts": _now_ts(),
+            "last_type": _single_line(wakeup_type, 40),
+        }
+        return self._group_wakeup_fatigue(group)
+
+    def _group_wakeup_strength(self, wakeup_type: str, group: dict[str, Any], scene: dict[str, Any]) -> str:
+        fatigue = self._group_wakeup_fatigue(group)
+        level = str(fatigue.get("level") or "none")
+        state = self.data.get("daily_state") if isinstance(getattr(self, "data", None), dict) else {}
+        runtime = state.get("sleep_runtime") if isinstance(state, dict) and isinstance(state.get("sleep_runtime"), dict) else {}
+        phase = str(runtime.get("phase") or "")
+        if phase in {"falling_asleep", "light_sleep", "sleeping_again", "woken"}:
+            return "interrupt" if wakeup_type in {"direct_word", "context_word"} else "light"
+        if level == "high" and wakeup_type != "direct_word":
+            return "light"
+        if wakeup_type == "direct_word":
+            return "strong"
+        if wakeup_type == "context_word":
+            return "normal"
+        return "normal" if level == "none" and str(scene.get("trigger") or "") == "quiet_flow" else "light"
+
+    @staticmethod
+    def _group_wakeup_strength_label(strength: str) -> str:
+        return {
+            "light": "轻唤醒",
+            "normal": "普通唤醒",
+            "strong": "强唤醒",
+            "interrupt": "打断休息",
+        }.get(str(strength or ""), "普通唤醒")
+
+    def _record_group_wakeup_log(
+        self,
+        group: dict[str, Any],
+        *,
+        scene: dict[str, Any],
+        sender_id: str,
+        sender_name: str,
+        text: str,
+        wakeup: dict[str, Any],
+        result: str = "woke",
+        strength: str = "",
+        fatigue: dict[str, Any] | None = None,
+        note: str = "",
+    ) -> None:
+        logs = group.setdefault("group_wakeup_logs", [])
+        if not isinstance(logs, list):
+            logs = []
+            group["group_wakeup_logs"] = logs
+        fatigue = fatigue if isinstance(fatigue, dict) else self._group_wakeup_fatigue(group)
+        wakeup_type = _single_line(wakeup.get("type"), 40)
+        strength = _single_line(strength or wakeup.get("strength"), 24)
+        logs.append(
+            {
+                "ts": _now_ts(),
+                "result": _single_line(result, 32),
+                "type": wakeup_type,
+                "word": _single_line(wakeup.get("word"), 60),
+                "strength": strength,
+                "strength_label": self._group_wakeup_strength_label(strength),
+                "probability": _safe_float(wakeup.get("probability"), 0.0, 0.0),
+                "reason": _single_line(wakeup.get("reason"), 80),
+                "topic_weight": wakeup.get("topic_weight") if isinstance(wakeup.get("topic_weight"), dict) else {},
+                "note": _single_line(note or wakeup.get("instruction"), 180),
+                "sender_id": _single_line(sender_id, 40),
+                "sender_name": _single_line(sender_name, 40),
+                "text": _single_line(text, 160),
+                "scene_trigger": _single_line(scene.get("trigger"), 40),
+                "fatigue_value": _safe_float(fatigue.get("value"), 0.0, 0.0),
+                "fatigue_label": _single_line(fatigue.get("label"), 20),
+            }
+        )
+        limit = max(10, _safe_int(getattr(self, "group_wakeup_log_limit", 80), 80, 10))
+        del logs[:-limit]
+
+    def _group_wakeup_topic_interest_context(
+        self,
+        group: dict[str, Any],
+        *,
+        sender_id: str,
+        text: str,
+        group_id: str = "",
+    ) -> dict[str, Any]:
+        now = _now_ts()
+        recent = group.get("recent_messages") if isinstance(group.get("recent_messages"), list) else []
+        recent_texts = [
+            _single_line(item.get("text"), 160)
+            for item in recent[-8:]
+            if isinstance(item, dict)
+            and now - _safe_float(item.get("ts"), 0) <= 8 * 60
+            and (not sender_id or str(item.get("sender_id") or "") == str(sender_id))
+            and _single_line(item.get("text"), 160)
+        ]
+        buffer = {}
+        if group_id and sender_id:
+            buffer = self._semantic_buffer_active_snapshot(self._semantic_buffer_key(f"group:{group_id}", sender_id))
+        buffer_texts = buffer.get("texts") if isinstance(buffer.get("texts"), list) else []
+        signature = self._group_topic_signature(text)
+        active_topic = None
+        threads = group.get("topic_threads") if isinstance(group.get("topic_threads"), list) else []
+        for item in threads[:8]:
+            if not isinstance(item, dict):
+                continue
+            if now - _safe_float(item.get("last_ts"), 0) > 45 * 60:
+                continue
+            if signature and self._topic_signature_similar(signature, str(item.get("signature") or "")):
+                active_topic = item
+                break
+            title = _single_line(item.get("title"), 80)
+            if title and (title in text or text in title):
+                active_topic = item
+                break
+        if not isinstance(active_topic, dict):
+            active_topic = next(
+                (
+                    item for item in threads[:4]
+                    if isinstance(item, dict) and now - _safe_float(item.get("last_ts"), 0) <= 12 * 60
+                ),
+                None,
+            )
+        topic_texts: list[str] = []
+        if isinstance(active_topic, dict):
+            topic_texts.append(_single_line(active_topic.get("title"), 80))
+            examples = active_topic.get("recent_examples") if isinstance(active_topic.get("recent_examples"), list) else []
+            topic_texts.extend(_single_line(item.get("text"), 100) for item in examples[-5:] if isinstance(item, dict))
+        return {
+            "recent_texts": [item for item in recent_texts if item],
+            "buffer_texts": [_single_line(item, 160) for item in buffer_texts if _single_line(item, 160)],
+            "buffer_active": bool(buffer.get("active")),
+            "topic": active_topic if isinstance(active_topic, dict) else {},
+            "topic_texts": [item for item in topic_texts if item],
+        }
+
+    def _group_wakeup_topic_interest_weight(
+        self,
+        group: dict[str, Any],
+        word: str,
+        *,
+        sender_id: str,
+        text: str,
+        group_id: str = "",
+    ) -> dict[str, Any]:
+        token = _single_line(word, 60)
+        if not token:
+            return {"multiplier": 1.0, "score": 0.0, "reason": ""}
+        context = self._group_wakeup_topic_interest_context(group, sender_id=sender_id, text=text, group_id=group_id)
+        score = 0.0
+        reasons: list[str] = []
+        if self._text_contains_wakeup_word(text, token):
+            score += 1.0
+            reasons.append("当前句命中")
+        recent_hits = sum(1 for item in context.get("recent_texts", []) if self._text_contains_wakeup_word(str(item), token))
+        if recent_hits:
+            score += min(1.2, recent_hits * 0.35)
+            reasons.append(f"近句{recent_hits}次")
+        buffer_hits = sum(1 for item in context.get("buffer_texts", []) if self._text_contains_wakeup_word(str(item), token))
+        if buffer_hits:
+            score += min(0.9, buffer_hits * 0.3)
+            reasons.append(f"收口中{buffer_hits}次")
+        topic_hits = sum(1 for item in context.get("topic_texts", []) if self._text_contains_wakeup_word(str(item), token))
+        if topic_hits:
+            topic = context.get("topic") if isinstance(context.get("topic"), dict) else {}
+            participants = topic.get("participants") if isinstance(topic.get("participants"), list) else []
+            messages = _safe_int(topic.get("message_count"), 0, 0)
+            score += min(1.6, 0.55 + topic_hits * 0.22 + min(0.35, len(participants) * 0.05) + min(0.35, messages * 0.03))
+            reasons.append("话题线升温")
+        max_boost = max(0.0, min(1.5, float(getattr(self, "group_wakeup_topic_interest_max_boost", 0.45) or 0.0)))
+        multiplier = 1.0 + min(max_boost, score * 0.16)
+        if context.get("buffer_active"):
+            penalty = max(0.0, min(1.0, float(getattr(self, "group_wakeup_debounce_pending_penalty", 0.65) or 0.0)))
+            multiplier *= max(0.05, 1.0 - penalty)
+            reasons.append("同轮收口降权")
+        return {
+            "multiplier": round(max(0.0, multiplier), 3),
+            "score": round(score, 2),
+            "reason": "、".join(reasons[:4]),
+            "buffer_active": bool(context.get("buffer_active")),
+        }
+
+    def _evaluate_group_wakeup(
+        self,
+        group: dict[str, Any],
+        *,
+        scene: dict[str, Any],
+        sender_id: str,
+        sender_name: str,
+        text: str,
+        group_id: str = "",
+    ) -> dict[str, Any]:
+        if not self.enable_group_wakeup_enhancement:
+            return {}
+        cleaned = _single_line(text, 260)
+        if not cleaned:
+            return {}
+        if str(scene.get("talking_to") or "") == "bot":
+            return {}
+        now = _now_ts()
+        direct_words = self._configured_group_direct_wakeup_words()
+        for word in direct_words:
+            if self._text_contains_wakeup_word(cleaned, word):
+                strength = self._group_wakeup_strength("direct_word", group, scene)
+                return {
+                    "type": "direct_word",
+                    "word": word,
+                    "strength": strength,
+                    "probability": 1.0,
+                    "reason": "direct_wakeup_word",
+                    "instruction": "群友提到了你的名字或强唤醒词；这不一定是正式提问,要像群聊里被自然叫到一样接话。",
+                }
+        if self.group_wakeup_cooldown_seconds > 0 and now - _safe_float(group.get("last_group_wakeup_at"), 0) < self.group_wakeup_cooldown_seconds:
+            if any(self._text_contains_wakeup_word(cleaned, word) for word in list(self.group_wakeup_context_words or []) + self._group_wakeup_interest_words(group)):
+                self._record_group_wakeup_log(
+                    group,
+                    scene=scene,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    text=cleaned,
+                    wakeup={"type": "cooldown", "word": "", "reason": "cooldown", "probability": 0.0},
+                    result="blocked",
+                    strength="",
+                    note="命中了可唤醒线索,但仍在冷却时间内,所以没有接入回复链。",
+                )
+            return {}
+        for word in self.group_wakeup_context_words:
+            if not self._text_contains_wakeup_word(cleaned, word):
+                continue
+            if self._group_wakeup_context_should_reply(
+                group,
+                scene=scene,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                text=cleaned,
+                matched_word=word,
+            ):
+                strength = self._group_wakeup_strength("context_word", group, scene)
+                return {
+                    "type": "context_word",
+                    "word": word,
+                    "strength": strength,
+                    "probability": 1.0,
+                    "reason": "contextual_wakeup_word",
+                    "instruction": "群友提到了可能需要你接话的唤醒词；先看清来龙去脉,再自然回应,不要表现得像只是在执行关键词触发。",
+                }
+        if self.group_wakeup_interest_probability <= 0:
+            return {}
+        for word in self._group_wakeup_interest_words(group):
+            if not self._text_contains_wakeup_word(cleaned, word):
+                continue
+            probability = min(1.0, max(0.0, self.group_wakeup_interest_probability))
+            atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
+            if str(atmosphere.get("pace") or "") == "热闹":
+                probability *= 0.55
+            if str(scene.get("trigger") or "") in {"reply_in_flow", "quick_follow"}:
+                probability *= 0.65
+            state = self.data.get("daily_state") if isinstance(getattr(self, "data", None), dict) else {}
+            runtime = state.get("sleep_runtime") if isinstance(state, dict) and isinstance(state.get("sleep_runtime"), dict) else {}
+            phase = str(runtime.get("phase") or "")
+            energy = _safe_int(state.get("energy") if isinstance(state, dict) else 70, 70, 0, 100)
+            mood = str(state.get("mood_bias") or "") if isinstance(state, dict) else ""
+            if phase in {"falling_asleep", "light_sleep", "sleeping_again", "woken"}:
+                probability *= 0.18
+            if energy <= 35:
+                probability *= 0.55
+            elif energy >= 82:
+                probability *= 1.15
+            if any(token in mood for token in ("无聊", "烦闷", "好奇", "兴奋")):
+                probability *= 1.2
+            fatigue = self._group_wakeup_fatigue(group)
+            if str(fatigue.get("level") or "") == "medium":
+                probability *= 0.65
+            elif str(fatigue.get("level") or "") == "high":
+                probability *= 0.35
+            topic_weight = self._group_wakeup_topic_interest_weight(
+                group,
+                word,
+                sender_id=sender_id,
+                text=cleaned,
+                group_id=group_id,
+            )
+            probability *= _safe_float(topic_weight.get("multiplier"), 1.0, 0.0)
+            probability = min(0.95, max(0.0, probability))
+            if random.random() <= probability:
+                strength = self._group_wakeup_strength("interest", group, scene)
+                return {
+                    "type": "interest",
+                    "word": word,
+                    "strength": strength,
+                    "probability": round(probability, 3),
+                    "reason": "interest_keyword",
+                    "topic_weight": topic_weight,
+                    "instruction": "群聊碰到了你感兴趣的话题；这是兴趣驱动的自然接话,要短、轻,不要抢走原本话题。",
+                }
+            self._record_group_wakeup_log(
+                group,
+                scene=scene,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                text=cleaned,
+                wakeup={"type": "interest", "word": word, "reason": "probability_miss", "probability": round(probability, 3), "topic_weight": topic_weight},
+                result="missed",
+                strength="",
+                fatigue=fatigue,
+                note="命中了兴趣词,但本次概率未触发,所以没有接话。" + (f" 话题权重：{topic_weight.get('reason')}" if topic_weight.get("reason") else ""),
+            )
+        return {}
+
     def _infer_group_scene(
         self,
         event: AstrMessageEvent | None,
@@ -2812,6 +3436,8 @@ class PrivateCompanionPlugin(Star):
         target = str(scene.get("talking_to") or "group")
         trigger = str(scene.get("trigger") or "")
         if target == "bot":
+            if trigger.startswith("group_wakeup_"):
+                return "当前消息不是直接发给你的私聊式提问,而是在群聊里提到了你或碰到你感兴趣的话题；先看清上下文和关系网,再像群友自然接话,短一点。"
             return "当前消息在和你对话,可以正常回应。"
         if target != "group":
             return f"当前消息主要在和{self._scene_talking_to_text(scene)}说话,不要误以为是在问你；除非你被明确叫到,否则只把它当群聊背景。"
@@ -4387,6 +5013,28 @@ class PrivateCompanionPlugin(Star):
                 continue
         return None
 
+    def _find_bilibili_runtime_objects(self) -> list[Any]:
+        found: list[Any] = []
+        seen: set[int] = set()
+        for obj in gc.get_objects():
+            try:
+                cls = obj.__class__
+                module = str(getattr(cls, "__module__", ""))
+                if "astrbot_plugin_bilibili" not in module:
+                    continue
+                if id(obj) in seen:
+                    continue
+                if (
+                    callable(getattr(obj, "get_video_info", None))
+                    or callable(getattr(getattr(obj, "bili_client", None), "get_video_info", None))
+                    or callable(getattr(obj, "_http_get", None))
+                ):
+                    seen.add(id(obj))
+                    found.append(obj)
+            except Exception:
+                continue
+        return found
+
     def _load_bilibili_watch_log(self) -> list[dict[str, Any]]:
         try:
             path = self._bilibili_watch_log_file()
@@ -4545,10 +5193,71 @@ class PrivateCompanionPlugin(Star):
             else:
                 name, url = "", line
             url = url.strip()
+            source_type = "rss"
+            mid = ""
+            bvid = ""
+            if url.lower().startswith("bilibili:"):
+                mid = re.sub(r"\D+", "", url.split(":", 1)[1])
+                source_type = "bilibili"
+            elif url.lower().startswith("bvid:"):
+                match = re.search(r"(BV[0-9A-Za-z]+)", url, flags=re.I)
+                bvid = match.group(1) if match else ""
+                source_type = "bilibili_video"
+            elif re.fullmatch(r"\d{4,}", url):
+                mid = url
+                source_type = "bilibili"
+            elif url.startswith(("http://", "https://")):
+                parsed = urlparse(url)
+                if parsed.netloc.endswith("bilibili.com") and parsed.path.startswith("/video/"):
+                    match = re.search(r"/video/(BV[0-9A-Za-z]+)", parsed.path, flags=re.I)
+                    if match:
+                        bvid = match.group(1)
+                        source_type = "bilibili_video"
+                if "space.bilibili.com" in parsed.netloc or parsed.path.startswith("/space.bilibili.com"):
+                    match = re.search(r"/(\d+)", parsed.path)
+                    if match:
+                        mid = match.group(1)
+                        source_type = "bilibili"
+            if source_type == "bilibili_video":
+                if not bvid:
+                    continue
+                key = f"bilibili_video:{bvid}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(
+                    {
+                        "name": _single_line(name, 40) or f"B站视频 {bvid}",
+                        "url": f"https://www.bilibili.com/video/{bvid}",
+                        "type": "bilibili_video",
+                        "bvid": bvid,
+                    }
+                )
+                if len(items) >= 12:
+                    break
+                continue
+            if source_type == "bilibili":
+                if not mid:
+                    continue
+                key = f"bilibili:{mid}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(
+                    {
+                        "name": _single_line(name, 40) or f"B站 UP {mid}",
+                        "url": f"https://space.bilibili.com/{mid}",
+                        "type": "bilibili",
+                        "mid": mid,
+                    }
+                )
+                if len(items) >= 12:
+                    break
+                continue
             if not url.startswith(("http://", "https://")) or url in seen:
                 continue
             seen.add(url)
-            items.append({"name": _single_line(name, 40) or _single_line(url, 40), "url": url})
+            items.append({"name": _single_line(name, 40) or _single_line(url, 40), "url": url, "type": "rss"})
             if len(items) >= 12:
                 break
         return items
@@ -4588,7 +5297,457 @@ class PrivateCompanionPlugin(Star):
         )
         return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:16] if raw else ""
 
+    async def _fetch_bilibili_news_search_fallback(self, source: dict[str, str]) -> list[dict[str, Any]]:
+        source_name = _single_line(source.get("name"), 40) or "B站 AI早报"
+        now_dt = datetime.now()
+        today = now_dt.strftime("%Y-%m-%d")
+        today_cn = now_dt.strftime("%Y年%m月%d日").replace("年0", "年").replace("月0", "月")
+        queries = [
+            f"site:bilibili.com/video 橘鸦Juya AI 早报 {today}",
+            f"site:bilibili.com/video 橘鸦Juya AI早报 {today_cn}",
+            f"site:mp.weixin.qq.com/s 橘鸦 AI 早报 {today}",
+            "橘鸦Juya AI 早报 最新 文字版",
+        ]
+        umo = self._pick_available_web_search_umo()
+        if not umo and not self._astrbot_web_search_available():
+            return []
+        items: list[dict[str, Any]] = []
+        seen_links: set[str] = set()
+        for query in queries:
+            if len(items) >= max(1, self.news_max_items_per_source):
+                break
+            results = await self._run_astrbot_web_search(query, umo=umo, topic="news")
+            for result in results[: max(2, self.news_max_items_per_source)]:
+                title = _single_line(result.get("title"), 160)
+                link = _single_line(result.get("url"), 400)
+                snippet = _single_line(result.get("snippet"), 360)
+                haystack = f"{title} {snippet}"
+                if not title or "AI" not in haystack.upper() or "早报" not in haystack:
+                    continue
+                article_match = re.search(r"https?://mp\.weixin\.qq\.com/s/[^\s<>\]）)\"']+", f"{link} {snippet}")
+                article_link = _single_line(article_match.group(0), 400) if article_match else ""
+                if "mp.weixin.qq.com/s/" in link:
+                    article_link = link
+                final_link = article_link or link
+                if final_link in seen_links:
+                    continue
+                seen_links.add(final_link)
+                article_payload = await self._fetch_news_article_excerpt(article_link) if article_link else {}
+                article_text = str(article_payload.get("text") or "").strip()
+                article_excerpt = str(article_payload.get("excerpt") or "").strip()
+                article_title = _single_line(article_payload.get("title"), 120)
+                summary = article_excerpt if article_excerpt else snippet
+                media_type = "bilibili_search_article" if article_text else "bilibili_search_result"
+                published_hint = today if (today in haystack or today_cn in haystack) else ""
+                item = {
+                    "source": source_name,
+                    "title": article_title or title,
+                    "link": final_link,
+                    "summary": summary,
+                    "published": published_hint,
+                    "published_ts": 0,
+                    "fetched_ts": _now_ts(),
+                    "media_type": media_type,
+                    "search_query": query,
+                    "article_link": article_link,
+                    "article_title": article_title,
+                    "article_text": article_text,
+                    "article_excerpt": article_excerpt,
+                    "article_readable": bool(article_text),
+                }
+                item["key"] = self._news_item_key(item)
+                if item["key"]:
+                    items.append(item)
+                if len(items) >= max(1, self.news_max_items_per_source):
+                    break
+        if items:
+            items.sort(
+                key=lambda item: (
+                    1 if str(item.get("published") or "") == today else 0,
+                    1 if item.get("article_readable") else 0,
+                    _safe_float(item.get("fetched_ts"), 0),
+                ),
+                reverse=True,
+            )
+            return items[: max(1, self.news_max_items_per_source)]
+        query = queries[0]
+        results = await self._run_astrbot_web_search(query, umo=umo, topic="news")
+        for result in results[: max(1, self.news_max_items_per_source)]:
+            title = _single_line(result.get("title"), 160)
+            link = _single_line(result.get("url"), 400)
+            snippet = _single_line(result.get("snippet"), 320)
+            if not title or "AI" not in title.upper() or "早报" not in f"{title}{snippet}":
+                continue
+            item = {
+                "source": source_name,
+                "title": title,
+                "link": link,
+                "summary": snippet,
+                "published": "",
+                "published_ts": 0,
+                "fetched_ts": _now_ts(),
+                "media_type": "bilibili_search_result",
+                "search_query": query,
+            }
+            item["key"] = self._news_item_key(item)
+            if item["key"]:
+                items.append(item)
+        return items
+
+    async def _fetch_news_article_excerpt(self, url: str) -> dict[str, str]:
+        safe_url = _single_line(url, 500)
+        if not safe_url.startswith(("http://", "https://")):
+            return {}
+        try:
+            import aiohttp
+
+            timeout = aiohttp.ClientTimeout(total=15)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Referer": "https://mp.weixin.qq.com/",
+            }
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                async with session.get(safe_url, allow_redirects=True) as resp:
+                    if resp.status >= 400:
+                        return {}
+                    raw_bytes = await resp.read()
+                    try:
+                        raw = raw_bytes.decode(resp.charset or "utf-8", errors="ignore")
+                    except Exception:
+                        raw = raw_bytes.decode("utf-8", errors="ignore")
+                    if "璞" in raw[:5000] or "鏃╂姤" in raw[:5000] or "鈥" in raw[:5000]:
+                        try:
+                            raw = raw.encode("latin1", errors="ignore").decode("utf-8", errors="ignore")
+                        except Exception:
+                            pass
+        except Exception as exc:
+            logger.debug("[PrivateCompanion] 新闻文字版抓取失败 %s: %s", _single_line(safe_url, 120), exc)
+            return {}
+
+        text = html.unescape(raw or "")
+        title = ""
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", text, flags=re.I | re.S)
+        if title_match:
+            title = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", title_match.group(1))).strip()
+        for pattern in (
+            r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+            r'<meta[^>]+name=["\']twitter:title["\'][^>]+content=["\']([^"\']+)["\']',
+        ):
+            match = re.search(pattern, text, flags=re.I | re.S)
+            if match:
+                title = match.group(1).strip()
+                break
+
+        body = text
+        article_match = re.search(r'<div[^>]+id=["\']js_content["\'][^>]*>(.*?)</div>\s*</div>\s*</div>', text, flags=re.I | re.S)
+        if not article_match:
+            article_match = re.search(r'<article[^>]*>(.*?)</article>', text, flags=re.I | re.S)
+        if article_match:
+            body = article_match.group(1)
+        body = re.sub(r"<script\b[^>]*>.*?</script>", " ", body, flags=re.I | re.S)
+        body = re.sub(r"<style\b[^>]*>.*?</style>", " ", body, flags=re.I | re.S)
+        body = re.sub(r"<br\s*/?>|</p>|</div>|</li>|</h\d>", "\n", body, flags=re.I)
+        body = re.sub(r"<[^>]+>", " ", body)
+        body = html.unescape(body)
+        body = re.sub(r"\u00a0", " ", body)
+        lines = [re.sub(r"\s+", " ", line).strip() for line in body.splitlines()]
+        lines = [
+            line for line in lines
+            if len(line) >= 8
+            and not re.search(r"^(赞|在看|分享|微信扫一扫|继续滑动看下一个|向上滑动看下一个|广告)$", line)
+        ]
+        article_text = "\n".join(lines)
+        article_text = re.sub(r"\n{3,}", "\n\n", article_text).strip()
+        if len(article_text) < 80:
+            return {}
+        return {
+            "title": _single_line(title, 120),
+            "text": article_text,
+            "excerpt": article_text[:2400],
+        }
+
+    async def _bilibili_news_item_from_video(
+        self,
+        *,
+        source_name: str,
+        title: Any,
+        desc: Any,
+        bvid: Any,
+        created: Any = 0,
+    ) -> dict[str, Any]:
+        safe_title = _single_line(title, 160)
+        safe_bvid = _single_line(bvid, 40)
+        if not safe_title or not safe_bvid:
+            return {}
+        desc_text = str(desc or "")
+        article_match = re.search(r"https?://[^\s<>\]）)\"']+", desc_text)
+        article_link = _single_line(article_match.group(0), 400) if article_match else ""
+        video_link = f"https://www.bilibili.com/video/{safe_bvid}"
+        article_payload = await self._fetch_news_article_excerpt(article_link) if article_link else {}
+        article_text = str(article_payload.get("text") or "").strip()
+        article_excerpt = str(article_payload.get("excerpt") or "").strip()
+        article_title = _single_line(article_payload.get("title"), 120)
+        published_ts = _safe_float(created, 0)
+        item = {
+            "source": source_name,
+            "title": article_title or safe_title,
+            "link": article_link or video_link,
+            "summary": article_excerpt if article_excerpt else _single_line(desc_text, 320),
+            "published": datetime.fromtimestamp(published_ts).isoformat() if published_ts else "",
+            "published_ts": published_ts,
+            "fetched_ts": _now_ts(),
+            "media_type": "bilibili_video",
+            "video_link": video_link,
+            "article_link": article_link,
+            "article_title": article_title,
+            "article_text": article_text,
+            "article_excerpt": article_excerpt,
+            "article_readable": bool(article_text),
+        }
+        item["key"] = self._news_item_key(item)
+        return item if item["key"] else {}
+
+    @staticmethod
+    def _normalize_bilibili_video_payload(payload: Any, bvid: str = "") -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {}
+        data: Any = payload
+        if isinstance(payload.get("info"), dict):
+            data = payload.get("info")
+        elif isinstance(payload.get("data"), dict):
+            data = payload.get("data")
+        if not isinstance(data, dict):
+            return {}
+        owner = data.get("owner") if isinstance(data.get("owner"), dict) else {}
+        return {
+            "bvid": _single_line(data.get("bvid") or bvid, 40),
+            "title": _single_line(data.get("title"), 180),
+            "desc": str(data.get("desc") or data.get("dynamic") or ""),
+            "created": data.get("pubdate") or data.get("ctime") or data.get("created") or 0,
+            "owner_name": _single_line(owner.get("name") or data.get("owner_name") or data.get("up_name"), 80),
+            "owner_mid": _single_line(owner.get("mid") or data.get("owner_mid") or data.get("mid"), 40),
+            "tname": _single_line(data.get("tname"), 60),
+            "pic": _single_line(data.get("pic"), 300),
+            "cid": data.get("cid") or 0,
+        }
+
+    async def _fetch_bilibili_video_info_via_integration(self, bvid: str) -> dict[str, Any]:
+        safe_bvid = _single_line(bvid, 40)
+        if not safe_bvid or not self.enable_bilibili_integration:
+            return {}
+        for obj in self._find_bilibili_runtime_objects():
+            try:
+                client = getattr(obj, "bili_client", None)
+                getter = getattr(client, "get_video_info", None) if client is not None else None
+                if not callable(getter):
+                    getter = getattr(obj, "get_video_info", None)
+                if callable(getter):
+                    payload = getter(safe_bvid)
+                    if hasattr(payload, "__await__"):
+                        payload = await payload
+                    normalized = self._normalize_bilibili_video_payload(payload, safe_bvid)
+                    if normalized.get("title"):
+                        logger.info("[PrivateCompanion] 已通过 B站插件客户端读取视频信息: %s", safe_bvid)
+                        return normalized
+                http_get = getattr(obj, "_http_get", None)
+                if callable(http_get):
+                    payload = http_get(
+                        "https://api.bilibili.com/x/web-interface/view",
+                        params={"bvid": safe_bvid},
+                    )
+                    if hasattr(payload, "__await__"):
+                        payload = await payload
+                    data = payload[0] if isinstance(payload, (list, tuple)) and payload else payload
+                    if isinstance(data, dict) and int(data.get("code") or 0) == 0:
+                        normalized = self._normalize_bilibili_video_payload(data, safe_bvid)
+                        if normalized.get("title"):
+                            logger.info("[PrivateCompanion] 已通过 BiliBot HTTP 客户端读取视频信息: %s", safe_bvid)
+                            return normalized
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] B站插件视频信息联动失败 bvid=%s: %s", safe_bvid, exc)
+        return {}
+
+    async def _fetch_bilibili_space_payloads_via_integration(self, mid: str) -> list[dict[str, Any]]:
+        safe_mid = re.sub(r"\D+", "", str(mid or ""))
+        if not safe_mid or not self.enable_bilibili_integration:
+            return []
+        payloads: list[dict[str, Any]] = []
+        for obj in self._find_bilibili_runtime_objects():
+            try:
+                client = getattr(obj, "bili_client", None)
+                getter = getattr(client, "get_latest_dynamics", None) if client is not None else None
+                if not callable(getter):
+                    getter = getattr(obj, "get_latest_dynamics", None)
+                if callable(getter):
+                    payload = getter(int(safe_mid))
+                    if hasattr(payload, "__await__"):
+                        payload = await payload
+                    if isinstance(payload, dict):
+                        payloads.append(payload)
+                        logger.info("[PrivateCompanion] 已通过 B站插件客户端读取 UP 最新动态: mid=%s", safe_mid)
+                        continue
+                http_get = getattr(obj, "_http_get", None)
+                if callable(http_get):
+                    payload = http_get(
+                        "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space",
+                        params={
+                            "host_mid": safe_mid,
+                            "offset": "",
+                            "timezone_offset": -480,
+                            "features": "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote",
+                        },
+                    )
+                    if hasattr(payload, "__await__"):
+                        payload = await payload
+                    data = payload[0] if isinstance(payload, (list, tuple)) and payload else payload
+                    if isinstance(data, dict) and int(data.get("code") or 0) == 0:
+                        payloads.append(data)
+                        logger.info("[PrivateCompanion] 已通过 BiliBot HTTP 客户端读取 UP 最新动态: mid=%s", safe_mid)
+                        continue
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] B站插件 UP 动态联动失败 mid=%s: %s", safe_mid, exc)
+        return payloads
+
+    async def _fetch_bilibili_video_news_source(self, source: dict[str, str]) -> list[dict[str, Any]]:
+        bvid = _single_line(source.get("bvid"), 40)
+        if not bvid:
+            return []
+        source_name = _single_line(source.get("name"), 40) or f"B站视频 {bvid}"
+        integrated_info = await self._fetch_bilibili_video_info_via_integration(bvid)
+        if integrated_info:
+            item = await self._bilibili_news_item_from_video(
+                source_name=source_name,
+                title=integrated_info.get("title"),
+                desc=integrated_info.get("desc"),
+                bvid=integrated_info.get("bvid") or bvid,
+                created=integrated_info.get("created"),
+            )
+            if item:
+                item["bilibili_integration_source"] = "plugin_client"
+                return [item]
+        try:
+            import aiohttp
+
+            timeout = aiohttp.ClientTimeout(total=12)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36",
+                "Referer": f"https://www.bilibili.com/video/{bvid}",
+                "Accept": "application/json, text/plain, */*",
+            }
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                async with session.get(f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}") as resp:
+                    if resp.status >= 400:
+                        return await self._fetch_bilibili_news_search_fallback(source)
+                    payload = await resp.json(content_type=None)
+        except Exception as exc:
+            logger.debug("[PrivateCompanion] B站单视频新闻源抓取失败 bvid=%s: %s", bvid, exc)
+            return await self._fetch_bilibili_news_search_fallback(source)
+        data = payload.get("data") if isinstance(payload, dict) else {}
+        if not isinstance(data, dict):
+            return await self._fetch_bilibili_news_search_fallback(source)
+        item = await self._bilibili_news_item_from_video(
+            source_name=source_name,
+            title=data.get("title"),
+            desc=data.get("desc") or data.get("dynamic"),
+            bvid=data.get("bvid") or bvid,
+            created=data.get("pubdate") or data.get("ctime"),
+        )
+        return [item] if item else await self._fetch_bilibili_news_search_fallback(source)
+
+    async def _fetch_bilibili_news_source(self, source: dict[str, str]) -> list[dict[str, Any]]:
+        mid = re.sub(r"\D+", "", str(source.get("mid") or ""))
+        if not mid:
+            return []
+        payloads: list[dict[str, Any]] = await self._fetch_bilibili_space_payloads_via_integration(mid)
+        try:
+            import aiohttp
+
+            timeout = aiohttp.ClientTimeout(total=12)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36",
+                "Referer": f"https://space.bilibili.com/{mid}",
+                "Accept": "application/json, text/plain, */*",
+            }
+            api_urls = [
+                f"https://api.bilibili.com/x/space/arc/search?mid={mid}&pn=1&ps={max(1, min(30, self.news_max_items_per_source))}&order=pubdate&jsonp=jsonp",
+                f"https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid={mid}&timezone_offset=-480&features=itemOpusStyle",
+            ]
+            if not payloads:
+                async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                    for url in api_urls:
+                        try:
+                            async with session.get(url) as resp:
+                                if resp.status >= 400:
+                                    continue
+                                data = await resp.json(content_type=None)
+                                if isinstance(data, dict) and int(data.get("code") or 0) == 0:
+                                    payloads.append(data)
+                        except Exception:
+                            continue
+        except Exception as exc:
+            logger.debug("[PrivateCompanion] B站新闻源抓取失败 mid=%s: %s", mid, exc)
+            if not payloads:
+                return []
+
+        source_name = _single_line(source.get("name"), 40) or f"B站 UP {mid}"
+        results: list[dict[str, Any]] = []
+
+        async def add_video(title: Any, desc: Any, bvid: Any, created: Any) -> None:
+            item = await self._bilibili_news_item_from_video(
+                source_name=source_name,
+                title=title,
+                desc=desc,
+                bvid=bvid,
+                created=created,
+            )
+            if item:
+                results.append(item)
+
+        for payload in payloads:
+            data = payload.get("data") if isinstance(payload, dict) else {}
+            if not isinstance(data, dict):
+                continue
+            vlist = (((data.get("list") or {}) if isinstance(data.get("list"), dict) else {}).get("vlist") or [])
+            if isinstance(vlist, list):
+                for video in vlist:
+                    if not isinstance(video, dict):
+                        continue
+                    await add_video(video.get("title"), video.get("description") or video.get("desc"), video.get("bvid"), video.get("created"))
+            dynamic_items = data.get("items") if isinstance(data.get("items"), list) else []
+            for dynamic in dynamic_items:
+                if not isinstance(dynamic, dict):
+                    continue
+                modules = dynamic.get("modules") if isinstance(dynamic.get("modules"), dict) else {}
+                major = ((modules.get("module_dynamic") or {}) if isinstance(modules.get("module_dynamic"), dict) else {}).get("major")
+                archive = (major or {}).get("archive") if isinstance(major, dict) else {}
+                if not isinstance(archive, dict):
+                    continue
+                await add_video(
+                    archive.get("title"),
+                    archive.get("desc") or archive.get("cover"),
+                    archive.get("bvid"),
+                    archive.get("pub_ts") or dynamic.get("pub_ts"),
+                )
+        seen: set[str] = set()
+        unique: list[dict[str, Any]] = []
+        for item in results:
+            key = str(item.get("key") or "")
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(item)
+        unique.sort(key=lambda item: (_safe_float(item.get("published_ts"), 0), _safe_float(item.get("fetched_ts"), 0)), reverse=True)
+        if unique:
+            return unique[: max(1, self.news_max_items_per_source)]
+        return await self._fetch_bilibili_news_search_fallback(source)
+
     async def _fetch_news_source(self, source: dict[str, str]) -> list[dict[str, Any]]:
+        source_type = str(source.get("type") or "").lower()
+        if source_type == "bilibili_video":
+            return await self._fetch_bilibili_video_news_source(source)
+        if source_type == "bilibili":
+            return await self._fetch_bilibili_news_source(source)
         url = str(source.get("url") or "")
         if not url:
             return []
@@ -4734,19 +5893,28 @@ class PrivateCompanionPlugin(Star):
             return self._news_fallback_digest(items)
         lines = []
         for idx, item in enumerate(items[:8], 1):
-            lines.append(
-                f"{idx}. [{_single_line(item.get('source'), 24)}] {_single_line(item.get('title'), 120)}"
-                + (f"｜{_single_line(item.get('summary'), 160)}" if _single_line(item.get("summary"), 160) else "")
-            )
+            title = _single_line(item.get("title"), 120)
+            source = _single_line(item.get("source"), 24)
+            if item.get("article_readable") and item.get("article_text"):
+                article_text = str(item.get("article_text") or "").strip()
+                lines.append(
+                    f"{idx}. [{source}] {title}\n"
+                    f"文字版链接：{_single_line(item.get('link'), 220)}\n"
+                    f"完整文字版正文：\n{article_text}"
+                )
+                continue
+            summary = _single_line(item.get("summary"), 180)
+            lines.append(f"{idx}. [{source}] {title}" + (f"｜{summary}" if summary else ""))
         prompt = f"""
 请作为 Bot 私下阅读新闻后的内部整理,从下面新闻里挑一条最适合轻轻分享给用户的内容。
 
 要求：
 1. 不要写成新闻播报,要像“刚看到一条消息后脑子里的印象”。
 2. 不要夸大事实,不要补充列表外没有的信息。
-3. 如果都不适合分享,仍挑一个最普通、风险最低的话题。
-4. 输出 JSON,字段为 topic, headline, impression, selected_index。
-5. topic 20字以内；headline 80字以内；impression 160字以内。
+3. 如果候选里包含“完整文字版正文”,必须以完整正文为准,不要只看标题、简介或链接。
+4. 如果都不适合分享,仍挑一个最普通、风险最低的话题。
+5. 输出 JSON,字段为 topic, headline, impression, selected_index。
+6. topic 20字以内；headline 80字以内；impression 160字以内。
 
 新闻候选：
 {chr(10).join(lines)}
@@ -4766,6 +5934,128 @@ class PrivateCompanionPlugin(Star):
             "selected_source": _single_line(selected.get("source"), 40),
             "items": items[:8],
             "created_ts": _now_ts(),
+        }
+
+    def _external_event_self_link_provider_id(self) -> str:
+        return self._task_provider(self.news_provider_id, self.web_exploration_provider_id, self.narration_provider_id, self.llm_provider_id)
+
+    def _format_external_event_self_context(self) -> str:
+        state = self.data.get("daily_state", {}) if isinstance(self.data.get("daily_state"), dict) else {}
+        current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
+        mood = _single_line(state.get("mood_bias"), 40)
+        energy = _safe_int(state.get("energy"), 70, 0, 100)
+        activity = _single_line((current_item or {}).get("activity"), 120)
+        model_lines = []
+        plugin_main = self._task_provider(self.llm_provider_id)
+        if plugin_main:
+            model_lines.append(f"插件主模型：{self._provider_identity_label(plugin_main)}")
+        if self.news_provider_id:
+            model_lines.append(f"新闻整理模型：{self._provider_identity_label(self.news_provider_id)}")
+        if self.web_exploration_provider_id:
+            model_lines.append(f"主动搜索整理模型：{self._provider_identity_label(self.web_exploration_provider_id)}")
+        return "\n".join(
+            part
+            for part in (
+                f"Bot 名称：{self.bot_name}",
+                f"当前状态：{mood or '平稳'}，心理能量 {energy}/100",
+                f"当前日程：{activity}" if activity else "",
+                "当前模型环境：" + "；".join(model_lines) if model_lines else "",
+                f"人格：{_single_line(self._get_default_persona_prompt(), 900)}",
+                self._format_worldview_adaptation_prompt(),
+            )
+            if part
+        )
+
+    def _external_event_fallback_wish(self, payload: dict[str, Any], *, source_type: str) -> dict[str, Any]:
+        title = _single_line(payload.get("headline") or payload.get("topic") or payload.get("source_title"), 100)
+        note = _single_line(payload.get("impression") or payload.get("note") or payload.get("summary"), 220)
+        haystack = f"{title} {note}".lower()
+        self_tokens = (
+            "ai", "模型", "大模型", "llm", "视觉", "多模态", "上下文", "记忆", "agent", "智能体",
+            "机器人", "bot", "搜索", "新闻", "bilibili", "doubao", "deepseek", "glm", "gemini",
+            "claude", "gpt", "qwen", "豆包", "火山", "openai",
+        )
+        matched = [token for token in self_tokens if token in haystack]
+        relevance = min(10, 3 + len(matched) * 2)
+        desire = min(10, 4 + len(matched))
+        return {
+            "relevance": relevance,
+            "desire": desire,
+            "should_share": relevance >= 5 and desire >= 5,
+            "share_probability": min(0.85, 0.18 + relevance * 0.055 + desire * 0.035),
+            "motive": _single_line(
+                f"刚读到的{('新闻' if source_type == 'news' else '搜索结果')}和自己的能力、兴趣或最近状态有一点关系,想按人格私下找用户说说",
+                180,
+            ),
+            "self_link": _single_line("这条外界消息可能影响我会做什么、想学什么、想试什么,或让我联想到自己的状态。", 180),
+            "tone": "有分享欲,自然一点",
+            "boundary": "不要说成系统通知；不要要求用户一定做什么；只表达自己的反应和一点想法。",
+        }
+
+    async def _build_external_event_wish(self, payload: dict[str, Any], *, source_type: str) -> dict[str, Any]:
+        if not self.enable_external_event_self_link or not isinstance(payload, dict):
+            return {}
+        provider_id = self._external_event_self_link_provider_id()
+        fallback = self._external_event_fallback_wish(payload, source_type=source_type)
+        if not provider_id:
+            return fallback
+        title = _single_line(payload.get("headline") or payload.get("topic") or payload.get("source_title"), 120)
+        impression = _single_line(payload.get("impression") or payload.get("note") or payload.get("summary"), 360)
+        source = _single_line(payload.get("selected_source") or payload.get("source_title") or payload.get("source"), 80)
+        link = _single_line(payload.get("selected_link") or payload.get("source_url") or payload.get("link"), 420)
+        prompt = f"""
+请判断 Bot 刚读到的一条外界信息,是否会在它心里产生“和我自己有关,想找用户说说”的主动意愿。
+
+这不是写给用户的消息,只是内部决策。请不要把关键词当硬触发,要根据人格、当前状态、能力边界、兴趣、近期见闻和用户关系判断。
+
+判断维度：
+1. 自我关联：这条信息是否和 Bot 的能力、模型、创作、日程、兴趣、世界观身份、正在做的事或与用户的关系有关。
+2. 意愿强度：Bot 是否会产生分享欲、求助欲、试试看、撒娇、吐槽、担心、好奇、想让用户知道等动机。
+3. 主动边界：是否适合现在主动私聊；不适合就 should_share=false。
+4. 如果适合, motive 要写成内部动机,不是最终发言。不要写插件、后台、任务、JSON 这类词。
+
+输出 JSON：
+{{
+  "relevance": 0到10,
+  "desire": 0到10,
+  "should_share": true或false,
+  "share_probability": 0到1,
+  "self_link": "这件事和 Bot 自己有什么关系,80字内",
+  "motive": "为什么想找用户说,100字内",
+  "tone": "适合的表达气质,如撒娇/好奇/嘴硬/认真/轻轻分享",
+  "boundary": "主动时要避开的表达,80字内"
+}}
+
+【来源类型】
+{source_type}
+
+【外界信息】
+标题：{title}
+来源：{source}
+链接：{link}
+内部印象：{impression}
+
+【Bot 当前自我上下文】
+{self._format_external_event_self_context()}
+""".strip()
+        raw = await self._llm_call(prompt, max_tokens=360, provider_id=provider_id, task="external_event_self_link")
+        parsed = self._parse_json_object(raw)
+        if not isinstance(parsed, dict):
+            return fallback
+        relevance = _safe_int(parsed.get("relevance"), fallback["relevance"], 0, 10)
+        desire = _safe_int(parsed.get("desire"), fallback["desire"], 0, 10)
+        probability = _safe_float(parsed.get("share_probability"), fallback["share_probability"])
+        return {
+            "relevance": relevance,
+            "desire": desire,
+            "should_share": bool(parsed.get("should_share", relevance >= 5 and desire >= 5)),
+            "share_probability": max(0.0, min(1.0, probability)),
+            "self_link": _single_line(parsed.get("self_link"), 180) or fallback["self_link"],
+            "motive": _single_line(parsed.get("motive"), 180) or fallback["motive"],
+            "tone": _single_line(parsed.get("tone"), 60) or fallback["tone"],
+            "boundary": _single_line(parsed.get("boundary"), 140) or fallback["boundary"],
+            "created_ts": _now_ts(),
+            "source_type": source_type,
         }
 
     def _bot_currently_bored_enough_for_news(self) -> bool:
@@ -4824,9 +6114,13 @@ class PrivateCompanionPlugin(Star):
         if not isinstance(digests, list):
             digests = []
             state["digests"] = digests
+        wish = await self._build_external_event_wish(digest, source_type="news")
+        if wish:
+            digest["self_link"] = wish
         digests.append({**digest, "reason": reason})
         state["latest_items"] = items[:12]
-        if not allow_share:
+        self_link_allows_share = bool(wish.get("should_share")) if isinstance(wish, dict) else False
+        if not allow_share and not self_link_allows_share:
             self._save_data_sync()
             logger.info("[PrivateCompanion] 已完成一次新闻阅读: %s", reason)
             return
@@ -4841,8 +6135,20 @@ class PrivateCompanionPlugin(Star):
                     continue
                 if now - _safe_float(user.get("last_news_share_at"), 0) < 8 * 3600:
                     continue
-                if random.random() > self.news_share_probability:
+                if isinstance(wish, dict) and wish:
+                    if now - _safe_float(user.get("last_external_event_self_link_at"), 0) < self.external_event_self_link_cooldown_hours * 3600:
+                        continue
+                    if not wish.get("should_share"):
+                        continue
+                    share_probability = max(self.news_share_probability, _safe_float(wish.get("share_probability"), 0.0))
+                    share_probability *= self.external_event_self_link_probability
+                else:
+                    share_probability = self.news_share_probability
+                if random.random() > max(0.0, min(1.0, share_probability)):
                     continue
+                self_link_motive = _single_line(wish.get("motive") if isinstance(wish, dict) else "", 180)
+                self_link_tone = _single_line(wish.get("tone") if isinstance(wish, dict) else "", 60)
+                self_link_boundary = _single_line(wish.get("boundary") if isinstance(wish, dict) else "", 140)
                 accepted = self._offer_proactive_candidate(
                     str(user_id),
                     user,
@@ -4852,16 +6158,27 @@ class PrivateCompanionPlugin(Star):
                         "action": "message",
                         "scheduled_ts": now + random.randint(10, 55) * 60,
                         "topic": _single_line(digest.get("topic"), 48) or "刚看到的新闻",
-                        "score": 3,
-                        "motive": "刚看了几条新闻,其中一条让自己想轻轻和用户提一句,但不要像播报新闻",
+                        "score": 4 if self_link_motive else 3,
+                        "motive": self_link_motive
+                        or "刚看了几条新闻,其中一条让自己想轻轻和用户提一句,但不要像播报新闻",
                         "context_key": "news_context",
-                        "context": digest,
+                        "context": {
+                            **digest,
+                            "share_tone": self_link_tone,
+                            "share_boundary": self_link_boundary,
+                        },
                     },
                 )
                 if accepted:
-                    user["news_context"] = digest
+                    user["news_context"] = {
+                        **digest,
+                        "share_tone": self_link_tone,
+                        "share_boundary": self_link_boundary,
+                    }
                     user["last_news_share_key"] = selected_key
                     user["last_news_share_at"] = now
+                    if isinstance(wish, dict) and wish:
+                        user["last_external_event_self_link_at"] = now
         self._save_data_sync()
         logger.info("[PrivateCompanion] 已完成一次新闻阅读: %s", reason)
 
@@ -5268,13 +6585,26 @@ class PrivateCompanionPlugin(Star):
     async def _summarize_web_exploration(self, query_info: dict[str, Any], results: list[dict[str, Any]]) -> dict[str, Any]:
         if not results:
             return {}
+        def fallback_note() -> str:
+            parts = []
+            for item in results[:3]:
+                title = _single_line(item.get("title"), 90)
+                snippet = _single_line(item.get("snippet"), 160)
+                if title and snippet:
+                    parts.append(f"{title}：{snippet}")
+                elif title:
+                    parts.append(title)
+                elif snippet:
+                    parts.append(snippet)
+            return _single_line("；".join(parts), 360)
+
         provider_id = self._task_provider(self.web_exploration_provider_id, self.news_provider_id, self.llm_provider_id)
         if not provider_id:
             first = results[0]
             return {
                 "query": _single_line(query_info.get("query"), 80),
                 "topic": _single_line(first.get("title"), 80),
-                "note": _single_line(first.get("snippet"), 220),
+                "note": _single_line(first.get("snippet"), 220) or fallback_note(),
                 "source_title": _single_line(first.get("title"), 120),
                 "source_url": _single_line(first.get("url"), 420),
                 "reason": _single_line(query_info.get("reason"), 120),
@@ -5309,10 +6639,15 @@ class PrivateCompanionPlugin(Star):
             return {}
         source_index = _safe_int(parsed.get("source_index"), 1, 1, len(results[:8])) - 1
         source = results[source_index] if 0 <= source_index < len(results) else results[0]
+        note = (
+            _single_line(parsed.get("note") or parsed.get("summary") or parsed.get("impression") or parsed.get("content"), 360)
+            or _single_line(source.get("snippet"), 260)
+            or fallback_note()
+        )
         return {
             "query": _single_line(query_info.get("query"), 80),
             "topic": _single_line(parsed.get("topic"), 80) or _single_line(source.get("title"), 80),
-            "note": _single_line(parsed.get("note"), 260) or _single_line(source.get("snippet"), 220),
+            "note": note,
             "source_title": _single_line(source.get("title"), 120),
             "source_url": _single_line(source.get("url"), 420),
             "reason": _single_line(query_info.get("reason"), 120),
@@ -5375,6 +6710,9 @@ class PrivateCompanionPlugin(Star):
         if not isinstance(notes, list):
             notes = []
             state["notes"] = notes
+        wish = await self._build_external_event_wish(digest, source_type="web_exploration")
+        if wish:
+            digest["self_link"] = wish
         notes.append(digest)
         state["last_explore_at"] = now
         state["last_status"] = "explored"
@@ -5388,8 +6726,20 @@ class PrivateCompanionPlugin(Star):
                     continue
                 if now - _safe_float(user.get("last_web_exploration_share_at"), 0) < 10 * 3600:
                     continue
-                if random.random() > self.web_exploration_share_probability:
+                if isinstance(wish, dict) and wish:
+                    if now - _safe_float(user.get("last_external_event_self_link_at"), 0) < self.external_event_self_link_cooldown_hours * 3600:
+                        continue
+                    if not wish.get("should_share"):
+                        continue
+                    share_probability = max(self.web_exploration_share_probability, _safe_float(wish.get("share_probability"), 0.0))
+                    share_probability *= self.external_event_self_link_probability
+                else:
+                    share_probability = self.web_exploration_share_probability
+                if random.random() > max(0.0, min(1.0, share_probability)):
                     continue
+                self_link_motive = _single_line(wish.get("motive") if isinstance(wish, dict) else "", 180)
+                self_link_tone = _single_line(wish.get("tone") if isinstance(wish, dict) else "", 60)
+                self_link_boundary = _single_line(wish.get("boundary") if isinstance(wish, dict) else "", 140)
                 accepted = self._offer_proactive_candidate(
                     user_id,
                     user,
@@ -5399,15 +6749,25 @@ class PrivateCompanionPlugin(Star):
                         "action": "message",
                         "scheduled_ts": now + random.randint(12, 70) * 60,
                         "topic": _single_line(digest.get("topic"), 48) or "刚查到的新东西",
-                        "score": 3,
-                        "motive": "刚自己上网查了点新东西,有一点想按自己的语气轻轻告诉用户",
+                        "score": 4 if self_link_motive else 3,
+                        "motive": self_link_motive or "刚自己上网查了点新东西,有一点想按自己的语气轻轻告诉用户",
                         "context_key": "web_exploration_context",
-                        "context": digest,
+                        "context": {
+                            **digest,
+                            "share_tone": self_link_tone,
+                            "share_boundary": self_link_boundary,
+                        },
                     },
                 )
                 if accepted:
-                    user["web_exploration_context"] = digest
+                    user["web_exploration_context"] = {
+                        **digest,
+                        "share_tone": self_link_tone,
+                        "share_boundary": self_link_boundary,
+                    }
                     user["last_web_exploration_share_at"] = now
+                    if isinstance(wish, dict) and wish:
+                        user["last_external_event_self_link_at"] = now
                     break
         self._save_data_sync()
         logger.info("[PrivateCompanion] 已完成一次网页探索: %s", _single_line(digest.get("topic"), 80))
@@ -5681,6 +7041,7 @@ class PrivateCompanionPlugin(Star):
             self.data["creative_projects"] = projects
         valid_projects = [item for item in projects if isinstance(item, dict)]
         for project in valid_projects:
+            project.setdefault("work_type", "短篇小说")
             point_of_view = _single_line(project.get("point_of_view"), 40)
             if not point_of_view:
                 project["point_of_view"] = "第三人称有限视角"
@@ -5728,7 +7089,7 @@ class PrivateCompanionPlugin(Star):
                 f"AstrBot 默认人格：{default_persona}" if default_persona else "",
                 f"日程/生活人设补充：{schedule_persona}" if schedule_persona else "",
                 f"默认对话风格：{style}" if style else "",
-                "创作要求：小说的题材、叙事声音、比喻密度、说话习惯、关注点和节奏要像这个人格会写出来的东西。",
+                "创作要求：作品类型、题材、叙事声音、比喻密度、说话习惯、关注点和节奏都要像这个人格会写出来的东西。",
                 "身份边界：如果人格没有学生、职场、异世界、职业、年龄、身体特征等设定,不要凭空添加；如果人格明确不是人类,不要写成人类日常生理经验。",
                 "文风边界：不要套用通用网文腔、营销文案腔或过度华丽散文腔；不要为了梦境感牺牲可读性。",
             )
@@ -5741,6 +7102,22 @@ class PrivateCompanionPlugin(Star):
         else:
             point_of_view = ""
         return point_of_view or "第三人称有限视角"
+
+    def _creative_work_type(self, project: dict[str, Any] | None = None) -> str:
+        work_type = _single_line(project.get("work_type") if isinstance(project, dict) else "", 30)
+        return work_type or "短篇小说"
+
+    def _creative_work_output_rule(self, work_type: str, point_of_view: str) -> str:
+        work_type = _single_line(work_type, 30) or "短篇小说"
+        if any(token in work_type for token in ("诗", "短诗", "歌词", "歌")):
+            return "只输出本次写下的诗句/歌词片段,可以换行,不要解释意象,不要写成小说叙事。"
+        if any(token in work_type for token in ("随笔", "散文", "札记", "观察", "影评", "读后感")):
+            return "只输出本次写下的随笔/札记正文,可以有作者自己的观察,但不要写成对用户的聊天回复或系统汇报。"
+        if any(token in work_type for token in ("剧本", "短剧", "分镜", "脚本", "对白")):
+            return "只输出本次写下的剧本/分镜/对白片段,允许出现角色名和简短舞台提示,不要写成完整成片方案。"
+        if any(token in work_type for token in ("设定", "世界观", "角色", "怪谈", "图鉴")):
+            return "只输出本次补上的设定正文,可以像设定集、图鉴或角色档案,但要保留作品感,不要写成插件配置。"
+        return f"只输出本次写下的正文片段。叙事视角规则：{self._creative_point_of_view_rule(point_of_view)}"
 
     def _creative_point_of_view_rule(self, point_of_view: str) -> str:
         pov = _single_line(point_of_view, 40) or "第三人称有限视角"
@@ -5789,28 +7166,30 @@ class PrivateCompanionPlugin(Star):
         source_label = _single_line(source.get("label"), 24) or "小灵感"
         persona_context = self._creative_persona_style_context()
         prompt = f"""
-你是一个拟人化 Bot 的私人创作状态生成器。她因为一个生活小事或梦境灵感,突然想开一个短篇小说坑。
+你是一个拟人化 Bot 的私人创作状态生成器。她因为一个生活小事、日记碎片或梦境灵感,突然想开一个自己的创作项目。
 
 【人格与身份】
 {persona_context}
 
 要求：
-1. 只设计“正在写的小说计划”,不要写正文。
-2. 风格必须贴合上面的人格、身份和默认说话气质；标题、设定和 tone 都要像她自己会想到的。
-3. 灵感来源：{source_label}｜{source_text}
-4. 小说应是短篇或中篇开头,目标 1200-5200 字,不能一次写完。
-5. 题材可以日常、轻奇幻、悬疑、校园、都市、梦境感,但不要色情、血腥或攻击性。
-6. 不要为了题材方便凭空改变 Bot 身份,也不要写出和人格不相称的成熟度、职业经验或生活经验。
-7. 作者人格只决定选题、审美、句子节奏和观察方式,不等于正文必须用第一人称。
-8. 叙事视角优先选择“第三人称有限视角”或“第三人称全知视角”；只有当题材确实需要角色自述、书信、手记时才选第一人称或书信体。
-9. 输出 JSON。
+1. 只设计“正在做的创作计划”,不要写正文。
+2. 作品类型可以是短篇小说、诗/歌词、随笔/散文、短剧/对白、分镜脚本、角色设定、世界观片段、怪谈、图鉴条目或其他符合人格的文本作品；不要固定为小说。
+3. 风格必须贴合上面的人格、身份和默认说话气质；标题、设定和 tone 都要像她自己会想到的。
+4. 灵感来源：{source_label}｜{source_text}
+5. 目标 300-5200 字。诗/歌词/短设定可以较短,小说/剧本/世界观可以较长；不能一次写完。
+6. 题材可以日常、轻奇幻、悬疑、校园、都市、梦境感、观察、角色小传、世界碎片等,但不要色情、血腥或攻击性。
+7. 不要为了题材方便凭空改变 Bot 身份,也不要写出和人格不相称的成熟度、职业经验或生活经验。
+8. 作者人格只决定选题、审美、句子节奏和观察方式,不等于正文必须用第一人称。
+9. 如果 work_type 不是叙事类,point_of_view 可写“无固定叙事视角”。
+10. 输出 JSON。
 
 格式：
 {{
+  "work_type": "作品类型,如短篇小说/短诗/随笔/短剧/分镜脚本/角色设定/世界观片段",
   "title": "临时标题,不要超过18字",
   "premise": "一句话核心设定",
   "tone": "行文气质,2到5个词",
-  "point_of_view": "第三人称有限视角/第三人称全知视角/多视角/第一人称角色视角/书信体之一",
+  "point_of_view": "第三人称有限视角/第三人称全知视角/多视角/第一人称角色视角/书信体/无固定叙事视角之一",
   "target_chars": 目标字数数字,
   "next_hint": "第一段准备写什么"
 }}
@@ -5825,11 +7204,13 @@ class PrivateCompanionPlugin(Star):
         if not isinstance(payload, dict):
             payload = {}
         title = _single_line(payload.get("title"), 24) or random.choice(["玻璃杯里的小雨", "迟到的梦", "窗边备用宇宙"])
-        target_chars = _safe_int(payload.get("target_chars"), random.randint(1800, 3600), 1200, 5200)
+        work_type = _single_line(payload.get("work_type"), 30) or "短篇小说"
+        target_chars = _safe_int(payload.get("target_chars"), random.randint(900, 2800), 300, 5200)
         now = _now_ts()
         return {
             "id": uuid.uuid4().hex[:12],
             "title": title,
+            "work_type": work_type,
             "premise": _single_line(payload.get("premise"), 140) or f"从{source_label}里长出来的一个短篇念头",
             "tone": _single_line(payload.get("tone"), 40) or self.default_style,
             "point_of_view": _single_line(payload.get("point_of_view"), 30) or "第三人称有限视角",
@@ -5852,18 +7233,20 @@ class PrivateCompanionPlugin(Star):
     async def _generate_creative_chunk(self, project: dict[str, Any], budget: int) -> str:
         chunks = project.get("draft_chunks") if isinstance(project.get("draft_chunks"), list) else []
         recent = "\n".join(_single_line((item or {}).get("text"), 240) for item in chunks[-3:] if isinstance(item, dict))
-        remaining = _safe_int(project.get("target_chars"), 2400, 1200, 5200) - _safe_int(project.get("current_chars"), 0, 0)
+        remaining = _safe_int(project.get("target_chars"), 2400, 300, 5200) - _safe_int(project.get("current_chars"), 0, 0)
         finish_hint = "可以自然收束到一个小段落结尾,但不要完结全篇。" if remaining <= budget + 120 else "不要完结全篇,只推进一个很小的片段。"
         persona_context = self._creative_persona_style_context()
+        work_type = self._creative_work_type(project)
         point_of_view = self._creative_point_of_view(project)
-        pov_rule = self._creative_point_of_view_rule(point_of_view)
+        output_rule = self._creative_work_output_rule(work_type, point_of_view)
         prompt = f"""
-你正在模拟拟人化 Bot 慢慢写小说。请只续写本次能写出来的一小段正文。
+你正在模拟拟人化 Bot 慢慢创作一个文本作品。请只写本次能写出来的一小段。
 
 【作者人格与身份】
 {persona_context}
 
-小说标题：{_single_line(project.get("title"), 40)}
+作品类型：{work_type}
+标题：{_single_line(project.get("title"), 40)}
 核心设定：{_single_line(project.get("premise"), 180)}
 行文气质：{_single_line(project.get("tone"), 60)}
 叙事视角：{point_of_view}
@@ -5873,11 +7256,11 @@ class PrivateCompanionPlugin(Star):
 
 本次字数上限：{budget} 个中文字符左右。
 要求：
-1. 只输出小说正文,不要标题、说明、引号外旁白或 JSON。
-2. 模拟真实写作速度,只写一个片段,不要一口气写完整故事。
-3. 正文文风要像这个人格与身份自然写出的作品：用词、观察角度、人物成熟度、知识范围都不能越过人设。
-4. 作者人格影响文风,但作者不等于叙述者；不要把小说写成 Bot 的日记或对用户的自白。
-5. 叙事视角规则：{pov_rule}
+1. {output_rule}
+2. 不要标题、说明、JSON、系统旁白或“下面是”。
+3. 模拟真实创作速度,只写一个片段,不要一口气完成整个作品。
+4. 文风要像这个人格与身份自然写出的作品：用词、观察角度、人物成熟度、知识范围都不能越过人设。
+5. 作者人格影响文风,但作者不等于必须直接出现在作品里；不要把所有作品都写成 Bot 的日记或对用户的自白。
 6. 细节要具体,但不要堆辞藻；可以有一点梦境感或生活感。
 7. {finish_hint}
 """.strip()
@@ -5897,7 +7280,7 @@ class PrivateCompanionPlugin(Star):
         if not cleaned:
             cleaned = random.choice([
                 "她把那句话写到一半,忽然停住。窗外的声音很轻,像有人把另一个世界折起来,塞进了玻璃杯底。",
-                "故事里的门没有立刻打开。她让主角在门口多站了一会儿,听见楼道里缓慢落下来的脚步声。",
+                "她把那个念头又往后推了一小步,像把一枚很轻的纸片压进书页里,等下次再翻开。",
             ])
         return cleaned
 
@@ -5924,7 +7307,7 @@ class PrivateCompanionPlugin(Star):
         del projects[:-20]
         self.data["creative_projects"] = projects
         self._save_data_sync()
-        logger.info("[PrivateCompanion] 新增小说创作坑: %s", project.get("title"))
+        logger.info("[PrivateCompanion] 新增创作项目: %s / %s", project.get("work_type"), project.get("title"))
         return True
 
     async def _maybe_advance_creative_projects(self) -> None:
@@ -5943,7 +7326,7 @@ class PrivateCompanionPlugin(Star):
             speed = self._creative_speed_chars_per_hour()
             budget = int(speed * elapsed_hours * random.uniform(0.38, 0.82))
             budget = max(70, min(280, budget))
-            remaining = _safe_int(project.get("target_chars"), 2400, 1200, 5200) - _safe_int(project.get("current_chars"), 0, 0)
+            remaining = _safe_int(project.get("target_chars"), 2400, 300, 5200) - _safe_int(project.get("current_chars"), 0, 0)
             if remaining <= 0:
                 project["status"] = "finished"
                 changed = True
@@ -5962,7 +7345,7 @@ class PrivateCompanionPlugin(Star):
             project["current_chars"] = _safe_int(project.get("current_chars"), 0, 0) + len(chunk)
             project["last_advanced_at"] = now
             project["next_advance_at"] = now + random.randint(55, 210) * 60
-            if project["current_chars"] >= _safe_int(project.get("target_chars"), 2400, 1200, 5200):
+            if project["current_chars"] >= _safe_int(project.get("target_chars"), 2400, 300, 5200):
                 project["status"] = "finished"
             changed = True
             break
@@ -5983,7 +7366,7 @@ class PrivateCompanionPlugin(Star):
             if not isinstance(chunk, dict):
                 continue
             current_chars = _safe_int(project.get("current_chars"), 0, 0)
-            target_chars = _safe_int(project.get("target_chars"), 2400, 1200, 5200)
+            target_chars = _safe_int(project.get("target_chars"), 2400, 300, 5200)
             disclosed = project.setdefault("disclosed_milestones", [])
             if not isinstance(disclosed, list):
                 disclosed = []
@@ -6011,6 +7394,7 @@ class PrivateCompanionPlugin(Star):
                 "milestone": milestone,
                 "disclosure_kind": disclosure_kind,
                 "project_id": _single_line(project.get("id"), 20),
+                "work_type": self._creative_work_type(project),
                 "title": _single_line(project.get("title"), 40),
                 "premise": _single_line(project.get("premise"), 140),
                 "tone": _single_line(project.get("tone"), 40),
@@ -6062,7 +7446,8 @@ class PrivateCompanionPlugin(Star):
                 continue
             delay_minutes = random.randint(18, 95)
             scheduled = now + delay_minutes * 60
-            title = _single_line(candidate.get("title"), 40) or "刚开的小说坑"
+            title = _single_line(candidate.get("title"), 40) or "刚开的创作项目"
+            work_type = _single_line(candidate.get("work_type"), 30) or "作品"
             accepted = self._offer_proactive_candidate(
                 str(user_id),
                 user,
@@ -6073,7 +7458,7 @@ class PrivateCompanionPlugin(Star):
                     "scheduled_ts": scheduled,
                     "topic": title,
                     "score": 72,
-                    "motive": f"刚慢慢写到《{title}》的一小段,有点想给 {user_id} 看一句,但不要像交作业",
+                    "motive": f"刚慢慢写到{work_type}《{title}》的一小段,有点想给 {user_id} 看一句,但不要像交作业",
                     "context_key": "creative_share_context",
                     "context": dict(candidate),
                 },
@@ -6421,10 +7806,10 @@ class PrivateCompanionPlugin(Star):
 
     def _format_companion_memory_for_prompt(self, user: dict[str, Any]) -> str:
         memory = user.get("companion_memory")
-        if not isinstance(memory, dict):
-            return "暂无专门沉淀的用户记忆。"
-        llm_profile = memory.get("profile")
         lines: list[str] = []
+        if not isinstance(memory, dict):
+            memory = {}
+        llm_profile = memory.get("profile")
         if isinstance(llm_profile, dict):
             for key, label in (
                 ("user_traits", "用户画像"),
@@ -6451,6 +7836,9 @@ class PrivateCompanionPlugin(Star):
                     facts.append(text)
             if facts:
                 lines.append("近期可记住的话：" + " / ".join(facts))
+        habit_text = self._format_user_behavior_habits_for_prompt(user, current_only=False, limit=5)
+        if habit_text:
+            lines.append(habit_text)
         episode_text = self._format_dialogue_episodes_for_prompt(user)
         if episode_text:
             lines.append("近期共同经历：\n" + episode_text)
@@ -6580,6 +7968,226 @@ class PrivateCompanionPlugin(Star):
                 item["note"] = _single_line(cleaned, 90)
             item["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
+    def _time_bucket_for_user_habit(self, when: datetime | None = None) -> tuple[str, int]:
+        when = when or datetime.now()
+        minute = when.hour * 60 + when.minute
+        buckets = (
+            ("凌晨", 0, 6 * 60),
+            ("早晨", 6 * 60, 9 * 60),
+            ("上午", 9 * 60, 11 * 60 + 30),
+            ("中午", 11 * 60 + 30, 14 * 60),
+            ("下午", 14 * 60, 18 * 60),
+            ("傍晚", 18 * 60, 20 * 60),
+            ("夜晚", 20 * 60, 23 * 60),
+            ("深夜", 23 * 60, 24 * 60),
+        )
+        for label, start, end in buckets:
+            if start <= minute < end:
+                return label, minute
+        return "凌晨", minute
+
+    def _classify_user_habit_message(self, text: str) -> tuple[str, str, str]:
+        cleaned = _single_line(text, 220)
+        lowered = cleaned.lower()
+        if not cleaned:
+            return "", "", ""
+        category = "聊天话题"
+        topic = cleaned
+        if any(token in cleaned for token in ("吃饭", "午饭", "晚饭", "早饭", "早餐", "午餐", "晚餐", "夜宵", "饿", "饱")):
+            category = "饮食节奏"
+            if any(token in cleaned for token in ("还没", "没吃", "没来得及", "没饭", "没到饭点")):
+                topic = "还没吃/饭点偏晚"
+            elif any(token in cleaned for token in ("吃了", "刚吃", "吃完", "饱")):
+                topic = "已经吃过饭"
+            else:
+                topic = "吃饭相关"
+        elif any(token in cleaned for token in ("睡", "起床", "醒", "熬夜", "困", "晚安", "早安")):
+            category = "作息节奏"
+            if any(token in cleaned for token in ("还没睡", "睡不着", "熬夜")):
+                topic = "夜里还没睡"
+            elif any(token in cleaned for token in ("起床", "刚醒", "醒了")):
+                topic = "起床/刚醒"
+            else:
+                topic = "睡眠相关"
+        elif any(token in cleaned for token in ("作业", "上课", "下课", "考试", "题", "学习", "上班", "下班", "工作", "摸鱼")):
+            category = "学习工作"
+            topic = "学习/工作节奏"
+        elif any(token in cleaned for token in ("游戏", "视频", "番", "漫画", "小说", "直播", "刷", "看")):
+            category = "娱乐习惯"
+            topic = "娱乐/刷内容"
+        elif re.search(r"[？?]|什么|多少|颜色|吗|呢|怎么|有没有|可不可以|要不要", cleaned):
+            category = "固定提问"
+            topic = re.sub(r"\d+", "", cleaned)
+        elif any(token in cleaned for token in ("喜欢", "讨厌", "想要", "以后", "每天", "经常", "总是", "习惯")):
+            category = "偏好习惯"
+            topic = cleaned
+        signature = self._proactive_topic_signature(category, topic or cleaned, lowered)
+        return category, _single_line(topic, 80), signature
+
+    def _update_user_behavior_habits_from_message(self, user: dict[str, Any], text: str) -> None:
+        if not self.enable_user_habit_learning:
+            return
+        cleaned = _single_line(text, 220)
+        if not cleaned or cleaned.startswith(("/", "!", "！", "#")):
+            return
+        category, topic, signature = self._classify_user_habit_message(cleaned)
+        if not category or not signature:
+            return
+        now_dt = datetime.now()
+        bucket, minute = self._time_bucket_for_user_habit(now_dt)
+        habits = user.setdefault("behavior_habits", {})
+        if not isinstance(habits, dict):
+            habits = {}
+            user["behavior_habits"] = habits
+        patterns = habits.setdefault("patterns", [])
+        if not isinstance(patterns, list):
+            patterns = []
+            habits["patterns"] = patterns
+        key = f"{bucket}|{category}|{signature}"
+        matched = None
+        for item in patterns:
+            if isinstance(item, dict) and str(item.get("key") or "") == key:
+                matched = item
+                break
+        if matched is None:
+            matched = {
+                "key": key,
+                "bucket": bucket,
+                "category": category,
+                "topic": topic,
+                "signature": signature,
+                "count": 0,
+                "avg_minute": minute,
+                "examples": [],
+                "created_ts": _now_ts(),
+            }
+            patterns.append(matched)
+        count = _safe_int(matched.get("count"), 0, 0) + 1
+        old_avg = _safe_float(matched.get("avg_minute"), minute)
+        matched["count"] = min(999, count)
+        matched["avg_minute"] = round((old_avg * max(0, count - 1) + minute) / max(1, count), 1)
+        matched["last_seen_ts"] = _now_ts()
+        matched["last_seen_text"] = cleaned
+        examples = matched.get("examples")
+        if not isinstance(examples, list):
+            examples = []
+        examples.insert(0, cleaned)
+        matched["examples"] = list(dict.fromkeys(_single_line(item, 90) for item in examples if _single_line(item, 90)))[:5]
+        patterns.sort(
+            key=lambda item: (
+                _safe_int(item.get("count"), 0, 0) if isinstance(item, dict) else 0,
+                _safe_float(item.get("last_seen_ts"), 0) if isinstance(item, dict) else 0,
+            ),
+            reverse=True,
+        )
+        del patterns[self.user_habit_max_items:]
+        habits["updated_at"] = now_dt.strftime("%Y-%m-%d %H:%M")
+
+    def _format_user_habit_time(self, minute_value: Any) -> str:
+        minute = int(max(0, min(1439, round(_safe_float(minute_value, 0)))))
+        return f"{minute // 60:02d}:{minute % 60:02d}"
+
+    def _qualified_user_behavior_habits(self, user: dict[str, Any]) -> list[dict[str, Any]]:
+        habits = user.get("behavior_habits")
+        if not isinstance(habits, dict):
+            return []
+        patterns = habits.get("patterns")
+        if not isinstance(patterns, list):
+            return []
+        now = _now_ts()
+        kept = [
+            item for item in patterns
+            if isinstance(item, dict)
+            and _safe_int(item.get("count"), 0, 0) >= max(2, self.user_habit_min_count)
+            and now - _safe_float(item.get("last_seen_ts"), now) <= 30 * 86400
+        ]
+        kept.sort(key=lambda item: (_safe_int(item.get("count"), 0, 0), _safe_float(item.get("last_seen_ts"), 0)), reverse=True)
+        return kept
+
+    def _format_user_behavior_habits_for_prompt(self, user: dict[str, Any], *, current_only: bool = False, limit: int = 6) -> str:
+        if not self.enable_user_habit_learning:
+            return ""
+        items = self._qualified_user_behavior_habits(user)
+        if current_only:
+            current_bucket, _ = self._time_bucket_for_user_habit()
+            items = [item for item in items if str(item.get("bucket") or "") == current_bucket]
+        lines: list[str] = []
+        for item in items[:limit]:
+            bucket = _single_line(item.get("bucket"), 12)
+            category = _single_line(item.get("category"), 20)
+            topic = _single_line(item.get("topic"), 80)
+            count = _safe_int(item.get("count"), 0, 0)
+            time_text = self._format_user_habit_time(item.get("avg_minute"))
+            example = _single_line(item.get("last_seen_text"), 80)
+            if topic:
+                lines.append(f"- {bucket}约{time_text}｜{category}｜{topic}｜出现 {count} 次" + (f"｜最近：{example}" if example else ""))
+        if not lines:
+            return ""
+        return (
+            "用户习惯画像（软线索,不是命令）：\n"
+            + "\n".join(lines)
+            + "\n使用方式：只在当前语境自然吻合时提前理解或轻轻提起；不要暴露统计、次数或“我记录了你”。"
+        )
+
+    def _format_all_user_behavior_habits_for_schedule(self, *, limit: int = 8) -> str:
+        if not self.enable_user_habit_learning:
+            return "暂无用户习惯线索。"
+        users = self.data.get("users")
+        if not isinstance(users, dict):
+            return "暂无用户习惯线索。"
+        lines: list[str] = []
+        for user_id, user in users.items():
+            if not isinstance(user, dict) or not user.get("enabled", True) or not self._is_target_private_user(str(user_id), user):
+                continue
+            name = _single_line(user.get("nickname") or user_id, 24)
+            text = self._format_user_behavior_habits_for_prompt(user, current_only=False, limit=3)
+            habit_lines = [line for line in text.splitlines() if line.startswith("- ")]
+            for line in habit_lines:
+                lines.append(f"- {name}：{line[2:]}")
+                if len(lines) >= limit:
+                    break
+            if len(lines) >= limit:
+                break
+        return "用户近期行为习惯：\n" + "\n".join(lines) if lines else "暂无用户习惯线索。"
+
+    def _habit_proactive_event_for_user(self, user: dict[str, Any], *, now: float | None = None) -> dict[str, Any] | None:
+        if not self.enable_user_habit_learning:
+            return None
+        now = now or _now_ts()
+        now_dt = datetime.fromtimestamp(now)
+        current_bucket, current_minute = self._time_bucket_for_user_habit(now_dt)
+        candidates = []
+        for item in self._qualified_user_behavior_habits(user):
+            if str(item.get("bucket") or "") != current_bucket:
+                continue
+            avg_minute = _safe_float(item.get("avg_minute"), current_minute)
+            if abs(avg_minute - current_minute) > 75:
+                continue
+            count = _safe_int(item.get("count"), 0, 0)
+            candidates.append((count, item))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda pair: pair[0], reverse=True)
+        item = candidates[0][1]
+        category = _single_line(item.get("category"), 20)
+        topic = _single_line(item.get("topic"), 70)
+        bucket = _single_line(item.get("bucket"), 12)
+        delay_minutes = random.randint(4, 28)
+        return {
+            "date": _today_key(),
+            "window": self._window_from_delay_minutes(delay_minutes, width_minutes=20),
+            "reason": "habit_awareness",
+            "action": "message",
+            "why": f"用户最近常在{bucket}出现“{category}”相关话题或行为,这会儿自然想提前理解一下。",
+            "topic": topic or category or "用户习惯",
+            "motive": f"这会儿像是用户平常会提到“{topic or category}”的时候,想自然接住,不用说自己在统计。",
+            "scene": f"{bucket}的惯常互动时段",
+            "tone": "熟悉,提前一步",
+            "impulse": "像真的记得对方生活节奏一样,轻轻提前接住",
+            "_scheduled_ts": now + delay_minutes * 60,
+            "_habit_awareness": True,
+        }
+
     def _action_preference_hint(self, user: dict[str, Any] | None = None) -> str:
         if not isinstance(user, dict):
             return ""
@@ -6641,6 +8249,10 @@ class PrivateCompanionPlugin(Star):
                 "talking_to_name": _single_line(scene.get("talking_to_name"), 40),
                 "scene_trigger": _single_line(scene.get("trigger"), 40),
                 "scene_reason": _single_line(scene.get("reason"), 60),
+                "wakeup_word": _single_line(scene.get("wakeup_word"), 60),
+                "wakeup_strength": _single_line(scene.get("wakeup_strength"), 24),
+                "wakeup_strength_label": _single_line(scene.get("wakeup_strength_label"), 24),
+                "wakeup_instruction": _single_line(scene.get("wakeup_instruction"), 180),
                 "reply_to_id": _single_line(scene.get("reply_to_id"), 40),
                 "at_targets": scene.get("at_targets") if isinstance(scene.get("at_targets"), list) else [],
             })
@@ -7702,6 +9314,9 @@ class PrivateCompanionPlugin(Star):
             "talking_to_name": current.get("talking_to_name") or "",
             "trigger": current.get("scene_trigger") or "group_message",
             "reason": current.get("scene_reason") or "",
+            "wakeup_instruction": current.get("wakeup_instruction") or "",
+            "wakeup_word": current.get("wakeup_word") or "",
+            "wakeup_strength_label": current.get("wakeup_strength_label") or "",
         }
         lines = [
             "<conversation_scene>",
@@ -7713,6 +9328,13 @@ class PrivateCompanionPlugin(Star):
             "  </current_message>",
             f"  <instruction>{self._scene_instruction_text(scene)}</instruction>",
         ]
+        wakeup_instruction = _single_line(scene.get("wakeup_instruction"), 180)
+        if wakeup_instruction:
+            strength_label = _single_line(scene.get("wakeup_strength_label"), 24)
+            attrs = f'word="{_single_line(scene.get("wakeup_word"), 40)}"'
+            if strength_label:
+                attrs += f' strength="{strength_label}"'
+            lines.append(f"  <wakeup_note {attrs}>{wakeup_instruction}</wakeup_note>")
         flow_lines: list[str] = []
         for item in recent[-max(2, self.group_scene_recent_limit):]:
             if not isinstance(item, dict):
@@ -8240,6 +9862,9 @@ class PrivateCompanionPlugin(Star):
             sections.append("【用户记忆】\n" + self._format_companion_memory_for_prompt(user))
         if self.enable_expression_learning:
             sections.append("【表达环境学习】\n" + self._format_expression_profile_for_prompt(user))
+        current_habits = self._format_user_behavior_habits_for_prompt(user, current_only=True, limit=4)
+        if current_habits:
+            sections.append("【当前时段用户习惯】\n" + current_habits)
         intent_injection = self._format_intent_relationship_injection(user)
         if intent_injection:
             sections.append("【气氛/关系状态】\n" + intent_injection)
@@ -8479,6 +10104,8 @@ class PrivateCompanionPlugin(Star):
         if re.search(r"(能量\s*\d+|关系站位|状态机|内部规划|用户意图|表达学习|陪伴记忆)", cleaned):
             flags.append("leaks_internal")
         signature = self._proactive_topic_signature(cleaned)
+        if self._has_abrupt_closing_topic_shift(cleaned, inbound_text=""):
+            flags.append("abrupt_topic_shift")
         if self.enable_passive_topic_suppression:
             for item in self._cleanup_recent_passive_topics(user):
                 if self._topic_signature_similar(signature, str(item.get("signature") or "")):
@@ -8494,6 +10121,9 @@ class PrivateCompanionPlugin(Star):
     async def _review_and_rewrite_response(self, user: dict[str, Any], inbound_text: str, response_text: str) -> str:
         if not self.enable_response_self_review:
             return response_text
+        trimmed = self._trim_abrupt_closing_topic_shift(response_text, inbound_text=inbound_text)
+        if trimmed and trimmed != str(response_text or "").strip():
+            return trimmed
         flags = self._response_review_flags(response_text, user)
         if not flags:
             return response_text
@@ -8524,6 +10154,7 @@ class PrivateCompanionPlugin(Star):
 - 普通闲聊尽量 1 到 3 句；求助类可以保留必要步骤,但更口语
 - 如果用户情绪低,先接住情绪,少讲道理
 - 如果是边界/不想被打扰,短一点,退一步
+- 如果回复已经在说晚安、睡觉、做梦、告别,不要再突然追加天气、日程、生活观察或另一个新话题
 - 如果问题是重复上一条 Bot 消息,必须直接承接用户这句话,不要再说上一条里的“吃饱犯困/下午还有事/有什么安排”等同义内容
 """.strip()
         rewritten = await self._llm_call(
@@ -8958,7 +10589,135 @@ Bot 主动后用户回复次数：{reply_count}
             actions.append("voice")
         if self._jm_cosmos_read_available(user):
             actions.append("jm_cosmos_read")
+        actions.extend(f"external:{item['name']}" for item in self._available_external_proactive_abilities(user) if item.get("name"))
         return actions
+
+    @staticmethod
+    def _normalize_external_ability_name(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        text = re.sub(r"[^a-z0-9_.:-]+", "_", text)
+        return text[:64].strip("_")
+
+    def _external_ability_store(self) -> dict[str, Any]:
+        if not isinstance(getattr(self, "data", None), dict):
+            self.data = {}
+        store = self.data.setdefault("external_proactive_abilities", {})
+        if not isinstance(store, dict):
+            store = {}
+            self.data["external_proactive_abilities"] = store
+        return store
+
+    def register_external_proactive_ability(self, spec: dict[str, Any]) -> bool:
+        if not isinstance(spec, dict):
+            return False
+        name = self._normalize_external_ability_name(spec.get("name"))
+        executor = spec.get("executor")
+        if not name or not callable(executor):
+            logger.warning("[PrivateCompanion] 外部主动能力注册失败: name/executor 无效")
+            return False
+        default_config = spec.get("default_config") if isinstance(spec.get("default_config"), dict) else {}
+        config_schema = spec.get("config_schema") if isinstance(spec.get("config_schema"), dict) else {}
+        meta = {
+            "name": name,
+            "module": _single_line(spec.get("module"), 24) or "外部主动能力",
+            "label": _single_line(spec.get("label"), 32) or name,
+            "description": _single_line(spec.get("description"), 160),
+            "when": _single_line(spec.get("when"), 120) or "外部插件认为合适的场景",
+            "use_for": _single_line(spec.get("use_for"), 120) or _single_line(spec.get("description"), 120),
+            "avoid": _single_line(spec.get("avoid"), 120) or "不要暴露插件调用过程,不要硬触发",
+            "default_enabled": bool(spec.get("default_enabled", False)),
+            "share_probability": max(0.0, min(1.0, _safe_float(spec.get("share_probability"), _safe_float(default_config.get("share_probability"), 0.12)))),
+            "min_interval_hours": max(0.0, _safe_float(spec.get("min_interval_hours"), _safe_float(default_config.get("min_interval_hours"), 12))),
+            "config_schema": deepcopy(config_schema),
+            "default_config": deepcopy(default_config),
+        }
+        self._external_proactive_abilities[name] = {**meta, "executor": executor}
+        try:
+            store = self._external_ability_store()
+            item = store.get(name) if isinstance(store.get(name), dict) else {}
+            config = item.get("config") if isinstance(item.get("config"), dict) else {}
+            merged_config = {**default_config, **config}
+            item.update({
+                "name": name,
+                "module": meta["module"],
+                "label": meta["label"],
+                "description": meta["description"],
+                "when": meta["when"],
+                "use_for": meta["use_for"],
+                "avoid": meta["avoid"],
+                "enabled": bool(item.get("enabled", meta["default_enabled"])),
+                "share_probability": _safe_float(item.get("share_probability"), meta["share_probability"], 0.0),
+                "min_interval_hours": _safe_float(item.get("min_interval_hours"), meta["min_interval_hours"], 0.0),
+                "config": merged_config,
+                "config_schema": deepcopy(config_schema),
+                "registered": True,
+                "updated_ts": _now_ts(),
+            })
+            store[name] = item
+            self._save_data_sync()
+        except Exception as exc:
+            logger.debug("[PrivateCompanion] 外部主动能力状态保存失败: %s", exc)
+        logger.info("[PrivateCompanion] 已注册外部主动能力: %s", name)
+        return True
+
+    def unregister_external_proactive_ability(self, name: str) -> bool:
+        normalized = self._normalize_external_ability_name(name)
+        removed = self._external_proactive_abilities.pop(normalized, None) is not None
+        try:
+            store = self._external_ability_store()
+            item = store.get(normalized)
+            if isinstance(item, dict):
+                item["registered"] = False
+                item["updated_ts"] = _now_ts()
+                self._save_data_sync()
+        except Exception:
+            pass
+        return removed
+
+    def external_proactive_abilities(self) -> list[dict[str, Any]]:
+        store = self.data.get("external_proactive_abilities") if isinstance(getattr(self, "data", None), dict) else {}
+        if not isinstance(store, dict):
+            store = {}
+        names = sorted(set(store.keys()) | set(self._external_proactive_abilities.keys()))
+        items: list[dict[str, Any]] = []
+        for name in names:
+            runtime = self._external_proactive_abilities.get(name, {})
+            stored = store.get(name) if isinstance(store.get(name), dict) else {}
+            merged = {**{k: v for k, v in runtime.items() if k != "executor"}, **stored}
+            merged["name"] = name
+            merged["available"] = callable(runtime.get("executor"))
+            merged["registered"] = bool(runtime)
+            merged["enabled"] = bool(merged.get("enabled", merged.get("default_enabled", False)))
+            merged["share_probability"] = max(0.0, min(1.0, _safe_float(merged.get("share_probability"), 0.0)))
+            merged["min_interval_hours"] = max(0.0, _safe_float(merged.get("min_interval_hours"), 0.0))
+            items.append(merged)
+        return items
+
+    def _external_ability_config(self, name: str) -> dict[str, Any]:
+        store = self.data.get("external_proactive_abilities") if isinstance(self.data.get("external_proactive_abilities"), dict) else {}
+        item = store.get(name) if isinstance(store.get(name), dict) else {}
+        config = item.get("config") if isinstance(item.get("config"), dict) else {}
+        return dict(config)
+
+    def _external_ability_enabled(self, name: str) -> bool:
+        item = next((entry for entry in self.external_proactive_abilities() if entry.get("name") == name), None)
+        if not isinstance(item, dict):
+            return False
+        return bool(item.get("enabled") and item.get("available"))
+
+    def _available_external_proactive_abilities(self, user: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        now = _now_ts()
+        items: list[dict[str, Any]] = []
+        for item in self.external_proactive_abilities():
+            name = str(item.get("name") or "")
+            if not name or not item.get("enabled") or not item.get("available"):
+                continue
+            last = _safe_float(item.get("last_executed_ts"), 0)
+            cooldown = _safe_float(item.get("min_interval_hours"), 0) * 3600
+            if cooldown > 0 and last > 0 and now - last < cooldown:
+                continue
+            items.append(item)
+        return items
 
     def _available_proactive_abilities(self, user: dict[str, Any] | None = None) -> list[dict[str, str]]:
         user = user if isinstance(user, dict) else {}
@@ -8981,6 +10740,20 @@ Bot 主动后用户回复次数：{reply_count}
             if not name or name not in available:
                 continue
             items.append({str(key): str(value) for key, value in raw.items()})
+        for raw in self._available_external_proactive_abilities(user):
+            name = str(raw.get("name") or "").strip()
+            if not name:
+                continue
+            items.append(
+                {
+                    "module": _single_line(raw.get("module"), 24) or "外部主动能力",
+                    "name": f"external:{name}",
+                    "label": _single_line(raw.get("label"), 32) or name,
+                    "when": _single_line(raw.get("when"), 120) or "外部插件认为合适时",
+                    "use_for": _single_line(raw.get("use_for"), 120) or _single_line(raw.get("description"), 120),
+                    "avoid": _single_line(raw.get("avoid"), 120) or "不要暴露插件调用过程",
+                }
+            )
         return items
 
     def _format_proactive_ability_search_hint(self, user: dict[str, Any] | None = None) -> str:
@@ -9466,6 +11239,7 @@ Bot 主动后用户回复次数：{reply_count}
         for event in (
             self._pick_pending_followup_event(user, now),
             self._pick_daily_greeting_event(user, now),
+            self._habit_proactive_event_for_user(user, now=now),
             self._pick_story_plan_event(now, user=user),
         ):
             if not isinstance(event, dict):
@@ -10630,6 +12404,8 @@ Bot 主动后用户回复次数：{reply_count}
                 return False
             if part == "jm_cosmos_read" and not self._jm_cosmos_read_available(user):
                 return False
+            if part.startswith("external:") and not self._external_ability_enabled(part.split(":", 1)[1]):
+                return False
         return True
 
     def _fallback_action_for_unavailable(self, action: str, user: dict[str, Any] | None = None) -> str:
@@ -10685,6 +12461,20 @@ Bot 主动后用户回复次数：{reply_count}
             if reason == "insomnia_night":
                 weight += 0.28
             weighted.append(("voice", weight))
+        for ability in self._available_external_proactive_abilities(user):
+            ability_name = str(ability.get("name") or "")
+            if not ability_name:
+                continue
+            probability = max(0.0, min(1.0, _safe_float(ability.get("share_probability"), 0.0)))
+            if probability <= 0:
+                continue
+            when_text = " ".join(str(ability.get(key) or "") for key in ("when", "use_for", "description"))
+            weight = max(0.02, probability) * 0.9
+            if reason in {"activity_share", "diary_share", "background_schedule", "state_share", "quiet_care"}:
+                weight += probability * 0.35
+            if motive and any(token and token in motive for token in re.split(r"[\s,，、/]+", when_text)[:16]):
+                weight += probability * 0.25
+            weighted.append((f"external:{ability_name}", weight))
 
         primary = self._weighted_choice(weighted)
         if primary != "message":
@@ -11340,12 +13130,19 @@ Bot 主动后用户回复次数：{reply_count}
         source = _single_line(news.get("selected_source"), 40)
         impression = _single_line(news.get("impression"), 240)
         link = _single_line(news.get("selected_link"), 400)
+        self_link = news.get("self_link") if isinstance(news.get("self_link"), dict) else {}
+        self_link_text = _single_line(self_link.get("self_link") if isinstance(self_link, dict) else "", 180)
+        self_link_tone = _single_line(news.get("share_tone") or (self_link.get("tone") if isinstance(self_link, dict) else ""), 80)
+        self_link_boundary = _single_line(news.get("share_boundary") or (self_link.get("boundary") if isinstance(self_link, dict) else ""), 160)
         parts = [
             "新闻阅读线索：刚扫过几条新闻,其中一条让自己有点想私下提一句。",
             f"话题：{topic}" if topic else "",
             f"标题：{headline}" if headline else "",
             f"来源：{source}" if source else "",
             f"内部印象：{impression}" if impression else "",
+            f"和自己有关的地方：{self_link_text}" if self_link_text else "",
+            f"表达气质：{self_link_tone}" if self_link_tone else "",
+            f"额外边界：{self_link_boundary}" if self_link_boundary else "",
             f"链接：{link}" if link else "",
             "表达要求：不要像播报新闻,不要夸大或补充未知事实；可以只轻轻提起,也可以按人格吐槽、担心、好奇或转移成日常感受。",
         ]
@@ -11363,12 +13160,19 @@ Bot 主动后用户回复次数：{reply_count}
         source_title = _single_line(exploration.get("source_title"), 120)
         source_url = _single_line(exploration.get("source_url"), 420)
         reason = _single_line(exploration.get("reason"), 140)
+        self_link = exploration.get("self_link") if isinstance(exploration.get("self_link"), dict) else {}
+        self_link_text = _single_line(self_link.get("self_link") if isinstance(self_link, dict) else "", 180)
+        self_link_tone = _single_line(exploration.get("share_tone") or (self_link.get("tone") if isinstance(self_link, dict) else ""), 80)
+        self_link_boundary = _single_line(exploration.get("share_boundary") or (self_link.get("boundary") if isinstance(self_link, dict) else ""), 160)
         parts = [
             "网页探索线索：Bot 刚刚按自己的兴趣主动搜索并了解了一点新东西,这是一条内部探索笔记。",
             f"搜索词：{query}" if query else "",
             f"为什么想查：{reason}" if reason else "",
             f"探索主题：{topic}" if topic else "",
             f"留下的印象：{note}" if note else "",
+            f"和自己有关的地方：{self_link_text}" if self_link_text else "",
+            f"表达气质：{self_link_tone}" if self_link_tone else "",
+            f"额外边界：{self_link_boundary}" if self_link_boundary else "",
             f"参考来源：{source_title}" if source_title else "",
             f"链接：{source_url}" if source_url else "",
             "表达要求：可以像随手分享发现、吐槽、好奇或继续想查；不要说成系统功能,不要编造来源外的信息。",
@@ -11382,6 +13186,7 @@ Bot 主动后用户回复次数：{reply_count}
         if _now_ts() - _safe_float(creative.get("created_ts"), 0) > 8 * 3600:
             return ""
         title = _single_line(creative.get("title"), 50)
+        work_type = _single_line(creative.get("work_type"), 30) or "作品"
         premise = _single_line(creative.get("premise"), 140)
         tone = _single_line(creative.get("tone"), 40)
         source = _single_line(creative.get("source"), 120)
@@ -11389,7 +13194,8 @@ Bot 主动后用户回复次数：{reply_count}
         current_chars = _safe_int(creative.get("current_chars"), 0, 0)
         target_chars = _safe_int(creative.get("target_chars"), 0, 0)
         parts = [
-            "小说创作分享线索：她最近因为生活小事或梦境灵感开了一个小说坑,一直私下慢慢写；现在到了一个适合轻轻提起的小节点。",
+            "创作分享线索：她最近因为生活小事、日记碎片或梦境灵感开了一个自己的文本作品,一直私下慢慢写；现在到了一个适合轻轻提起的小节点。",
+            f"作品类型：{work_type}" if work_type else "",
             f"标题：{title}" if title else "",
             f"设定：{premise}" if premise else "",
             f"灵感来源：{source}" if source else "",
@@ -11774,6 +13580,115 @@ Bot 主动后用户回复次数：{reply_count}
         parts.extend(sorted(component_types))
         return "、".join(part for part in parts if part)
 
+    @staticmethod
+    def _provider_config_value(provider: Any, *keys: str) -> str:
+        config = getattr(provider, "provider_config", None) or getattr(provider, "config", None) or {}
+        for key in keys:
+            value = ""
+            if isinstance(config, dict):
+                value = str(config.get(key, "") or "")
+            else:
+                value = str(getattr(config, key, "") or "")
+            if value.strip():
+                return value.strip()
+        return ""
+
+    def _provider_identity_label(self, provider_id: str = "", provider: Any | None = None) -> str:
+        safe_id = _single_line(provider_id, 120)
+        if provider is None and safe_id:
+            getter = getattr(self.context, "get_provider_by_id", None)
+            if callable(getter):
+                try:
+                    provider = getter(safe_id)
+                except Exception:
+                    provider = None
+        if provider is None:
+            return safe_id or "AstrBot 默认会话模型"
+        name = (
+            self._provider_config_value(provider, "name", "display_name", "provider")
+            or _single_line(getattr(provider, "name", ""), 80)
+        )
+        model = self._provider_config_value(provider, "model", "model_name", "api_model", "model_id")
+        provider_id = safe_id or self._provider_config_value(provider, "id", "provider_id") or _single_line(getattr(provider, "provider_id", ""), 120)
+        pieces = []
+        if name:
+            pieces.append(name)
+        if model and model not in pieces:
+            pieces.append(model)
+        if provider_id and provider_id not in pieces:
+            pieces.append(provider_id)
+        return " / ".join(_single_line(piece, 120) for piece in pieces if piece) or "AstrBot 默认会话模型"
+
+    def _current_event_chat_provider_id(self, event: AstrMessageEvent) -> tuple[str, Any | None]:
+        provider = None
+        provider_id = ""
+        try:
+            provider_id = _single_line(event.get_extra("selected_provider"), 160)
+        except Exception:
+            provider_id = ""
+        getter = getattr(self.context, "get_provider_by_id", None)
+        if provider_id and callable(getter):
+            try:
+                provider = getter(provider_id)
+            except Exception:
+                provider = None
+        if provider is None:
+            get_using = getattr(self.context, "get_using_provider", None)
+            if callable(get_using):
+                umo = str(getattr(event, "unified_msg_origin", "") or "")
+                try:
+                    provider = get_using(umo=umo)
+                except TypeError:
+                    provider = None
+                except Exception:
+                    provider = None
+                for args in ((umo,), ()):
+                    if provider is not None:
+                        break
+                    try:
+                        provider = get_using(*args)
+                        break
+                    except TypeError:
+                        continue
+                    except Exception:
+                        provider = None
+                        break
+        if provider is not None and not provider_id:
+            provider_id = self._provider_config_value(provider, "id", "provider_id") or _single_line(getattr(provider, "provider_id", ""), 160)
+        return provider_id, provider
+
+    def _format_model_perception(self, event: AstrMessageEvent) -> str:
+        if not self.enable_model_perception:
+            return ""
+        lines: list[str] = []
+        chat_provider_id, chat_provider = self._current_event_chat_provider_id(event)
+        lines.append(f"当前对话 LLM：{self._provider_identity_label(chat_provider_id, chat_provider)}")
+        plugin_main = self._task_provider(self.llm_provider_id)
+        if plugin_main:
+            lines.append(f"插件任务主模型覆盖：{self._provider_identity_label(plugin_main)}")
+        else:
+            lines.append("插件任务主模型覆盖：未单独配置,跟随当前会话或 AstrBot 默认模型")
+        task_models = [
+            ("日程", self._task_provider(self.daily_plan_provider_id, self.mai_style_provider_id, self.llm_provider_id)),
+            ("日记/梦境", self._task_provider(self.dream_diary_provider_id, self.mai_style_provider_id, self.llm_provider_id)),
+            ("创作", self._task_provider(self.creative_provider_id, self.mai_style_provider_id, self.llm_provider_id)),
+            ("新闻/搜索整理", self._task_provider(self.news_provider_id, self.web_exploration_provider_id, self.llm_provider_id)),
+        ]
+        task_lines = [f"{name}={self._provider_identity_label(provider_id)}" for name, provider_id in task_models if provider_id]
+        if task_lines:
+            lines.append("插件分项模型：" + "；".join(task_lines[:6]))
+        vision_id, vision_source, _ = self._private_image_caption_provider_id(str(getattr(event, "unified_msg_origin", "") or ""))
+        if vision_id:
+            source_label = {
+                "astrbot_image_caption": "AstrBot 识图模型",
+                "plugin_vision": "插件总视觉模型",
+                "plugin_vision_fallback": "插件总视觉模型兜底",
+            }.get(vision_source, vision_source or "视觉转述模型")
+            lines.append(f"视觉转述模型：{source_label}={self._provider_identity_label(vision_id)}")
+        else:
+            lines.append("视觉转述模型：未配置；遇到需要看图的插件任务会跳过或退回非视觉处理")
+        return "\n".join(lines)
+
     async def _format_environment_perception(self, event: AstrMessageEvent) -> str:
         if not self.enable_environment_perception:
             return ""
@@ -11798,6 +13713,9 @@ Bot 主动后用户回复次数：{reply_count}
         platform = await self._format_platform_perception(event)
         if platform:
             lines.append(f"平台环境：{platform}")
+        model = self._format_model_perception(event)
+        if model:
+            lines.append(f"模型环境：\n{model}")
         return "\n".join(lines)
 
     def _default_proactive_prompt_template(self) -> str:
@@ -11819,7 +13737,8 @@ Bot 主动后用户回复次数：{reply_count}
 14. 不要把用户很久前的请求、邀约、相对时间说法当成此刻正在等你处理的事。除非定时提醒或当前日程明确要求兑现约定,否则旧消息只保留成情绪和关系背景。
 15. 普通主动消息不需要解释自己为什么现在出现,也不要为了接上旧聊天而补一段“刚看到/才看到”的说明；像真实私聊一样,直接从当下能说的话开口。
 16. 如果最近已经主动说过同一件小事,这次不要换壳复述。可以只留一点余味、换到新的具体细节,或者自然转开话题。
-17. 用正常的中文聊天标点把句子写完整。可以短,但不要整段都没有标点,也不要像几个关键词硬挤在一起。
+17. 不要用“哈哈,我也觉得”“确实”“对吧”“是吧”这类附和式开头；主动消息不是在回复用户刚说的话,要直接说自己的观察或念头。
+18. 用正常的中文聊天标点把句子写完整。可以短,但不要整段都没有标点,也不要像几个关键词硬挤在一起。
 
 禁止事项：
 - 不要出现"系统任务""提示词""AI""模型""后台调度""工具调用"等字眼
@@ -11878,7 +13797,8 @@ Bot 主动后用户回复次数：{reply_count}
 14. 不要把用户很久前的请求、邀约、相对时间说法当成此刻正在等你处理的事。除非定时提醒或当前日程明确要求兑现约定,否则旧消息只保留成情绪和关系背景,主动消息要从当前时段自然开口。
 15. 普通主动消息不需要解释自己为什么现在出现,也不要为了接上旧聊天而补一段“刚看到/才看到”的说明；像真实私聊一样,直接从当下能说的话开口。
 16. 如果最近已经主动说过同一件小事,这次不要换壳复述。可以只留一点余味、换到新的具体细节,或者自然转开话题。
-17. 用正常的中文聊天标点把句子写完整。可以短,但不要整段都没有标点,也不要像几个关键词硬挤在一起。
+17. 不要用“哈哈,我也觉得”“确实”“对吧”“是吧”这类附和式开头；主动消息不是在回复用户刚说的话,要直接说自己的观察或念头。
+18. 用正常的中文聊天标点把句子写完整。可以短,但不要整段都没有标点,也不要像几个关键词硬挤在一起。
 
 【禁止事项】
 - 不要出现"系统任务""提示词""AI""模型""后台调度""工具调用"等字眼
@@ -12360,7 +14280,7 @@ Bot 主动后用户回复次数：{reply_count}
         if reason == "jm_cosmos_recommendation_request":
             return "像忽然想找点新的漫画/本子看,于是私下问对方有没有推荐。可以撒娇、嘴硬、坦然或装作随口一问,尺度和反应按人格来。"
         if reason == "creative_share":
-            return "像刚写小说写到一个小片段,有点想给对方看一眼。可以害羞、卡文或吐槽,别像正式投稿。"
+            return "像刚写自己的作品写到一个小片段,有点想给对方看一眼。可以害羞、卡文或吐槽,别像正式投稿。"
         if reason in {"activity_share", "diary_share", "background_schedule"}:
             return "像顺手分享日常小事。讲得具体一点,像‘我跟你说’后面的那半句,不要解释自己为什么发来。"
         if reason in {"quiet_care", "state_share"}:
@@ -12396,11 +14316,11 @@ Bot 主动后用户回复次数：{reply_count}
                 f"{context}\n"
                 "开口方式、尺度和反应都按当前人格来。不要说插件、后台联动、视觉模型或主动任务。"
             )
-        if "小说创作分享线索：" in context:
+        if "创作分享线索：" in context or "小说创作分享线索：" in context:
             return (
-                "你最近因为生活小事或梦境灵感开了一个小说坑,一直按自己的速度私下慢慢写。现在到了一个适合轻轻提起的小节点,想自然说一点。\n"
+                "你最近因为生活小事、日记碎片或梦境灵感开了一个自己的文本作品,一直按自己的速度私下慢慢写。现在到了一个适合轻轻提起的小节点,想自然说一点。\n"
                 f"{context}\n"
-                "如果披露类型是 ask_impression,可以问对方读起来是什么感觉、哪个角色/意象更戳他,把反馈当作灵感参考；不要让用户替你决定接下来怎么写,也不要问“你希望走哪个方向”。否则只分享一小段或一句。不要把整篇写完,不要像定期汇报,不要说模型生成、后台任务或创作系统。"
+                "如果披露类型是 ask_impression,可以问对方读起来是什么感觉、哪个角色、句子或意象更戳他,把反馈当作灵感参考；不要让用户替你决定接下来怎么写,也不要问“你希望走哪个方向”。否则只分享一小段或一句。不要把整篇写完,不要像定期汇报,不要说模型生成、后台任务或创作系统。"
             )
         if "screen_peek" in action:
             return (
@@ -12682,7 +14602,79 @@ Bot 主动后用户回复次数：{reply_count}
                 "summary": "没有读到合适内容",
                 "effective_action": "jm_cosmos_read",
             }
+        if action.startswith("external:"):
+            return await self._execute_external_proactive_ability(action.split(":", 1)[1], user, name, reason)
         return {"success": True, "context": "message：只发送私聊文本", "extra_components": [], "summary": "文字", "effective_action": "message"}
+
+    async def _execute_external_proactive_ability(
+        self,
+        ability_name: str,
+        user: dict[str, Any],
+        display_name: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        name = self._normalize_external_ability_name(ability_name)
+        runtime = self._external_proactive_abilities.get(name)
+        if not isinstance(runtime, dict) or not callable(runtime.get("executor")):
+            return {"success": False, "context": "external：外部主动能力未注册或不可用", "extra_components": [], "summary": "外部能力不可用", "effective_action": "message"}
+        config = self._external_ability_config(name)
+        call_context = {
+            "user": dict(user or {}),
+            "display_name": display_name,
+            "reason": reason,
+            "bot_name": self.bot_name,
+            "state": deepcopy(self.data.get("daily_state", {})),
+            "current_plan_item": deepcopy(self._get_current_plan_item(self.data.get("daily_plan", {})) or {}),
+            "config": config,
+            "plugin": self,
+        }
+        try:
+            result = runtime["executor"](call_context)
+            if hasattr(result, "__await__"):
+                result = await result
+        except Exception as exc:
+            logger.warning("[PrivateCompanion] 外部主动能力执行失败: %s: %s", name, exc, exc_info=True)
+            self._note_external_ability_execution(name, success=False, status=f"执行失败: {exc}")
+            return {"success": False, "context": f"external:{name}：执行失败", "extra_components": [], "summary": "外部能力失败", "effective_action": f"external:{name}"}
+        payload = result if isinstance(result, dict) else {"text": str(result or "")}
+        success = bool(payload.get("ok", payload.get("success", True)))
+        text = _single_line(payload.get("text"), 500)
+        context = str(payload.get("context") or payload.get("summary") or text or "").strip()
+        image_path = str(payload.get("image_path") or "").strip()
+        extra_components = list(payload.get("extra_components") or []) if isinstance(payload.get("extra_components"), list) else []
+        if image_path and os.path.exists(image_path):
+            extra_components.extend(self._build_outbound_chain("", image_path))
+        memory = _single_line(payload.get("memory"), 500)
+        if memory:
+            user.setdefault("external_proactive_memory", [])
+            memories = user.get("external_proactive_memory")
+            if not isinstance(memories, list):
+                memories = []
+                user["external_proactive_memory"] = memories
+            memories.append({"name": name, "ts": _now_ts(), "memory": memory})
+            del memories[:-12]
+        self._note_external_ability_execution(name, success=success, status=_single_line(payload.get("status") or context, 120), summary=_single_line(payload.get("summary") or text, 120))
+        return {
+            "success": success,
+            "context": f"external:{name}：{context or '外部能力已执行'}",
+            "extra_components": extra_components,
+            "summary": _single_line(payload.get("summary") or runtime.get("label") or name, 60),
+            "effective_action": f"external:{name}",
+        }
+
+    def _note_external_ability_execution(self, name: str, *, success: bool, status: str = "", summary: str = "") -> None:
+        try:
+            store = self._external_ability_store()
+            item = store.get(name) if isinstance(store.get(name), dict) else {"name": name}
+            item["last_executed_ts"] = _now_ts()
+            item["last_status"] = status
+            item["last_summary"] = summary
+            item["success_count"] = _safe_int(item.get("success_count"), 0, 0) + (1 if success else 0)
+            item["failure_count"] = _safe_int(item.get("failure_count"), 0, 0) + (0 if success else 1)
+            store[name] = item
+            self._save_data_sync()
+        except Exception:
+            pass
 
     def _is_unusable_screen_peek_context(self, context: str) -> bool:
         text = str(context or "").strip()
@@ -14094,6 +16086,7 @@ Bot 主动后用户回复次数：{reply_count}
                     logger.warning("[PrivateCompanion] 主动分段内容清理正则无效,跳过清理: %s", e)
 
         def _protected_cleanup_chunks(value: str) -> list[tuple[str, bool]]:
+            url_pattern = re.compile(r"(?i)\b(?:https?://|www\.)[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+")
             bracket_pairs = {
                 "(": ")",
                 "（": "）",
@@ -14108,6 +16101,8 @@ Bot 主动后用户回复次数：{reply_count}
             protected = False
             bracket_stack: list[str] = []
             quote_close = ""
+            text_value = str(value or "")
+            last_pos = 0
 
             def flush() -> None:
                 nonlocal current
@@ -14115,40 +16110,68 @@ Bot 主动后用户回复次数：{reply_count}
                     chunks.append(("".join(current), protected))
                     current = []
 
-            for char in str(value or ""):
-                if not protected and char in bracket_pairs:
-                    flush()
-                    protected = True
-                    bracket_stack.append(bracket_pairs[char])
-                    current.append(char)
-                    continue
-                if not protected and char in quote_pairs:
-                    flush()
-                    protected = True
-                    quote_close = quote_pairs[char]
-                    current.append(char)
-                    continue
+            def feed_plain(text_part: str) -> None:
+                nonlocal protected, quote_close
+                for char in text_part:
+                    if not protected and char in bracket_pairs:
+                        flush()
+                        protected = True
+                        bracket_stack.append(bracket_pairs[char])
+                        current.append(char)
+                        continue
+                    if not protected and char in quote_pairs:
+                        flush()
+                        protected = True
+                        quote_close = quote_pairs[char]
+                        current.append(char)
+                        continue
 
-                current.append(char)
-                if protected:
-                    if quote_close:
-                        if char == quote_close:
-                            quote_close = ""
+                    current.append(char)
+                    if protected:
+                        if quote_close:
+                            if char == quote_close:
+                                quote_close = ""
+                                if not bracket_stack:
+                                    flush()
+                                    protected = False
+                        elif char in bracket_pairs:
+                            bracket_stack.append(bracket_pairs[char])
+                        elif bracket_stack and char == bracket_stack[-1]:
+                            bracket_stack.pop()
                             if not bracket_stack:
                                 flush()
                                 protected = False
-                    elif char in bracket_pairs:
-                        bracket_stack.append(bracket_pairs[char])
-                    elif bracket_stack and char == bracket_stack[-1]:
-                        bracket_stack.pop()
-                        if not bracket_stack:
+                        elif char in bracket_closers and not bracket_stack:
                             flush()
                             protected = False
-                    elif char in bracket_closers and not bracket_stack:
-                        flush()
-                        protected = False
+
+            for match in url_pattern.finditer(text_value):
+                feed_plain(text_value[last_pos:match.start()])
+                flush()
+                chunks.append((match.group(0), True))
+                last_pos = match.end()
+            feed_plain(text_value[last_pos:])
             flush()
             return chunks
+
+        def _protect_segmented_urls(value: str) -> tuple[str, dict[str, str]]:
+            url_pattern = re.compile(r"(?i)\b(?:https?://|www\.)[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+")
+            replacements: dict[str, str] = {}
+
+            def repl(match: re.Match[str]) -> str:
+                token = f"PCURLTOKEN{len(replacements)}X"
+                replacements[token] = match.group(0)
+                return token
+
+            return url_pattern.sub(repl, str(value or "")), replacements
+
+        def _restore_segmented_urls(value: str, replacements: dict[str, str]) -> str:
+            restored = str(value or "")
+            for token, original in replacements.items():
+                restored = restored.replace(token, original)
+            return restored
+
+        protected_normalized, protected_urls = _protect_segmented_urls(normalized)
 
         def _clean_segment(segment: str) -> str:
             original = str(segment or "")
@@ -14178,41 +16201,116 @@ Bot 主动后用户回复次数：{reply_count}
                 cleaned += tail_cleaned
             return cleaned
 
+        def _visible_len(value: str) -> int:
+            return len(re.sub(r"\s+", "", str(value or "")))
+
+        def _is_soft_short_segment(value: str) -> bool:
+            cleaned = _single_line(value, 60)
+            if not cleaned:
+                return False
+            body = re.sub(r"[。！？!?…~～,.，、\s]+$", "", cleaned)
+            if _visible_len(cleaned) <= max(1, self.segmented_proactive_min_segment_chars):
+                return True
+            return body in {
+                "哈哈",
+                "哈",
+                "嗯",
+                "唔",
+                "诶",
+                "欸",
+                "啊",
+                "呀",
+                "我也觉得",
+                "确实",
+                "真的",
+                "对吧",
+                "不是",
+                "那个",
+                "还有",
+            }
+
+        def _join_segment_pair(left: str, right: str) -> str:
+            left = str(left or "").strip()
+            right = str(right or "").strip()
+            if not left:
+                return right
+            if not right:
+                return left
+            if re.search(r"[！？!?]$", left):
+                return f"{left} {right}".strip()
+            softened = re.sub(r"[。…~～]+$", "，", left)
+            softened = re.sub(r"[!?！？]+$", "，", softened)
+            if not re.search(r"[，,、\s]$", softened):
+                softened += "，"
+            return f"{softened}{right.lstrip()}"
+
+        def _merge_segments(raw: list[str]) -> list[str]:
+            segments = [str(item or "").strip() for item in raw if str(item or "").strip()]
+            if len(segments) <= 1:
+                return segments
+            min_chars = max(1, _safe_int(getattr(self, "segmented_proactive_min_segment_chars", 8), 8, 1))
+            merged: list[str] = []
+            index = 0
+            while index < len(segments):
+                current = segments[index]
+                while index + 1 < len(segments) and (
+                    _visible_len(current) < min_chars
+                    or _is_soft_short_segment(current)
+                    or (len(merged) >= max(0, self.segmented_proactive_max_segments - 1))
+                ):
+                    current = _join_segment_pair(current, segments[index + 1])
+                    index += 1
+                if merged and (_visible_len(current) < min_chars or _is_soft_short_segment(current)):
+                    merged[-1] = _join_segment_pair(merged[-1], current)
+                else:
+                    merged.append(current)
+                index += 1
+            max_segments = max(1, _safe_int(getattr(self, "segmented_proactive_max_segments", 2), 2, 1))
+            if len(merged) > max_segments:
+                kept = merged[: max_segments - 1]
+                tail = merged[max_segments - 1]
+                for item in merged[max_segments:]:
+                    tail = _join_segment_pair(tail, item)
+                merged = kept + [tail]
+            return merged
+
         if self.segmented_proactive_split_mode == "words":
             split_words = [word for word in self.segmented_proactive_split_words if word]
             if not split_words:
                 return [normalized]
             escaped_words = sorted([re.escape(word) for word in split_words], key=len, reverse=True)
             pattern = re.compile(f"(.*?({'|'.join(escaped_words)})|.+$)", re.DOTALL)
-            raw_segments = pattern.findall(normalized)
+            raw_segments = pattern.findall(protected_normalized)
             segments: list[str] = []
             for segment in raw_segments:
                 content = segment[0] if isinstance(segment, tuple) else segment
                 if not isinstance(content, str):
                     continue
-                cleaned = _clean_segment(content)
+                cleaned = _restore_segmented_urls(_clean_segment(content), protected_urls)
                 if cleaned:
                     segments.append(cleaned)
+            segments = _merge_segments(segments)
             return segments if segments and (len(segments) > 1 or self.enable_segmented_proactive_content_cleanup) else [normalized]
 
         try:
             raw_segments = re.findall(
                 self.segmented_proactive_regex or r".*?[。？！~…\n]+|.+$",
-                normalized,
+                protected_normalized,
                 re.DOTALL | re.MULTILINE,
             )
         except re.error as e:
             logger.warning("[PrivateCompanion] 主动分段正则无效,使用默认规则: %s", e)
-            raw_segments = re.findall(r".*?[。？！~…\n]+|.+$", normalized, re.DOTALL | re.MULTILINE)
+            raw_segments = re.findall(r".*?[。？！~…\n]+|.+$", protected_normalized, re.DOTALL | re.MULTILINE)
 
         segments = []
         for segment in raw_segments:
             content = segment[0] if isinstance(segment, tuple) else segment
             if not isinstance(content, str):
                 continue
-            cleaned = _clean_segment(content)
+            cleaned = _restore_segmented_urls(_clean_segment(content), protected_urls)
             if cleaned:
                 segments.append(cleaned)
+        segments = _merge_segments(segments)
         return segments if segments and (len(segments) > 1 or self.enable_segmented_proactive_content_cleanup) else [normalized]
 
     async def _calc_segmented_proactive_interval(self, text: str) -> float:
@@ -14315,6 +16413,38 @@ Bot 主动后用户回复次数：{reply_count}
             await self._send_chain_components(umo, [Plain(segment)])
             if index < len(segments) - 1:
                 await asyncio.sleep(await self._calc_segmented_proactive_interval(segment))
+
+    @filter.on_decorating_result()
+    async def apply_segmented_llm_reply_scope(self, event: AstrMessageEvent):
+        if not self.enabled:
+            return
+        if not self.enable_segmented_proactive_reply:
+            return
+        if self.segmented_proactive_scope != "all_llm":
+            return
+        result = event.get_result()
+        if result is None or not result.chain or not result.is_llm_result():
+            return
+        if getattr(result, "use_t2i_", None) or getattr(result, "use_markdown_", None):
+            return
+        if str(event.get_platform_name() or "") in {"qq_official", "weixin_official_account", "dingtalk"}:
+            return
+        chain = list(result.chain or [])
+        if not chain or any(not isinstance(comp, Plain) for comp in chain):
+            return
+        text = "".join(str(getattr(comp, "text", "") or "") for comp in chain).strip()
+        if not text:
+            return
+        segments = self._split_proactive_text(text)
+        if len(segments) <= 1:
+            return
+        logger.debug("[PrivateCompanion] 按插件规则分段 LLM 回复: %s -> %s 段", len(text), len(segments))
+        for index, segment in enumerate(segments):
+            await event.send(event.plain_result(segment))
+            if index < len(segments) - 1:
+                await asyncio.sleep(await self._calc_segmented_proactive_interval(segment))
+        event.clear_result()
+        event.stop_event()
 
     def _is_proactive_plan_stale(self, user: dict[str, Any], *, now: float | None = None) -> bool:
         next_at = _safe_float(user.get("next_proactive_at"), 0)
@@ -14556,6 +16686,8 @@ Bot 主动后用户回复次数：{reply_count}
         cleaned = str(text or "").strip()
         if not cleaned:
             return ""
+        cleaned = self._strip_unsupported_proactive_agreement(cleaned)
+        cleaned = self._trim_abrupt_closing_topic_shift(cleaned)
         cleaned = cleaned.replace("！?", "！？").replace("？!", "？！")
         cleaned = re.sub(r"[ \t]+", " ", cleaned)
         raw_units: list[str] = []
@@ -14590,6 +16722,64 @@ Bot 主动后用户回复次数：{reply_count}
         head = normalized[:2]
         tail = "".join(normalized[2:])
         return "\n".join(head + [tail])[:260]
+
+    def _strip_unsupported_proactive_agreement(self, text: str) -> str:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return ""
+        patterns = (
+            r"^(?:哈哈|哈|嘿|嗯嗯|嗯|唔|诶|欸)[，,。.\s]*(?:我也觉得|确实|对吧|是吧|真的)[，,。.\s]*",
+            r"^(?:我也觉得|确实|对吧|是吧|真的)[，,。.\s]*",
+            r"^(?:哈哈|哈)[，,。.\s]*(?=(?:今天|刚刚|刚才|现在|窗外|路上|云|天气|太阳|雨|风))",
+        )
+        for pattern in patterns:
+            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
+        return cleaned or str(text or "").strip()
+
+    def _has_abrupt_closing_topic_shift(self, text: str, *, inbound_text: str = "") -> bool:
+        original = str(text or "").strip()
+        if not original:
+            return False
+        trimmed = self._trim_abrupt_closing_topic_shift(original, inbound_text=inbound_text)
+        return bool(trimmed and trimmed != original)
+
+    def _trim_abrupt_closing_topic_shift(self, text: str, *, inbound_text: str = "") -> str:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return ""
+        units = []
+        for line in cleaned.splitlines():
+            line = line.strip()
+            if line:
+                units.extend(self._split_proactive_sentence_units(line))
+        units = [unit.strip(" ,，、") for unit in units if unit.strip(" ,，、")]
+        if len(units) <= 1:
+            return cleaned
+        inbound = _single_line(inbound_text, 260)
+        inbound_is_sleep_context = bool(re.search(r"(晚安|睡了|睡觉|做梦|好梦|困了|休息|先睡|去睡|早点睡)", inbound))
+        closing_index = -1
+        for index, unit in enumerate(units):
+            if re.search(r"(晚安|好梦|做个梦|做梦|睡吧|睡觉|去睡|早点睡|休息吧|明天见|先不吵你)", unit):
+                closing_index = index
+                break
+        if closing_index < 0 or closing_index >= len(units) - 1:
+            return cleaned
+        tail = "".join(units[closing_index + 1 :])
+        if not tail:
+            return cleaned
+        tail_continues_closing = bool(re.search(r"(梦|睡|晚安|明天|醒来|休息|被窝|枕头|月亮|星星)", tail))
+        if tail_continues_closing and inbound_is_sleep_context:
+            return cleaned
+        abrupt_markers = (
+            "今天", "刚刚", "刚才", "现在", "天气", "云", "太阳", "雨", "风", "作业", "本子",
+            "视频", "新闻", "群里", "书柜", "日程", "吃", "喝", "路上", "窗外", "看到", "觉得",
+        )
+        looks_abrupt = any(marker in tail for marker in abrupt_markers) or len(tail) >= 6
+        if not looks_abrupt:
+            return cleaned
+        kept = units[: closing_index + 1]
+        result = "\n".join(self._ensure_chat_sentence_punctuation(unit) for unit in kept if unit)
+        return result.strip() or cleaned
 
     def _ensure_chat_sentence_punctuation(self, text: str) -> str:
         cleaned = str(text or "").strip()
@@ -18258,6 +20448,151 @@ Bot 主动后用户回复次数：{reply_count}
         updated["last_user_text"] = _single_line(text, 80)
         return updated
 
+    def _mark_sleep_woken_by_group_wakeup(self, text: str, *, wakeup_type: str = "") -> dict[str, Any]:
+        now = _now_ts()
+        runtime = self._sleep_runtime_state()
+        count = _safe_int(runtime.get("woken_count"), 0, 0) + 1
+        updated = self._set_sleep_phase("woken", event="群聊里被提到或被话题轻轻叫醒", source="group_wakeup", now=now)
+        updated["woken_count"] = count
+        updated["last_woken_at"] = now
+        updated["last_group_wakeup_text"] = _single_line(text, 80)
+        updated["last_group_wakeup_type"] = _single_line(wakeup_type, 40)
+        return updated
+
+    def _record_group_wakeup_state_adjustment(
+        self,
+        *,
+        scene: dict[str, Any],
+        text: str,
+        state_note: str,
+        updates: list[str],
+        intensity: str = "轻",
+        carry_rule: str = "群聊唤醒只作为状态和语气背景承接,不要在回复里暴露关键词触发、概率或内部判断。",
+    ) -> None:
+        note = _single_line(state_note, 180)
+        if not note:
+            return
+        raw = self.data.setdefault("schedule_adjustments", [])
+        if not isinstance(raw, list):
+            raw = []
+            self.data["schedule_adjustments"] = raw
+        now = _now_ts()
+        trigger = _single_line(scene.get("trigger"), 40)
+        word = _single_line(scene.get("wakeup_word"), 60)
+        raw.append(
+            {
+                "date": _today_key(),
+                "source": "群聊唤醒",
+                "note": note,
+                "immediate_reaction": _single_line(f"群聊里{('提到“' + word + '”') if word else '出现了可接话契机'},她会按当前状态自然反应。", 140),
+                "state_updates": updates[:5],
+                "user_text": _single_line(text, 120),
+                "intensity": intensity,
+                "scope": "当前段和短时间群聊回复",
+                "carry_rule": carry_rule,
+                "created_at": now,
+                "expires_at": now + (2 * 3600 if intensity == "轻" else 4 * 3600),
+                "trigger": trigger,
+            }
+        )
+        del raw[:-16]
+
+    def _apply_group_wakeup_to_humanized_state(self, scene: dict[str, Any], text: str) -> dict[str, Any]:
+        if not self.enable_humanized_states or not isinstance(scene, dict):
+            return {}
+        trigger = str(scene.get("trigger") or "")
+        if not trigger.startswith("group_wakeup_"):
+            return {}
+        state = self.data.setdefault("daily_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            self.data["daily_state"] = state
+        try:
+            runtime = self._refresh_sleep_runtime_state()
+        except Exception:
+            runtime = self._sleep_runtime_state()
+        phase = str(runtime.get("phase") or "")
+        energy = _safe_int(state.get("energy"), 70, 0, 100)
+        word = _single_line(scene.get("wakeup_word"), 60)
+        wakeup_type = trigger.replace("group_wakeup_", "")
+        strength = _single_line(scene.get("wakeup_strength"), 24) or self._group_wakeup_strength(wakeup_type, {}, scene)
+        strength_label = self._group_wakeup_strength_label(strength)
+        fatigue = scene.get("wakeup_fatigue") if isinstance(scene.get("wakeup_fatigue"), dict) else {}
+        fatigue_label = _single_line(fatigue.get("label"), 20)
+        fatigue_suffix = f"；最近群聊唤醒疲劳为{fatigue_label},回应应更省力" if str(fatigue.get("level") or "") in {"medium", "high"} else ""
+        is_sleep_phase = phase in {"falling_asleep", "light_sleep", "sleeping_again", "woken"} or bool(self._is_sleepy_plan_item(self._get_current_plan_item(self.data.get("daily_plan", {}))))
+        if is_sleep_phase:
+            runtime = self._mark_sleep_woken_by_group_wakeup(text, wakeup_type=wakeup_type)
+            prior = _safe_int(runtime.get("woken_count"), 1, 1)
+            state_note = (
+                "当前处在睡眠/休息段,群聊唤醒把她从睡意里轻轻拽起来；回复应短、慢半拍,带一点刚醒的迷糊。"
+                if prior <= 1
+                else "当前处在睡眠/休息段且已被多次叫醒；回复更应短、慢、半梦半醒,不要突然精神饱满。"
+            ) + fatigue_suffix
+            updates = [
+                "清醒程度：睡眠/休息中被群聊唤醒",
+                "语气：短、轻、慢半拍",
+                "后续安排：群里不继续叫她就继续睡回去",
+                f"唤醒强度：{strength_label}",
+            ]
+            self._record_group_wakeup_state_adjustment(
+                scene=scene,
+                text=text,
+                state_note=state_note,
+                updates=updates,
+                intensity="中",
+                carry_rule="群聊回复必须承接睡眠中被叫醒的感觉；如果后续没有继续对她说话,后续细化应让她继续休息或睡回去。",
+            )
+            return {"note": state_note, "updates": updates, "sleep_phase": runtime.get("label"), "intensity": "中", "strength": strength, "strength_label": strength_label, "fatigue": fatigue}
+        if "interest" in trigger:
+            if energy <= 38:
+                state_note = "当前能量偏低,但群里碰到她感兴趣的话题；会有一点被勾起的精神,仍然不要长篇抢话。"
+                updates = ["兴趣：被群聊话题勾起", "能量：低电量中轻微回亮", "回复策略：短句接话,不抢主导权"]
+            else:
+                state_note = "群里碰到她感兴趣的话题；她可以像被话题勾住一样自然冒头,但仍要尊重原本群聊走向。"
+                updates = ["兴趣：上升", "分享欲：小幅上升", "回复策略：轻轻接话"]
+            state_note += fatigue_suffix
+            updates.append(f"唤醒强度：{strength_label}")
+            self._record_group_wakeup_state_adjustment(scene=scene, text=text, state_note=state_note, updates=updates, intensity="轻")
+            return {"note": state_note, "updates": updates, "interest_word": word, "intensity": "轻", "strength": strength, "strength_label": strength_label, "fatigue": fatigue}
+        if energy <= 38:
+            state_note = "当前能量偏低,群里叫到她时会反应慢一点；可以回应,但应更短、更省力。"
+            updates = ["清醒/注意力：被群里叫回一点", "语气：省力、短句", "主动欲：不额外扩张"]
+        elif energy >= 82:
+            state_note = "当前状态偏有精神,群里叫到她时可以更快接住,但仍不要像主持人一样抢话。"
+            updates = ["注意力：快速转向群聊", "语气：更轻快", "回复策略：自然接一句"]
+        else:
+            state_note = "群里提到她或出现需要她接话的词；她会把注意力从当前日程挪到群聊里,像被自然叫到。"
+            updates = ["注意力：转向群聊", "回复姿态：被叫到后自然接话", "边界：不暴露触发逻辑"]
+        state_note += fatigue_suffix
+        updates.append(f"唤醒强度：{strength_label}")
+        self._record_group_wakeup_state_adjustment(scene=scene, text=text, state_note=state_note, updates=updates, intensity="轻")
+        return {"note": state_note, "updates": updates, "wakeup_word": word, "intensity": "轻", "strength": strength, "strength_label": strength_label, "fatigue": fatigue}
+
+    def _format_group_wakeup_humanized_prompt(self, effect: dict[str, Any] | None, state: dict[str, Any] | None = None) -> str:
+        if not isinstance(effect, dict) or not effect:
+            return ""
+        state = state if isinstance(state, dict) else self.data.get("daily_state", {})
+        energy = _safe_int(state.get("energy") if isinstance(state, dict) else 70, 70, 0, 100)
+        mood = _single_line(state.get("mood_bias"), 40) if isinstance(state, dict) else "平稳"
+        runtime = state.get("sleep_runtime") if isinstance(state, dict) and isinstance(state.get("sleep_runtime"), dict) else {}
+        phase = _single_line(runtime.get("label") or runtime.get("phase"), 40)
+        updates = effect.get("updates") if isinstance(effect.get("updates"), list) else []
+        update_text = "；".join(_single_line(item, 60) for item in updates if _single_line(item, 60))
+        strength_label = _single_line(effect.get("strength_label"), 24)
+        fatigue = effect.get("fatigue") if isinstance(effect.get("fatigue"), dict) else {}
+        fatigue_label = _single_line(fatigue.get("label"), 20)
+        fatigue_line = f"唤醒疲劳：{fatigue_label}（{_safe_float(fatigue.get('value'), 0.0, 0.0):.1f}/{_safe_int(fatigue.get('limit'), 0, 0)}）\n" if fatigue_label else ""
+        return (
+            "【群聊唤醒与当前状态】\n"
+            f"当前状态：能量 {energy}/100｜情绪底色 {mood}" + (f"｜睡眠阶段 {phase}" if phase else "") + "\n"
+            + (f"唤醒强度：{strength_label}\n" if strength_label else "")
+            + fatigue_line
+            + f"唤醒影响：{_single_line(effect.get('note'), 220)}\n"
+            + (f"状态变化：{update_text}\n" if update_text else "")
+            + "回复要求：把这当作真实状态反应来写,不要说关键词、概率、插件、触发规则；在群聊里短一点,像被自然叫到或被话题吸引。"
+        )
+
     def _detect_schedule_adjustment_from_interaction(self, text: str) -> dict[str, Any] | None:
         normalized = _single_line(text, 220)
         if not normalized:
@@ -18855,13 +21190,15 @@ Bot 主动后用户回复次数：{reply_count}
         if not candidates:
             return ""
         project, latest = candidates[0]
+        work_type = self._creative_work_type(project)
         title = _single_line(project.get("title"), 40)
         premise = _single_line(project.get("premise"), 120)
-        progress = f"{_safe_int(project.get('current_chars'), 0, 0)}/{_safe_int(project.get('target_chars'), 2400, 1200, 5200)}"
+        progress = f"{_safe_int(project.get('current_chars'), 0, 0)}/{_safe_int(project.get('target_chars'), 2400, 300, 5200)}"
         snippet = _single_line((latest or {}).get("text"), 180) if isinstance(latest, dict) else ""
         return (
             "【私下创作近况】\n"
-            "用户正在询问你最近在做什么。你可以选择是否提到：你最近因为生活小事/梦境灵感开了一个小说坑,一直在自己慢慢写。\n"
+            "用户正在询问你最近在做什么。你可以选择是否提到：你最近因为生活小事、日记碎片或梦境灵感开了一个自己的文本作品,一直在自己慢慢写。\n"
+            f"作品类型：{work_type}\n"
             f"标题：{title or '未定标题'}\n"
             f"设定：{premise or '还没完全想清楚'}\n"
             f"进度：约 {progress} 字\n"
@@ -19708,7 +22045,7 @@ Bot 主动后用户回复次数：{reply_count}
             ("voice", ("主动语音", "TTS", "语音内容")),
             ("yesterday_summary", ("昨日/最近完整对话", "残留影响", "dream_reference")),
             ("creative_project", ("输出 JSON", "target_chars", "next_hint")),
-            ("creative_writing", ("慢慢写小说", "本次字数上限", "只输出小说正文")),
+            ("creative_writing", ("慢慢写作品", "本次字数上限", "只输出本次片段")),
             ("provider_test", ("请只回复两个字：正常",)),
         )
         for label, markers in rules:
@@ -21783,7 +24120,10 @@ Bot 主动后用户回复次数：{reply_count}
             return
         if not hasattr(req, "system_prompt"):
             return
-        if bool(getattr(event, "private_companion_deferred_private_image_only", False)):
+        if (
+            bool(getattr(event, "private_companion_deferred_private_image_only", False))
+            and not bool(getattr(event, "private_companion_deferred_private_image_only_ready", False))
+        ):
             for attr in ("image_urls", "images"):
                 existing = getattr(req, attr, None)
                 if existing:
@@ -21829,8 +24169,16 @@ Bot 主动后用户回复次数：{reply_count}
                                 "用户刚刚在短时间内连续补充了几句,请把它们当作同一轮完整发言理解,不要逐条回复：\n"
                                 f"{combined_text}"
                             )
+                        wakeup_effect = getattr(event, "private_companion_group_wakeup_state_effect", None)
+                        wakeup_state_text = ""
+                        if isinstance(wakeup_effect, dict) and wakeup_effect:
+                            try:
+                                state = await self._ensure_daily_state()
+                            except Exception:
+                                state = self.data.get("daily_state", {})
+                            wakeup_state_text = "\n\n" + self._format_group_wakeup_humanized_prompt(wakeup_effect, state)
                         req.system_prompt = (
-                            f"{current_prompt}\n\n{marker}\n{self._format_group_context_for_prompt(group, sender_id, str(event.message_str or ''))}{extra}"
+                            f"{current_prompt}\n\n{marker}\n{self._format_group_context_for_prompt(group, sender_id, str(event.message_str or ''))}{wakeup_state_text}{extra}"
                         ).strip()
             await self._append_conditional_tool_instructions_to_request(event, req)
             await self._append_environment_perception_to_request(event, req)
@@ -21863,6 +24211,12 @@ Bot 主动后用户回复次数：{reply_count}
             if isinstance(buffered_image_context, dict)
             else ""
         )
+        delayed_image_vision = _single_line(getattr(event, "private_companion_delayed_image_vision_text", ""), 600)
+        if delayed_image_vision and not buffered_image_vision:
+            buffered_image_vision = delayed_image_vision
+        delayed_image_sources = getattr(event, "private_companion_delayed_image_sources", [])
+        if not buffered_images and isinstance(delayed_image_sources, list):
+            buffered_images = [str(item) for item in delayed_image_sources[:4] if str(item or "").strip()]
         buffered_image_mode = _single_line(buffered_image_context.get("image_mode"), 20) if isinstance(buffered_image_context, dict) else ""
         vision_task = buffered_image_context.get("vision_task") if isinstance(buffered_image_context, dict) else None
         if not buffered_image_vision and isinstance(vision_task, asyncio.Task):
@@ -21910,18 +24264,42 @@ Bot 主动后用户回复次数：{reply_count}
                 )
             elif buffered_image_vision:
                 logger.info("[PrivateCompanion] 私聊延迟图片已注入视觉摘要: user=%s chars=%s", user_id, len(buffered_image_vision))
+                image_context_intro = (
+                    "用户刚刚只发了一张图片,没有继续补充文字。"
+                    if bool(getattr(event, "private_companion_deferred_private_image_only_ready", False))
+                    else "用户刚刚先单独发了一张图片,随后补充了文字。"
+                )
                 injection_parts.append(
                     "【本轮延迟图片】\n"
-                    "用户刚刚先单独发了一张图片,随后补充了文字。下面是视觉模型对刚才那张图的内部摘要；"
+                    f"{image_context_intro}下面是视觉模型对刚才那张图的内部摘要；"
                     "请把它和用户本轮文字一起理解,不要提模型、插件或路径。\n"
+                    f"{buffered_image_vision}"
+                )
+            else:
+                image_context_intro = (
+                    "用户刚刚只发了一张图片,没有继续补充文字。"
+                    if bool(getattr(event, "private_companion_deferred_private_image_only_ready", False))
+                    else "用户刚刚先单独发了一张图片,随后补充了文字。"
+                )
+                injection_parts.append(
+                    "【本轮延迟图片】\n"
+                    f"{image_context_intro}图片已暂存,但视觉转述暂时不可用；"
+                    "如果用户问的是图片内容,请自然说明自己这边暂时没看清,不要编造画面。\n"
+                    + "\n".join(f"- {path}" for path in buffered_images)
+                )
+        elif bool(getattr(event, "private_companion_deferred_private_image_only_ready", False)):
+            if buffered_image_vision:
+                injection_parts.append(
+                    "【本轮延迟图片】\n"
+                    "用户刚刚只发了一张图片,没有继续补充文字。下面是视觉模型对那张图的内部摘要；"
+                    "请自然回应图片内容,不要提模型、插件或处理过程。\n"
                     f"{buffered_image_vision}"
                 )
             else:
                 injection_parts.append(
                     "【本轮延迟图片】\n"
-                    "用户刚刚先单独发了一张图片,随后补充了文字。图片已暂存,但视觉转述暂时不可用；"
-                    "如果用户问的是图片内容,请自然说明自己这边暂时没看清,不要编造画面。\n"
-                    + "\n".join(f"- {path}" for path in buffered_images)
+                    "用户刚刚只发了一张图片,没有继续补充文字。当前没有拿到可用图片内容；"
+                    "请不要沉默,也不要编造画面,可以自然地表示这边暂时没看清并等用户补一句。"
                 )
         hidden_creative_context = self._format_hidden_creative_context_for_reply(inbound_text)
         if hidden_creative_context:
@@ -23036,6 +25414,7 @@ Bot 主动后用户回复次数：{reply_count}
                 if isinstance(buffers, dict) and isinstance(buffers.get(key), dict):
                     persisted_images = await self._persist_private_inbound_images(event, user_id)
                     buffers[key]["images"] = persisted_images
+                    buffers[key]["original_event"] = event
                     direct_image_mode = bool(persisted_images) and self._event_main_provider_supports_image(event)
                     buffers[key]["image_mode"] = "direct" if direct_image_mode else "caption"
                     if persisted_images and not direct_image_mode:
@@ -23126,6 +25505,7 @@ Bot 主动后用户回复次数：{reply_count}
                 self._update_companion_memory_from_message(user, text)
                 self._update_open_loops_from_message(user, text)
                 self._update_action_preferences_from_message(user, text)
+                self._update_user_behavior_habits_from_message(user, text)
                 if self.enable_intent_emotion_analysis:
                     intent_profile = self._analyze_inbound_intent(text)
                     user["intent_profile"] = intent_profile
@@ -23175,6 +25555,7 @@ Bot 主动后用户回复次数：{reply_count}
         registration_payload = None
         continuation: bool | None = False
         scene: dict[str, Any] = {}
+        wakeup_state_effect: dict[str, Any] = {}
         group_for_judge: dict[str, Any] = {}
         active_for_judge: dict[str, Any] = {}
         async with self._data_lock:
@@ -23213,11 +25594,119 @@ Bot 主动后用户回复次数：{reply_count}
                 setattr(event, "is_at_or_wake_command", True)
                 setattr(event, "is_wake", True)
                 scene.update({"trigger": "bot_conversation_followup", "talking_to": "bot", "talking_to_name": "你", "reason": "contextual_followup_after_bot_wake"})
+            elif self.enable_group_wakeup_enhancement and str(scene.get("trigger") or "") == "mention_bot_name":
+                setattr(event, "is_at_or_wake_command", True)
+                setattr(event, "is_wake", True)
+                strength = self._group_wakeup_strength("direct_word", group, scene)
+                fatigue = self._bump_group_wakeup_fatigue(group, "direct_word")
+                scene.update(
+                    {
+                        "trigger": "group_wakeup_direct_word",
+                        "talking_to": "bot",
+                        "talking_to_name": "你",
+                        "reason": "direct_wakeup_word",
+                        "wakeup_word": _single_line(self.bot_name, 60),
+                        "wakeup_strength": strength,
+                        "wakeup_strength_label": self._group_wakeup_strength_label(strength),
+                        "wakeup_fatigue": dict(fatigue),
+                        "wakeup_instruction": "群友提到了你的名字；这不一定是正式提问,要像群聊里被自然叫到一样接话。",
+                    }
+                )
+                group["last_group_wakeup_at"] = _now_ts()
+                group["last_group_wakeup"] = {
+                    "ts": _now_ts(),
+                    "type": "direct_word",
+                    "word": _single_line(self.bot_name, 60),
+                    "strength": strength,
+                    "strength_label": self._group_wakeup_strength_label(strength),
+                    "fatigue": dict(fatigue),
+                    "sender_id": sender_id,
+                    "sender_name": _single_line(sender_name, 40),
+                    "text": _single_line(text, 120),
+                }
+                wakeup_state_effect = self._apply_group_wakeup_to_humanized_state(scene, text)
+                self._record_group_wakeup_log(
+                    group,
+                    scene=scene,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    text=text,
+                    wakeup=group["last_group_wakeup"],
+                    result="woke",
+                    strength=strength,
+                    fatigue=fatigue,
+                    note=_single_line(scene.get("wakeup_instruction"), 180),
+                )
+            else:
+                wakeup = self._evaluate_group_wakeup(
+                    group,
+                    scene=scene,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    text=text,
+                    group_id=group_id,
+                )
+                if wakeup:
+                    setattr(event, "is_at_or_wake_command", True)
+                    setattr(event, "is_wake", True)
+                    strength = _single_line(wakeup.get("strength"), 24) or self._group_wakeup_strength(str(wakeup.get("type") or ""), group, scene)
+                    fatigue = self._bump_group_wakeup_fatigue(group, str(wakeup.get("type") or ""))
+                    scene.update(
+                        {
+                            "trigger": f"group_wakeup_{wakeup.get('type')}",
+                            "talking_to": "bot",
+                            "talking_to_name": "你",
+                            "reason": _single_line(wakeup.get("reason"), 60),
+                            "wakeup_word": _single_line(wakeup.get("word"), 60),
+                            "wakeup_strength": strength,
+                            "wakeup_strength_label": self._group_wakeup_strength_label(strength),
+                            "wakeup_fatigue": dict(fatigue),
+                            "wakeup_instruction": _single_line(wakeup.get("instruction"), 180),
+                        }
+                    )
+                    group["last_group_wakeup_at"] = _now_ts()
+                    group["last_group_wakeup"] = {
+                        "ts": _now_ts(),
+                        "type": _single_line(wakeup.get("type"), 40),
+                        "word": _single_line(wakeup.get("word"), 60),
+                        "strength": strength,
+                        "strength_label": self._group_wakeup_strength_label(strength),
+                        "fatigue": dict(fatigue),
+                        "probability": wakeup.get("probability"),
+                        "topic_weight": wakeup.get("topic_weight") if isinstance(wakeup.get("topic_weight"), dict) else {},
+                        "sender_id": sender_id,
+                        "sender_name": _single_line(sender_name, 40),
+                        "text": _single_line(text, 120),
+                    }
+                    wakeup_state_effect = self._apply_group_wakeup_to_humanized_state(scene, text)
+                    self._record_group_wakeup_log(
+                        group,
+                        scene=scene,
+                        sender_id=sender_id,
+                        sender_name=sender_name,
+                        text=text,
+                        wakeup=group["last_group_wakeup"],
+                        result="woke",
+                        strength=strength,
+                        fatigue=fatigue,
+                        note=_single_line(wakeup.get("instruction"), 180),
+                    )
+                    logger.info(
+                        "[PrivateCompanion] 群聊增强唤醒命中: group=%s sender=%s type=%s word=%s strength=%s fatigue=%s",
+                        group_id,
+                        sender_id,
+                        wakeup.get("type"),
+                        wakeup.get("word"),
+                        strength,
+                        fatigue.get("label"),
+                    )
             talking_to_bot = str(scene.get("talking_to") or "") == "bot"
             setattr(event, "private_companion_group_scene", dict(scene))
             setattr(event, "private_companion_group_sender_name", sender_name)
             setattr(event, "private_companion_group_text", text)
             setattr(event, "private_companion_group_contextual_followup", bool(continuation))
+            if wakeup_state_effect:
+                setattr(event, "private_companion_group_wakeup_state_effect", dict(wakeup_state_effect))
             if (
                 not talking_to_bot
                 and
