@@ -13179,6 +13179,104 @@ Bot 主动后用户回复次数：{reply_count}
         ]
         return "\n".join(part for part in parts if part)
 
+    def _user_asks_news_context(self, inbound_text: str) -> bool:
+        text = str(inbound_text or "").strip()
+        if not text:
+            return False
+        if any(token in text for token in ("新闻", "早报", "热点", "时讯", "资讯", "新消息")):
+            return True
+        lowered = text.lower()
+        return any(token in lowered for token in ("ai news", "llm news", "daily ai", "tech news"))
+
+    def _format_recent_news_context_for_reply(self, inbound_text: str = "") -> str:
+        if not self._user_asks_news_context(inbound_text):
+            return ""
+        state = self.data.get("news_integration") if isinstance(self.data.get("news_integration"), dict) else {}
+        digest = state.get("last_digest") if isinstance(state.get("last_digest"), dict) else {}
+        digests = state.get("digests") if isinstance(state.get("digests"), list) else []
+        latest_items = state.get("latest_items") if isinstance(state.get("latest_items"), list) else []
+        if not digest and not digests and not latest_items:
+            if not self.enable_news_integration:
+                return (
+                    "【新闻阅读上下文】\n"
+                    "用户正在询问今天的新闻/AI 新闻,但新闻阅读功能当前未开启。请自然说明自己这边没有近期新闻记录,不要编造新闻。"
+                )
+            return (
+                "【新闻阅读上下文】\n"
+                "用户正在询问今天的新闻/AI 新闻,但当前还没有可用的新闻阅读记录。请自然说明自己还没读到今天的新闻,不要编造新闻。"
+            )
+        rows: list[str] = []
+        if digest:
+            rows.append(
+                "最近一次整理："
+                + "｜".join(
+                    part
+                    for part in (
+                        _single_line(digest.get("headline") or digest.get("topic"), 120),
+                        _single_line(digest.get("selected_source"), 40),
+                        _single_line(digest.get("impression"), 220),
+                        _single_line(digest.get("selected_link"), 360),
+                    )
+                    if part
+                )
+            )
+        for item in reversed([item for item in digests if isinstance(item, dict)][-4:]):
+            headline = _single_line(item.get("headline") or item.get("topic"), 120)
+            impression = _single_line(item.get("impression"), 180)
+            source = _single_line(item.get("selected_source"), 40)
+            if headline or impression:
+                rows.append("- " + "｜".join(part for part in (headline, source, impression) if part))
+        if latest_items:
+            rows.append("候选标题：")
+            for item in latest_items[:6]:
+                if not isinstance(item, dict):
+                    continue
+                title = _single_line(item.get("title"), 120)
+                source = _single_line(item.get("source"), 40)
+                summary = _single_line(item.get("summary"), 160)
+                if title:
+                    rows.append("- " + "｜".join(part for part in (title, source, summary) if part))
+        return (
+            "【新闻阅读上下文】\n"
+            "用户正在询问今天的新闻/AI 新闻。下面是 Bot 近期真实读过或抓到的新闻记录；回答时只能基于这些内容,不要编造额外新闻。"
+            "可以按人格自然概括,如果记录不够新或不完整,要直接说明。\n"
+            + "\n".join(rows[:12])
+        )
+
+    def _format_news_digest_for_command(self) -> str:
+        state = self.data.get("news_integration") if isinstance(self.data.get("news_integration"), dict) else {}
+        if not self.enable_news_integration:
+            return "新闻阅读功能没有开启。"
+        status = _single_line(state.get("last_status"), 60) or "未知"
+        digest = state.get("last_digest") if isinstance(state.get("last_digest"), dict) else {}
+        latest_items = state.get("latest_items") if isinstance(state.get("latest_items"), list) else []
+        if not digest and not latest_items:
+            return f"这次没有读到可用新闻。\n状态：{status}"
+        lines = ["今日新闻见闻："]
+        if digest:
+            headline = _single_line(digest.get("headline") or digest.get("topic"), 120)
+            source = _single_line(digest.get("selected_source"), 40)
+            impression = _single_line(digest.get("impression"), 260)
+            link = _single_line(digest.get("selected_link"), 420)
+            if headline:
+                lines.append(f"- 重点：{headline}")
+            if source:
+                lines.append(f"- 来源：{source}")
+            if impression:
+                lines.append(f"- 印象：{impression}")
+            if link:
+                lines.append(f"- 链接：{link}")
+        if latest_items:
+            lines.append("候选标题：")
+            for item in latest_items[:6]:
+                if not isinstance(item, dict):
+                    continue
+                title = _single_line(item.get("title"), 100)
+                source = _single_line(item.get("source"), 30)
+                if title:
+                    lines.append(f"- {title}" + (f"（{source}）" if source else ""))
+        return "\n".join(lines)
+
     def _format_creative_share_action_context(self, user: dict[str, Any]) -> str:
         creative = user.get("creative_share_context")
         if not isinstance(creative, dict):
@@ -24310,6 +24408,9 @@ Bot 主动后用户回复次数：{reply_count}
         bookshelf_reading_context = self._format_bookshelf_reading_context_for_reply(inbound_text)
         if bookshelf_reading_context:
             injection_parts.append(bookshelf_reading_context)
+        news_context = self._format_recent_news_context_for_reply(inbound_text)
+        if news_context:
+            injection_parts.append(news_context)
         skill_context = self._format_skill_growth_for_prompt()
         if skill_context:
             injection_parts.append(skill_context)
@@ -24618,6 +24719,7 @@ Bot 主动后用户回复次数：{reply_count}
             "测试本子", "测试书柜本子", "测试夹层本子", "测试夹层阅读", "测试私密阅读",
             "测试QQ空间", "测试空间", "QQ空间测试", "测试说说",
             "发说说", "发QQ空间", "发布说说", "空间发布", "发布空间",
+            "新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报",
         }
 
         is_private = bool(getattr(event, "is_private_chat", lambda: False)())
@@ -24733,6 +24835,8 @@ Bot 主动后用户回复次数：{reply_count}
                 response = "正在测试 QQ 空间动态层：只检查读取能力，不会发布、点赞或评论。"
             elif action in {"发说说", "发QQ空间", "发布说说", "空间发布", "发布空间"}:
                 response = "正在发布 QQ 空间说说。"
+            elif action in {"新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报"}:
+                response = "正在读今天的新闻源。"
             elif action in {"生成日记", "刷新日记"}:
                 response = "正在写今天的日记。"
             elif action in {"日期列表", "重要日期", "日期"}:
@@ -24801,6 +24905,12 @@ Bot 主动后用户回复次数：{reply_count}
             await self._reply(event, response)
             result = await self._test_qzone_integration(event, value)
             await self._reply(event, result)
+            event.stop_event()
+            return
+        if action in {"新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报"}:
+            await self._reply(event, response)
+            await self._perform_news_reading(reason="user_query", allow_share=False, force=True)
+            await self._reply(event, self._format_news_digest_for_command())
             event.stop_event()
             return
         if action in {"测试本子", "测试书柜本子", "测试夹层本子", "测试夹层阅读", "测试私密阅读"}:
