@@ -183,7 +183,7 @@
   "CREATIVE_PROVIDER_ID": {
     "description": "私下创作模型（留空跟随陪伴通用模型）",
     "type": "string",
-    "hint": "用于生成创作项目设定和按人格速度续写正文。作品可以是小说、诗、随笔、剧本、设定集等文本。建议选择文风稳定、能遵守人设身份边界的模型。",
+    "hint": "用于生成创作项目设定和闲暇时的单次正文片段。作品可以是小说、诗、随笔、剧本、设定集等文本。建议选择文风稳定、能遵守人设身份边界的模型。",
     "default": "",
     "_special": "select_provider"
   },
@@ -329,6 +329,50 @@
     },
     "default": 8,
     "condition": "enable_semantic_message_debounce"
+  },
+  "private_image_vision_wait_seconds": {
+    "description": "单图延迟等待识图秒数",
+    "type": "float",
+    "hint": "这不是图片防抖时间；只在确认用户没有补充文字后生效。防抖结束后最多等待识图模型完成的时间，识图完成会立刻进入主链，不会等满该秒数。默认 30 秒；调低则更快进入兜底回复。",
+    "slider": {
+      "min": 0,
+      "max": 90,
+      "step": 1
+    },
+    "default": 30,
+    "condition": "enable_private_image_self_recognition"
+  },
+  "enable_private_image_self_recognition": {
+    "description": "启用图片转述增强",
+    "type": "bool",
+    "hint": "总开关。开启后，私聊单图会先进入图片防抖，确认用户没有补充文字后再等待视觉转述，并额外判断图片、表情包、聊天截图里是否疑似出现 Bot 自己、头像、名字或二创形象。关闭后不拦截私聊单图。",
+    "default": true
+  },
+  "private_image_self_recognition_hint": {
+    "description": "图片转述增强：识别 Bot 自己的线索",
+    "type": "string",
+    "hint": "用于私聊单图防抖后的视觉转述。可填写 Bot 的头像、发色、服装、物种、常见表情包特征、OC 名称、聊天截图昵称等线索；视觉模型会据此判断图里是否疑似是 Bot 自己。留空时仍会使用 Bot 名字和 AstrBot 人格作为基础线索。",
+    "default": "",
+    "condition": "enable_private_image_self_recognition"
+  },
+  "enable_private_image_vision_cache": {
+    "description": "启用重复图片转述缓存",
+    "type": "bool",
+    "hint": "开启后，同一张图片/表情包会按内容哈希复用上次视觉转述摘要，避免重复调用识图模型。只缓存图片摘要，不缓存最终聊天回复。",
+    "default": true,
+    "condition": "enable_private_image_self_recognition"
+  },
+  "private_image_vision_cache_max_items": {
+    "description": "重复图片转述缓存上限",
+    "type": "int",
+    "hint": "最多保留多少条图片视觉摘要缓存。达到上限后会删除最久未命中的旧缓存。设为 0 表示不限制。",
+    "slider": {
+      "min": 0,
+      "max": 2000,
+      "step": 50
+    },
+    "default": 300,
+    "condition": "enable_private_image_vision_cache"
   },
   "enable_group_conversation_followup": {
     "description": "启用群聊连续对话保持",
@@ -497,7 +541,7 @@
   "enable_creative_writing": {
     "description": "启用私下创作行为",
     "type": "bool",
-    "hint": "开启后，Bot 会因为生活小事、日记碎片或梦境余温产生创作灵感，可能写小说、诗、随笔、剧本、设定集等文本，并按人格对应的速度慢慢写，不会一次写完整篇。",
+    "hint": "开启后，Bot 会在闲暇时因为生活小事、日记碎片或梦境余温产生创作灵感，可能写小说、诗、随笔、剧本、设定集等文本；这是可选的私下行为，不会按小时生产，也不会一次写完整篇。",
     "default": true
   },
   "creative_inspiration_probability": {
@@ -528,16 +572,16 @@
       "enable_creative_writing": true
     }
   },
-  "creative_base_chars_per_hour": {
-    "description": "基础写作速度（字/小时）",
+  "creative_chars_per_session": {
+    "description": "每次创作字数",
     "type": "int",
-    "hint": "文本创作的基础行文速度。实际速度会根据人格关键词、聊天风格和当天能量上下浮动。",
+    "hint": "每次闲暇创作行为大约写多少字。实际字数会根据人格关键词、聊天风格和当天能量上下浮动；创作只会在空闲时作为可选行为推进。",
     "slider": {
       "min": 60,
       "max": 1200,
       "step": 20
     },
-    "default": 260,
+    "default": 220,
     "condition": {
       "enable_creative_writing": true
     }
@@ -965,6 +1009,56 @@
       "enable_news_integration": true
     }
   },
+  "enable_ai_daily_watch": {
+    "description": "追踪每日 AI 早报",
+    "type": "bool",
+    "hint": "开启后会在指定时间窗口内反复检查 B 站 AI 早报 UP 主，读到当天新视频后停止。适合发布时间不固定的日报源。",
+    "default": true,
+    "condition": {
+      "enable_news_integration": true
+    }
+  },
+  "ai_daily_source_uid": {
+    "description": "AI 早报 UP 主 UID",
+    "type": "string",
+    "hint": "默认 285286947。插件会读取该 UP 主最新视频，并优先寻找简介里的文字版链接。",
+    "default": "285286947",
+    "condition": {
+      "enable_ai_daily_watch": true
+    }
+  },
+  "ai_daily_check_window": {
+    "description": "AI 早报检查窗口",
+    "type": "string",
+    "hint": "格式 HH:MM-HH:MM。窗口内按间隔轮询，读到当天新视频后当天停止。默认覆盖 8 点到 10 点附近的不固定更新时间。",
+    "default": "07:30-12:30",
+    "condition": {
+      "enable_ai_daily_watch": true
+    }
+  },
+  "ai_daily_check_interval_minutes": {
+    "description": "AI 早报检查间隔分钟",
+    "type": "int",
+    "hint": "窗口内每隔多久检查一次。不要太短，避免频繁访问 B 站。",
+    "slider": {
+      "min": 10,
+      "max": 240,
+      "step": 5
+    },
+    "default": 40,
+    "condition": {
+      "enable_ai_daily_watch": true
+    }
+  },
+  "ai_daily_prefer_text_version": {
+    "description": "AI 早报优先文字版",
+    "type": "bool",
+    "hint": "开启后如果简介里有文字版链接，会优先阅读完整正文。若文字版暂时不可读，会退回视频简介避免完全漏读。",
+    "default": true,
+    "condition": {
+      "enable_ai_daily_watch": true
+    }
+  },
   "news_min_interval_hours": {
     "description": "看新闻最小间隔（小时）",
     "type": "int",
@@ -1214,6 +1308,43 @@
     "default": false,
     "condition": {
       "enable_private_reading_integration": true
+    }
+  },
+  "enable_private_reading_preference_influence": {
+    "description": "评分偏好影响私聊",
+    "type": "bool",
+    "hint": "开启后，当书柜夹层阅读评分样本足够时，会把稳定偏好作为私聊私密互动的弱背景。它不会暴露评分来源，也不会覆盖 AstrBot 人格。",
+    "default": true,
+    "condition": {
+      "enable_private_reading_integration": true
+    }
+  },
+  "private_reading_preference_min_ratings": {
+    "description": "偏好生效最少评分数",
+    "type": "int",
+    "hint": "累计评分达到该数量后，偏好画像才会注入私聊回复，避免一两次评分就过拟合。",
+    "slider": {
+      "min": 1,
+      "max": 30,
+      "step": 1
+    },
+    "default": 5,
+    "condition": {
+      "enable_private_reading_preference_influence": true
+    }
+  },
+  "private_reading_preference_max_terms": {
+    "description": "偏好注入最多词条",
+    "type": "int",
+    "hint": "每次私聊注入最多参考多少个高分偏好词。越多越细，但也会增加上下文和风格偏移。",
+    "slider": {
+      "min": 2,
+      "max": 20,
+      "step": 1
+    },
+    "default": 8,
+    "condition": {
+      "enable_private_reading_preference_influence": true
     }
   },
   "private_reading_min_interval_hours": {
@@ -2672,7 +2803,7 @@
   "segmented_proactive_split_words": {
     "description": "主动分段词列表",
     "type": "list",
-    "hint": "仅在分段模式为 words 时生效；检测到列表中的任意词时切分，并保留分隔符。网址会自动保护，不会因为点号、斜杠或冒号被拆开。",
+    "hint": "仅在分段模式为 words 时生效；检测到列表中的任意词或换行时切分，并保留分隔符。建议一行一个分段词；中文逗号要单独写一行，或写“逗号”。英文点号会把连续 ... 当成一个省略号边界；网址内部会自动保护，完整网址结束处可作为自然断点；括号和引号内容会自动保护。",
     "condition": {
       "segmented_proactive_split_mode": "words"
     },
@@ -2681,7 +2812,8 @@
       "？",
       "！",
       "~",
-      "…"
+      "…",
+      "“"
     ]
   },
   "enable_segmented_proactive_content_cleanup": {

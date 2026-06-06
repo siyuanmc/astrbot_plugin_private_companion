@@ -2751,6 +2751,27 @@ input[type="search"] {
   overflow-wrap: anywhere;
 }
 
+.book-rating-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.book-rating-row span,
+.book-rating-row small {
+  border: 1px solid rgba(89, 71, 111, 0.14);
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #59476f;
+  font-size: 12px;
+}
+
+.book-rating-row b {
+  color: #3f3128;
+}
+
 .book-manage-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2989,6 +3010,218 @@ input[type="search"] {
   padding-top: 10px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.creative-shell {
+  grid-template-columns: 168px minmax(0, 1fr);
+}
+
+.creative-cover.poetry {
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.14), transparent 18px),
+    linear-gradient(180deg, #6f7668, #435d5d);
+}
+
+.creative-cover.script {
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.18), transparent 18px),
+    linear-gradient(180deg, #594c44, #2f3842);
+}
+
+.creative-cover.lore {
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.18), transparent 18px),
+    linear-gradient(180deg, #3f6b61, #2d4b5d);
+}
+
+.creative-cover.essay {
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.14), transparent 18px),
+    linear-gradient(180deg, #8a6748, #6a5148);
+}
+
+.creative-reader-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+  min-width: 0;
+}
+
+.creative-chapter-rail {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: min(540px, calc(100vh - 320px));
+  overflow: auto;
+  border-right: 1px solid rgba(93, 62, 39, 0.14);
+  padding: 2px 12px 2px 0;
+}
+
+.creative-chapter-rail span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.creative-chapter-rail a {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(50, 107, 98, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.64);
+  color: #326b62;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.creative-reader-main {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+}
+
+.creative-reader-chunk {
+  min-width: 0;
+  scroll-margin-top: 18px;
+}
+
+.creative-reader-chunk > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  max-width: 980px;
+  margin: 0 auto 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.creative-reader-chunk > header span {
+  color: #326b62;
+  font-weight: 700;
+}
+
+.creative-content.poetry,
+.creative-content.script,
+.creative-content.lore,
+.creative-content.essay {
+  column-count: 1;
+  column-gap: 0;
+  column-rule: 0;
+}
+
+.creative-content.poetry {
+  display: grid;
+  justify-items: center;
+  max-width: 720px;
+  border: 1px solid rgba(93, 62, 39, 0.11);
+  border-radius: 8px;
+  padding: clamp(24px, 5vw, 56px);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 250, 242, 0.86)),
+    rgba(255, 255, 255, 0.54);
+}
+
+.poem-lines {
+  display: grid;
+  gap: 0.62em;
+  width: min(100%, 520px);
+  color: #364b48;
+  font-size: 17px;
+  line-height: 2.05;
+  text-align: left;
+}
+
+.poem-lines p {
+  margin: 0;
+  color: inherit;
+  text-indent: 0;
+}
+
+.creative-content.script {
+  max-width: 860px;
+  display: grid;
+  gap: 10px;
+  border-left: 3px solid rgba(50, 107, 98, 0.38);
+  padding-left: clamp(14px, 3vw, 28px);
+}
+
+.script-line,
+.script-stage {
+  margin: 0;
+  text-indent: 0;
+}
+
+.script-line {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.22fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  border-bottom: 1px dashed rgba(93, 62, 39, 0.13);
+  padding: 8px 0;
+}
+
+.script-line b {
+  color: #326b62;
+  font-size: 14px;
+}
+
+.script-line span {
+  color: #3f3128;
+}
+
+.script-stage {
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(93, 62, 39, 0.07);
+  color: #6b5545;
+  font-size: 14px;
+}
+
+.creative-content.lore {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  max-width: 980px;
+}
+
+.lore-entry {
+  min-width: 0;
+  border: 1px solid rgba(50, 107, 98, 0.18);
+  border-radius: 8px;
+  padding: 14px;
+  background: rgba(247, 251, 247, 0.74);
+}
+
+.lore-entry b {
+  display: block;
+  margin-bottom: 8px;
+  color: #214f48;
+  font-size: 14px;
+}
+
+.lore-entry p {
+  margin: 0;
+  color: #45544f;
+  font-size: 14px;
+  line-height: 1.78;
+  text-indent: 0;
+  white-space: pre-line;
+}
+
+.creative-content.essay {
+  max-width: 760px;
+  border-left: 3px solid rgba(138, 95, 45, 0.36);
+  padding-left: clamp(16px, 3vw, 30px);
+}
+
+.creative-content.essay p {
+  text-indent: 0;
 }
 
 .diary-reader-shell {
@@ -3373,6 +3606,58 @@ input[type="search"] {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   align-items: start;
+}
+
+.manga-rating-panel {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid rgba(93, 62, 39, 0.16);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: rgba(255, 253, 248, 0.86);
+}
+
+.manga-rating-panel span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.manga-rating-panel b {
+  color: #3f3128;
+}
+
+.manga-rating-panel p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.manga-rating-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.manga-rating-buttons button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(93, 62, 39, 0.2);
+  border-radius: 8px;
+  background: #fff;
+  color: #5c3323;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+}
+
+.manga-rating-buttons button.is-active {
+  border-color: #277a68;
+  background: #e5f3ef;
+  color: #1f6f5f;
 }
 
 .manga-page {
@@ -6197,6 +6482,10 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .creative-shell {
+    grid-template-columns: 1fr;
+  }
+
   .manga-reader-head {
     align-items: stretch;
     flex-direction: column;
@@ -6244,6 +6533,37 @@ pre {
 
   .reader-content {
     padding: 8px 14px 16px;
+  }
+
+  .creative-reader-body {
+    grid-template-columns: 1fr;
+  }
+
+  .creative-chapter-rail {
+    position: static;
+    flex-direction: row;
+    max-height: none;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid rgba(93, 62, 39, 0.14);
+    padding: 0 0 10px;
+  }
+
+  .creative-content.poetry {
+    padding: 22px 16px;
+  }
+
+  .poem-lines {
+    font-size: 15px;
+  }
+
+  .script-line {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .creative-content.lore {
+    grid-template-columns: 1fr;
   }
 
   .manga-page img {

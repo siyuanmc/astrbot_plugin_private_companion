@@ -45,6 +45,7 @@ class PrivateCompanionPageApi:
             ("/bookshelf/image", self.get_bookshelf_image, ["GET"], "Private Companion Page bookshelf image"),
             ("/bookshelf/image_data", self.get_bookshelf_image_data, ["GET"], "Private Companion Page bookshelf image data"),
             ("/bookshelf/delete", self.delete_bookshelf_item, ["POST"], "Private Companion Page delete bookshelf item"),
+            ("/bookshelf/rate", self.rate_bookshelf_item, ["POST"], "Private Companion Page rate bookshelf item"),
             ("/worldbook/import", self.import_worldbook, ["POST"], "Private Companion Page import worldbook"),
             ("/worldbook/member/update", self.update_worldbook_member, ["POST"], "Private Companion Page update worldbook member"),
             ("/worldbook/group/update", self.update_worldbook_group, ["POST"], "Private Companion Page update worldbook group"),
@@ -694,6 +695,52 @@ class PrivateCompanionPageApi:
                 shutil.rmtree(folder, ignore_errors=True)
             except Exception:
                 pass
+
+    async def rate_bookshelf_item(self) -> dict[str, Any]:
+        payload = await request.get_json(silent=True) or {}
+        album_id = self._single_line(payload.get("album_id") or payload.get("id"), 32)
+        rating = self._int(payload.get("rating"))
+        reason = self._single_line(payload.get("reason"), 160)
+        if not album_id:
+            return self._error("缺少 album_id")
+        if rating < 1 or rating > 10:
+            return self._error("评分必须是 1 到 10")
+        try:
+            async with self.plugin._data_lock:
+                items = self.plugin.data.setdefault("bookshelf_items", [])
+                if not isinstance(items, list):
+                    items = []
+                    self.plugin.data["bookshelf_items"] = items
+                target: dict[str, Any] | None = None
+                for item in items:
+                    if not isinstance(item, dict) or item.get("type") != "jm_album":
+                        continue
+                    if str(item.get("album_id") or item.get("id") or "") == album_id:
+                        item["user_rating"] = rating
+                        item["user_rating_reason"] = reason
+                        item["user_rated_ts"] = time.time()
+                        target = item
+                        break
+                state = self.plugin.data.setdefault("jm_cosmos_integration", {})
+                if isinstance(state, dict):
+                    last_album = state.get("last_album")
+                    if isinstance(last_album, dict) and str(last_album.get("id") or last_album.get("album_id") or "") == album_id:
+                        last_album["user_rating"] = rating
+                        last_album["user_rating_reason"] = reason
+                        last_album["user_rated_ts"] = time.time()
+                        if target is None:
+                            target = last_album
+                if target is None:
+                    return self._error("没有找到这本夹层藏书")
+                updater = getattr(self.plugin, "_update_private_reading_preference_profile", None)
+                if callable(updater):
+                    updater(target)
+                self.plugin._save_data_sync()
+                data = deepcopy(self.plugin.data)
+            return self._ok({"bookshelf": await self._bookshelf_summary(data, unlocked=True)})
+        except Exception as exc:
+            logger.error(f"[PrivateCompanionPage] 保存夹层藏书评分失败: {exc}", exc_info=True)
+            return self._error(str(exc))
 
     async def import_worldbook(self) -> dict[str, Any]:
         try:
@@ -1452,7 +1499,7 @@ class PrivateCompanionPageApi:
             "enable_group_scene_awareness",
             "enable_group_reality_promise_guard",
             "enable_group_wakeup_enhancement",
-            "enable_semantic_message_debounce",
+            "enable_private_image_self_recognition",
             "enable_group_conversation_followup",
             "enable_group_interjection",
             "enable_group_repeat_follow",
@@ -1470,6 +1517,7 @@ class PrivateCompanionPageApi:
             "enable_news_integration",
             "enable_news_daily_hot_read",
             "enable_news_boredom_read",
+            "enable_ai_daily_watch",
             "enable_external_event_self_link",
             "enable_web_exploration",
             "enable_web_exploration_boredom_search",
@@ -1478,6 +1526,7 @@ class PrivateCompanionPageApi:
             "enable_private_reading_integration",
             "enable_private_reading_boredom_read",
             "enable_private_reading_ask_recommendation",
+            "enable_private_reading_preference_influence",
             "enable_unanswered_screen_peek_followup",
             "enable_creative_writing",
             "creative_hidden_mode",
@@ -1490,6 +1539,7 @@ class PrivateCompanionPageApi:
         values["enable_private_reading_integration"] = bool(private_reading_available and getattr(self.plugin, "enable_jm_cosmos_integration", False))
         values["enable_private_reading_boredom_read"] = bool(private_reading_available and getattr(self.plugin, "enable_jm_cosmos_boredom_read", False))
         values["enable_private_reading_ask_recommendation"] = bool(private_reading_available and getattr(self.plugin, "enable_private_reading_ask_recommendation", False))
+        values["enable_private_reading_preference_influence"] = bool(private_reading_available and getattr(self.plugin, "enable_private_reading_preference_influence", True))
         return values
 
     def _provider_settings(self) -> dict[str, str]:
@@ -1638,6 +1688,11 @@ class PrivateCompanionPageApi:
             "inbound_message_debounce_seconds",
             "enable_semantic_message_debounce",
             "semantic_message_debounce_seconds",
+            "private_image_vision_wait_seconds",
+            "enable_private_image_self_recognition",
+            "private_image_self_recognition_hint",
+            "enable_private_image_vision_cache",
+            "private_image_vision_cache_max_items",
             "enable_segmented_proactive_reply",
             "segmented_proactive_scope",
             "segmented_proactive_threshold",
@@ -1707,6 +1762,11 @@ class PrivateCompanionPageApi:
             "enable_news_integration",
             "enable_news_boredom_read",
             "enable_news_daily_hot_read",
+            "enable_ai_daily_watch",
+            "ai_daily_source_uid",
+            "ai_daily_check_window",
+            "ai_daily_check_interval_minutes",
+            "ai_daily_prefer_text_version",
             "enable_external_event_self_link",
             "news_min_interval_hours",
             "news_share_probability",
@@ -1729,6 +1789,7 @@ class PrivateCompanionPageApi:
             "enable_private_reading_integration",
             "enable_private_reading_boredom_read",
             "enable_private_reading_ask_recommendation",
+            "enable_private_reading_preference_influence",
             "enable_unanswered_screen_peek_followup",
             "unanswered_screen_peek_after_minutes",
             "unanswered_screen_peek_cooldown_minutes",
@@ -1736,6 +1797,8 @@ class PrivateCompanionPageApi:
             "private_reading_max_photo_count",
             "private_reading_share_probability",
             "private_reading_ask_probability",
+            "private_reading_preference_min_ratings",
+            "private_reading_preference_max_terms",
             "private_reading_default_keywords",
             "private_reading_blocked_tags",
             "enable_unanswered_screen_peek_followup",
@@ -1744,7 +1807,7 @@ class PrivateCompanionPageApi:
             "enable_creative_writing",
             "creative_inspiration_probability",
             "creative_share_probability",
-            "creative_base_chars_per_hour",
+            "creative_chars_per_session",
             "creative_max_active_projects",
             "creative_hidden_mode",
             "enable_worldbook_member_recognition",
@@ -1767,10 +1830,13 @@ class PrivateCompanionPageApi:
                 "enable_private_reading_integration": bool(getattr(self.plugin, "enable_jm_cosmos_integration", False)),
                 "enable_private_reading_boredom_read": bool(getattr(self.plugin, "enable_jm_cosmos_boredom_read", False)),
                 "enable_private_reading_ask_recommendation": bool(getattr(self.plugin, "enable_private_reading_ask_recommendation", False)),
+                "enable_private_reading_preference_influence": bool(getattr(self.plugin, "enable_private_reading_preference_influence", True)),
                 "private_reading_min_interval_hours": getattr(self.plugin, "jm_cosmos_min_interval_hours", 18),
                 "private_reading_max_photo_count": getattr(self.plugin, "jm_cosmos_max_photo_count", 60),
                 "private_reading_share_probability": getattr(self.plugin, "jm_cosmos_share_probability", 0.18),
                 "private_reading_ask_probability": getattr(self.plugin, "private_reading_ask_probability", 0.16),
+                "private_reading_preference_min_ratings": getattr(self.plugin, "private_reading_preference_min_ratings", 5),
+                "private_reading_preference_max_terms": getattr(self.plugin, "private_reading_preference_max_terms", 8),
                 "private_reading_default_keywords": getattr(self.plugin, "jm_cosmos_default_keywords", ""),
                 "private_reading_blocked_tags": getattr(self.plugin, "private_reading_blocked_tags", "連載中,長篇,青年漫"),
                 "group_repeat_follow_probability": int(round(float(getattr(self.plugin, "group_repeat_follow_probability", 0.18) or 0) * 100)),
@@ -2063,10 +2129,13 @@ class PrivateCompanionPageApi:
             "enable_private_reading_integration": "enable_jm_cosmos_integration",
             "enable_private_reading_boredom_read": "enable_jm_cosmos_boredom_read",
             "enable_private_reading_ask_recommendation": "enable_private_reading_ask_recommendation",
+            "enable_private_reading_preference_influence": "enable_private_reading_preference_influence",
             "private_reading_min_interval_hours": "jm_cosmos_min_interval_hours",
             "private_reading_max_photo_count": "jm_cosmos_max_photo_count",
             "private_reading_share_probability": "jm_cosmos_share_probability",
             "private_reading_ask_probability": "private_reading_ask_probability",
+            "private_reading_preference_min_ratings": "private_reading_preference_min_ratings",
+            "private_reading_preference_max_terms": "private_reading_preference_max_terms",
             "private_reading_default_keywords": "jm_cosmos_default_keywords",
             "private_reading_blocked_tags": "private_reading_blocked_tags",
         }
@@ -2166,7 +2235,7 @@ class PrivateCompanionPageApi:
             "enable_forward_message_adaptation",
             "enable_group_reality_promise_guard",
             "enable_group_wakeup_enhancement",
-            "enable_semantic_message_debounce",
+            "enable_private_image_self_recognition",
             "enable_group_conversation_followup",
             "enable_group_interjection",
             "enable_group_repeat_follow",
@@ -2186,6 +2255,11 @@ class PrivateCompanionPageApi:
             "enable_news_integration",
             "enable_news_boredom_read",
             "enable_news_daily_hot_read",
+            "enable_ai_daily_watch",
+            "ai_daily_source_uid",
+            "ai_daily_check_window",
+            "ai_daily_check_interval_minutes",
+            "ai_daily_prefer_text_version",
             "enable_external_event_self_link",
             "enable_web_exploration",
             "enable_web_exploration_boredom_search",
@@ -2194,6 +2268,7 @@ class PrivateCompanionPageApi:
             "enable_private_reading_integration",
             "enable_private_reading_boredom_read",
             "enable_private_reading_ask_recommendation",
+            "enable_private_reading_preference_influence",
             "enable_unanswered_screen_peek_followup",
             "enable_creative_writing",
             "creative_hidden_mode",
@@ -2255,6 +2330,11 @@ class PrivateCompanionPageApi:
             "inbound_message_debounce_seconds",
             "enable_semantic_message_debounce",
             "semantic_message_debounce_seconds",
+            "private_image_vision_wait_seconds",
+            "enable_private_image_self_recognition",
+            "private_image_self_recognition_hint",
+            "enable_private_image_vision_cache",
+            "private_image_vision_cache_max_items",
             "enable_segmented_proactive_reply",
             "segmented_proactive_scope",
             "segmented_proactive_threshold",
@@ -2351,6 +2431,8 @@ class PrivateCompanionPageApi:
             "private_reading_max_photo_count",
             "private_reading_share_probability",
             "private_reading_ask_probability",
+            "private_reading_preference_min_ratings",
+            "private_reading_preference_max_terms",
             "private_reading_default_keywords",
             "private_reading_blocked_tags",
             "enable_unanswered_screen_peek_followup",
@@ -2359,7 +2441,7 @@ class PrivateCompanionPageApi:
             "enable_creative_writing",
             "creative_inspiration_probability",
             "creative_share_probability",
-            "creative_base_chars_per_hour",
+            "creative_chars_per_session",
             "creative_max_active_projects",
             "creative_hidden_mode",
             "enable_worldbook_member_recognition",
@@ -2383,6 +2465,8 @@ class PrivateCompanionPageApi:
         if key == "worldbook_config_paths":
             return str(value or "").strip()[:1000]
         if key in {"group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords"}:
+            return str(value or "").strip()[:1200]
+        if key == "private_image_self_recognition_hint":
             return str(value or "").strip()[:1200]
         if key == "worldview_adaptation_mode":
             mode = str(value or "auto").strip()
@@ -2426,6 +2510,10 @@ class PrivateCompanionPageApi:
                     return "\n"
                 if lowered in {"<tab>", "{tab}", "[tab]", "\\t", "tab"}:
                     return "\t"
+                if lowered in {"<comma>", "{comma}", "[comma]", "comma", "英文逗号"}:
+                    return ","
+                if lowered in {"<zh_comma>", "{zh_comma}", "[zh_comma]", "zh_comma", "中文逗号", "逗号"}:
+                    return "，"
                 if text and text.isspace():
                     return text[:1]
                 return stripped
@@ -2433,7 +2521,9 @@ class PrivateCompanionPageApi:
             if isinstance(value, list):
                 words = [_decode_segmented_word(item) for item in value]
             else:
-                words = [_decode_segmented_word(part) for part in re.split(r"[\n,，、]+", str(value or ""))]
+                raw_words = str(value or "")
+                parts = re.split(r"\r?\n", raw_words) if ("\n" in raw_words or "\r" in raw_words) else re.split(r"[,、]+", raw_words)
+                words = [_decode_segmented_word(part) for part in parts]
             words = [word for word in words if word != ""]
             return words[:80]
         if key in {"segmented_proactive_regex", "segmented_proactive_content_cleanup_rule"}:
@@ -2487,19 +2577,23 @@ class PrivateCompanionPageApi:
             "news_min_interval_hours",
             "news_max_items_per_source",
             "news_hot_max_items",
+            "ai_daily_check_interval_minutes",
             "external_event_self_link_cooldown_hours",
             "web_exploration_min_interval_hours",
             "web_exploration_max_results",
             "qzone_life_publish_min_interval_hours",
             "private_reading_min_interval_hours",
             "private_reading_max_photo_count",
+            "private_reading_preference_min_ratings",
+            "private_reading_preference_max_terms",
             "unanswered_screen_peek_after_minutes",
             "unanswered_screen_peek_cooldown_minutes",
-            "creative_base_chars_per_hour",
+            "creative_chars_per_session",
             "creative_max_active_projects",
             "worldbook_member_inject_limit",
             "atrelay_member_cache_minutes",
             "atrelay_multi_target_limit",
+            "private_image_vision_cache_max_items",
         }:
             try:
                 return max(0, int(value))
@@ -2521,6 +2615,11 @@ class PrivateCompanionPageApi:
                 return max(0.0, min(15.0, float(value)))
             except (TypeError, ValueError):
                 return 8.0
+        if key == "private_image_vision_wait_seconds":
+            try:
+                return max(0.0, min(90.0, float(value)))
+            except (TypeError, ValueError):
+                return 30.0
         if key in {
             "group_repeat_follow_probability",
             "group_repeat_interrupt_probability",
@@ -2570,6 +2669,8 @@ class PrivateCompanionPageApi:
             "enable_news_integration",
             "enable_news_boredom_read",
             "enable_news_daily_hot_read",
+            "enable_ai_daily_watch",
+            "ai_daily_prefer_text_version",
             "enable_external_event_self_link",
             "enable_web_exploration",
             "enable_web_exploration_boredom_search",
@@ -2578,6 +2679,7 @@ class PrivateCompanionPageApi:
             "enable_private_reading_integration",
             "enable_private_reading_boredom_read",
             "enable_private_reading_ask_recommendation",
+            "enable_private_reading_preference_influence",
             "enable_unanswered_screen_peek_followup",
             "enable_creative_writing",
             "creative_hidden_mode",
@@ -2602,6 +2704,8 @@ class PrivateCompanionPageApi:
             "forward_message_parse_nested",
             "forward_message_image_vision",
             "enable_semantic_message_debounce",
+            "enable_private_image_self_recognition",
+            "enable_private_image_vision_cache",
             "enable_segmented_proactive_reply",
             "enable_segmented_proactive_content_cleanup",
             "enable_humanized_states",
@@ -2771,6 +2875,8 @@ class PrivateCompanionPageApi:
         state = data.get("news_integration") if isinstance(data.get("news_integration"), dict) else {}
         digest = state.get("last_digest") if isinstance(state.get("last_digest"), dict) else {}
         latest_items = state.get("latest_items") if isinstance(state.get("latest_items"), list) else []
+        ai_daily = state.get("ai_daily") if isinstance(state.get("ai_daily"), dict) else {}
+        ai_digest = ai_daily.get("last_digest") if isinstance(ai_daily.get("last_digest"), dict) else {}
         try:
             source_count = len(getattr(self.plugin, "_news_source_items", lambda: [])())
         except Exception:
@@ -2779,9 +2885,20 @@ class PrivateCompanionPageApi:
             "enabled": bool(getattr(self.plugin, "enable_news_integration", False)),
             "boredom_read_enabled": bool(getattr(self.plugin, "enable_news_boredom_read", False)),
             "daily_hot_enabled": bool(getattr(self.plugin, "enable_news_daily_hot_read", False)),
+            "ai_daily_enabled": bool(getattr(self.plugin, "enable_ai_daily_watch", False)),
             "source_count": source_count,
             "last_read_at": self.plugin._format_timestamp_elapsed(state.get("last_read_at", 0)),
             "last_status": self._single_line(state.get("last_status"), 80),
+            "ai_daily": {
+                "status": self._single_line(ai_daily.get("status"), 80),
+                "date": self._single_line(ai_daily.get("date"), 20),
+                "last_checked_at": self.plugin._format_timestamp_elapsed(ai_daily.get("last_checked_at", 0)),
+                "last_success_date": self._single_line(ai_daily.get("last_success_date"), 20),
+                "last_video_title": self._single_line(ai_daily.get("last_video_title"), 120),
+                "last_text_link": self._single_line(ai_daily.get("last_text_link"), 400),
+                "topic": self._single_line(ai_digest.get("topic"), 60),
+                "headline": self._single_line(ai_digest.get("headline"), 120),
+            },
             "last_digest": {
                 "topic": self._single_line(digest.get("topic"), 60),
                 "headline": self._single_line(digest.get("headline"), 120),
@@ -2887,7 +3004,22 @@ class PrivateCompanionPageApi:
             )
         web_state = data.get("web_exploration") if isinstance(data.get("web_exploration"), dict) else {}
         web_notes = web_state.get("notes") if isinstance(web_state.get("notes"), list) else []
-        for item in [note for note in web_notes if isinstance(note, dict)]:
+        web_items = [note for note in web_notes if isinstance(note, dict)]
+        last_digest = web_state.get("last_digest") if isinstance(web_state.get("last_digest"), dict) else {}
+        if last_digest:
+            last_key = "|".join(
+                self._single_line(last_digest.get(key), 120)
+                for key in ("query", "topic", "created_ts")
+            )
+            if not any(
+                "|".join(
+                    self._single_line(item.get(key), 120)
+                    for key in ("query", "topic", "created_ts")
+                ) == last_key
+                for item in web_items
+            ):
+                web_items.append(last_digest)
+        for item in web_items:
             topic = self._single_line(item.get("topic"), 100)
             query = self._single_line(item.get("query"), 100)
             note = self._single_line(
@@ -2982,6 +3114,8 @@ class PrivateCompanionPageApi:
                 "id": self._single_line(album.get("id"), 32),
                 "title": self._single_line(album.get("title"), 100),
                 "impression": self._single_line(album.get("impression"), 160),
+                "rating": self._int(album.get("rating")),
+                "user_rating": self._int(album.get("user_rating")),
             },
         }
 
@@ -3043,6 +3177,12 @@ class PrivateCompanionPageApi:
                     "impression": last_album.get("impression"),
                     "reading_impression": last_album.get("reading_impression") or last_album.get("impression"),
                     "vision": last_album.get("vision"),
+                    "rating": last_album.get("rating"),
+                    "rating_reason": last_album.get("rating_reason"),
+                    "user_rating": last_album.get("user_rating"),
+                    "user_rating_reason": last_album.get("user_rating_reason"),
+                    "user_rated_ts": last_album.get("user_rated_ts"),
+                    "preference_tags": last_album.get("preference_tags") if isinstance(last_album.get("preference_tags"), list) else [],
                     "page_comments": last_album.get("page_comments") if isinstance(last_album.get("page_comments"), list) else [],
                     "image_count": last_album.get("image_count"),
                     "pages": last_album.get("pages") if isinstance(last_album.get("pages"), list) else [],
@@ -3059,6 +3199,15 @@ class PrivateCompanionPageApi:
                 for chunk in chunks
                 if isinstance(chunk, dict) and self._single_line(chunk.get("text"), 2000)
             )
+            chunk_entries = [
+                {
+                    "index": index + 1,
+                    "text": self._single_line(chunk.get("text"), 2000),
+                    "created": self.plugin._format_timestamp_elapsed(chunk.get("created_ts", 0) or chunk.get("created_at", 0)),
+                }
+                for index, chunk in enumerate(chunks)
+                if isinstance(chunk, dict) and self._single_line(chunk.get("text"), 2000)
+            ]
             status = self._single_line(item.get("status"), 24)
             progress = f"{self._int(item.get('current_chars'))}/{self._int(item.get('target_chars')) or '-'} 字"
             public_books.append(
@@ -3074,6 +3223,7 @@ class PrivateCompanionPageApi:
                     "point_of_view": self._single_line(item.get("point_of_view"), 40) or "第三人称有限视角",
                     "progress": progress,
                     "content": full_text or self._single_line(chunks[-1].get("text") if chunks else "", 2000) or "这本书还没有正文。",
+                    "chunks": chunk_entries,
                     "created": self.plugin._format_timestamp_elapsed(item.get("created_at", 0)),
                 }
             )
@@ -3132,6 +3282,10 @@ class PrivateCompanionPageApi:
                 pages = item.get("pages") if isinstance(item.get("pages"), list) else []
                 reading_impression = self._single_line(item.get("reading_impression") or item.get("impression"), 1000)
                 vision_impression = self._single_line(item.get("vision"), 1000)
+                bot_rating = self._int(item.get("rating"))
+                user_rating = self._int(item.get("user_rating"))
+                rating_reason = self._single_line(item.get("rating_reason"), 180)
+                user_rating_reason = self._single_line(item.get("user_rating_reason"), 180)
                 album_description = self._single_line(
                     item.get("description")
                     or item.get("intro")
@@ -3197,6 +3351,11 @@ class PrivateCompanionPageApi:
                         "title": self._single_line(item.get("title"), 100) or "未命名藏书",
                         "intro": self._single_line(album_description, 600),
                         "reading_impression": reading_impression or vision_impression,
+                        "rating": bot_rating,
+                        "rating_reason": rating_reason,
+                        "user_rating": user_rating,
+                        "user_rating_reason": user_rating_reason,
+                        "user_rated": bool(user_rating),
                         "author": self._single_line(item.get("author"), 40),
                         "progress": f"{len(page_items) or self._int(item.get('image_count')) or self._int(item.get('photo_count'))} 页",
                         "created": self.plugin._format_timestamp_elapsed(item.get("created_ts", 0)),
@@ -3204,6 +3363,9 @@ class PrivateCompanionPageApi:
                             part
                             for part in (
                                 f"读后感：{reading_impression}" if reading_impression else "",
+                                f"Bot 评分：{bot_rating}/10" if bot_rating else "",
+                                f"用户评分：{user_rating}/10" if user_rating else "",
+                                f"评分理由：{user_rating_reason or rating_reason}" if (user_rating_reason or rating_reason) else "",
                                 f"画面记录：{vision_impression}" if vision_impression and vision_impression != reading_impression else "",
                                 f"关键词：{self._single_line(item.get('keyword'), 80)}" if self._single_line(item.get("keyword"), 80) else "",
                             )
@@ -3212,6 +3374,11 @@ class PrivateCompanionPageApi:
                         "tags": [self._single_line(tag, 24) for tag in item.get("tags", [])[:8] if self._single_line(tag, 24)]
                         if isinstance(item.get("tags"), list)
                         else [],
+                        "preference_tags": [
+                            self._single_line(tag, 24)
+                            for tag in (item.get("preference_tags") if isinstance(item.get("preference_tags"), list) else [])[:8]
+                            if self._single_line(tag, 24)
+                        ],
                         "cover_src": cover_src,
                         "pages": page_items,
                         "page_comments": [

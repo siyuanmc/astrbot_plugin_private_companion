@@ -109,6 +109,8 @@ from .planning import (
 
 _private_companion_plugin: Any | None = None
 
+DEFAULT_AI_DAILY_NEWS_SOURCE = "B站 AI早报|bilibili:285286947"
+
 DEFAULT_NEWS_SOURCES = "\n".join(
     [
         "BBC中文|https://feeds.bbci.co.uk/zhongwen/simp/rss.xml",
@@ -117,7 +119,7 @@ DEFAULT_NEWS_SOURCES = "\n".join(
         "Hacker News|https://hnrss.org/frontpage",
         "MIT Technology Review|https://www.technologyreview.com/feed/",
         "Ars Technica|https://feeds.arstechnica.com/arstechnica/index",
-        "B站 AI早报|bilibili:285286947",
+        DEFAULT_AI_DAILY_NEWS_SOURCE,
     ]
 )
 
@@ -296,7 +298,7 @@ class _CapturedSendMessageCall:
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "2.8.1",
+    "2.9.0",
 )
 class PrivateCompanionPlugin(Star):
     @staticmethod
@@ -332,6 +334,10 @@ class PrivateCompanionPlugin(Star):
         self.inbound_message_debounce_seconds = self._cfg_float(c, "inbound_message_debounce_seconds", 3.0, 0.0)
         self.enable_semantic_message_debounce = self._cfg_bool(c, "enable_semantic_message_debounce", True)
         self.semantic_message_debounce_seconds = self._cfg_float(c, "semantic_message_debounce_seconds", 8.0, 0.0)
+        self.private_image_vision_wait_seconds = self._cfg_float(c, "private_image_vision_wait_seconds", 30.0, 0.0)
+        self.enable_private_image_self_recognition = self._cfg_bool(c, "enable_private_image_self_recognition", True)
+        self.enable_private_image_vision_cache = self._cfg_bool(c, "enable_private_image_vision_cache", True)
+        self.private_image_vision_cache_max_items = self._cfg_int(c, "private_image_vision_cache_max_items", 300, 0, 3000)
         self.enable_group_conversation_followup = self._cfg_bool(c, "enable_group_conversation_followup", True)
         self.group_conversation_followup_seconds = self._cfg_int(c, "group_conversation_followup_seconds", 120, 0, 600)
         self.group_conversation_followup_max_turns = self._cfg_int(c, "group_conversation_followup_max_turns", 1, 0, 10)
@@ -371,6 +377,7 @@ class PrivateCompanionPlugin(Star):
         self.daily_plan_prompt = self._cfg_str(c, "daily_plan_prompt", "")
         self.schedule_persona_prompt = self._cfg_str(c, "schedule_persona_prompt", "")
         self.schedule_worldview_prompt = self._cfg_str(c, "schedule_worldview_prompt", "")
+        self.private_image_self_recognition_hint = self._cfg_str(c, "private_image_self_recognition_hint", "")
         self.daily_plan_item_count = self._cfg_int(c, "daily_plan_item_count", 10, 5, 16)
         self.enable_humanized_states = self._cfg_bool(c, "enable_humanized_states", True)
         self.enable_cycle_state = self._cfg_bool(c, "enable_cycle_state", True)
@@ -402,7 +409,14 @@ class PrivateCompanionPlugin(Star):
         self.enable_creative_writing = self._cfg_bool(c, "enable_creative_writing", True)
         self.creative_inspiration_probability = min(1.0, self._cfg_float(c, "creative_inspiration_probability", 0.20, 0.0))
         self.creative_share_probability = min(1.0, self._cfg_float(c, "creative_share_probability", 0.28, 0.0))
-        self.creative_base_chars_per_hour = self._cfg_int(c, "creative_base_chars_per_hour", 260, 60, 1200)
+        self.creative_chars_per_session = self._cfg_int(
+            c,
+            "creative_chars_per_session",
+            self._cfg_int(c, "creative_base_chars_per_hour", 220, 60, 1200),
+            60,
+            1200,
+        )
+        self.creative_base_chars_per_hour = self.creative_chars_per_session
         self.creative_max_active_projects = self._cfg_int(c, "creative_max_active_projects", 2, 1, 5)
         self.creative_hidden_mode = self._cfg_bool(c, "creative_hidden_mode", True)
         self.creative_provider_id = self._cfg_str(c, "CREATIVE_PROVIDER_ID", "")
@@ -423,8 +437,8 @@ class PrivateCompanionPlugin(Star):
         if self.segmented_proactive_split_mode not in {"regex", "words"}:
             self.segmented_proactive_split_mode = "regex"
         self.segmented_proactive_regex = str(c.get("segmented_proactive_regex", r".*?[。？！~…\n]+|.+$"))
-        split_words = c.get("segmented_proactive_split_words", ["。", "？", "！", "~", "…"])
-        self.segmented_proactive_split_words = [str(item) for item in split_words] if isinstance(split_words, list) else ["。", "？", "！", "~", "…"]
+        split_words = c.get("segmented_proactive_split_words", ["。", "？", "！", "~", "…", "“"])
+        self.segmented_proactive_split_words = [str(item) for item in split_words] if isinstance(split_words, list) else ["。", "？", "！", "~", "…", "“"]
         self.enable_segmented_proactive_content_cleanup = self._cfg_bool(c, "enable_segmented_proactive_content_cleanup", False)
         self.segmented_proactive_content_cleanup_rule = str(c.get("segmented_proactive_content_cleanup_rule", r"[\n]"))
         cleanup_words = c.get("segmented_proactive_content_cleanup_words", ["\n"])
@@ -627,6 +641,11 @@ class PrivateCompanionPlugin(Star):
         self.news_max_items_per_source = self._cfg_int(c, "news_max_items_per_source", 5, 1, 20)
         self.news_hot_sources = self._cfg_str(c, "news_hot_sources", self._cfg_str(c, "hot_trend_sources", "weibo,hackernews"))
         self.news_hot_max_items = self._cfg_int(c, "news_hot_max_items", self._cfg_int(c, "hot_trend_max_items", 12, 3, 30), 3, 30)
+        self.enable_ai_daily_watch = self._cfg_bool(c, "enable_ai_daily_watch", True)
+        self.ai_daily_source_uid = re.sub(r"\D+", "", self._cfg_str(c, "ai_daily_source_uid", "285286947")) or "285286947"
+        self.ai_daily_check_window = self._cfg_str(c, "ai_daily_check_window", "07:30-12:30")
+        self.ai_daily_check_interval_minutes = self._cfg_int(c, "ai_daily_check_interval_minutes", 40, 10, 240)
+        self.ai_daily_prefer_text_version = self._cfg_bool(c, "ai_daily_prefer_text_version", True)
         self.news_sources = self._cfg_str(
             c,
             "news_sources",
@@ -634,6 +653,8 @@ class PrivateCompanionPlugin(Star):
         )
         if str(self.news_sources or "").strip() in {LEGACY_DEFAULT_NEWS_SOURCES, PREVIOUS_TECH_DEFAULT_NEWS_SOURCES}:
             self.news_sources = DEFAULT_NEWS_SOURCES
+        elif "285286947" not in str(self.news_sources or "") and "bilibili:285286947" not in str(self.news_sources or ""):
+            self.news_sources = f"{str(self.news_sources or '').strip()}\n{DEFAULT_AI_DAILY_NEWS_SOURCE}".strip()
         self.news_provider_id = self._cfg_str(c, "NEWS_PROVIDER_ID", "")
         self.enable_web_exploration = self._cfg_bool(c, "enable_web_exploration", False)
         self.enable_web_exploration_boredom_search = self._cfg_bool(c, "enable_web_exploration_boredom_search", True)
@@ -691,6 +712,25 @@ class PrivateCompanionPlugin(Star):
         self.private_reading_ask_probability = min(
             1.0,
             self._cfg_float(c, "private_reading_ask_probability", 0.16, 0.0),
+        )
+        self.enable_private_reading_preference_influence = self._cfg_bool(
+            c,
+            "enable_private_reading_preference_influence",
+            True,
+        )
+        self.private_reading_preference_min_ratings = self._cfg_int(
+            c,
+            "private_reading_preference_min_ratings",
+            5,
+            1,
+            30,
+        )
+        self.private_reading_preference_max_terms = self._cfg_int(
+            c,
+            "private_reading_preference_max_terms",
+            8,
+            2,
+            20,
         )
         self.jm_cosmos_default_keywords = self._cfg_str(
             c,
@@ -1859,12 +1899,83 @@ class PrivateCompanionPlugin(Star):
         data = getattr(comp, "data", None)
         if not isinstance(data, dict):
             data = comp.get("data") if isinstance(comp, dict) and isinstance(comp.get("data"), dict) else {}
-        for attr in ("path", "file", "url"):
-            value = data.get(attr) if attr in data else getattr(comp, attr, None)
+        candidates: list[Any] = []
+        for source in (data, comp if isinstance(comp, dict) else None):
+            if not isinstance(source, dict):
+                continue
+            nested = source.get("data")
+            if isinstance(nested, dict):
+                candidates.append(nested)
+            candidates.append(source)
+        attrs = (
+            "path",
+            "file",
+            "url",
+            "image_path",
+            "file_path",
+            "local_path",
+            "origin_url",
+            "source_url",
+            "src",
+        )
+        for attr in attrs:
+            for candidate in candidates:
+                value = candidate.get(attr)
+                text = str(value or "").strip()
+                if text:
+                    return text
+            value = getattr(comp, attr, None)
             text = str(value or "").strip()
             if text:
                 return text
         return ""
+
+    def _raw_private_image_sources(self, event: AstrMessageEvent) -> list[str]:
+        message_obj = getattr(event, "message_obj", None)
+        raw_values = [
+            getattr(message_obj, "raw_message", None) if message_obj is not None else None,
+            getattr(message_obj, "message", None) if message_obj is not None else None,
+            getattr(event, "message_str", None),
+        ]
+        sources: list[str] = []
+
+        def add(value: Any) -> None:
+            text = str(value or "").strip()
+            if text and text not in sources:
+                sources.append(text)
+
+        def visit(value: Any) -> None:
+            if isinstance(value, list):
+                for item in value:
+                    visit(item)
+                return
+            if isinstance(value, dict):
+                item_type = str(value.get("type") or value.get("post_type") or "").lower()
+                data = value.get("data") if isinstance(value.get("data"), dict) else value
+                if item_type == "image":
+                    add(self._extract_image_url_from_segment_data(data))
+                    for key in ("path", "file", "url", "image_path", "file_path", "local_path", "origin_url", "source_url"):
+                        add(data.get(key))
+                for key in ("message", "messages", "content", "data"):
+                    nested = value.get(key)
+                    if nested is not value:
+                        visit(nested)
+                return
+            raw_text = str(value or "")
+            for match in re.finditer(r"\[CQ:image,([^\]]+)\]", raw_text):
+                fields: dict[str, str] = {}
+                for part in match.group(1).split(","):
+                    if "=" not in part:
+                        continue
+                    key, val = part.split("=", 1)
+                    fields[key.strip()] = html.unescape(val.strip())
+                add(self._extract_image_url_from_segment_data(fields))
+                for key in ("url", "file", "path"):
+                    add(fields.get(key))
+
+        for raw in raw_values:
+            visit(raw)
+        return [source for source in sources if source]
 
     async def _persist_private_inbound_images(self, event: AstrMessageEvent, user_id: str) -> list[str]:
         result: list[str] = []
@@ -1914,8 +2025,12 @@ class PrivateCompanionPlugin(Star):
                     continue
                 except Exception as exc:
                     logger.debug("[PrivateCompanion] 私聊图片暂存失败: %s", exc)
-            if re.match(r"^https?://", source, flags=re.I):
+            if re.match(r"^(?:https?|data|file|base64)://", source, flags=re.I):
                 result.append(source)
+        if not result:
+            for source in self._raw_private_image_sources(event):
+                if source and source not in result:
+                    result.append(source)
         return result
 
     def _private_image_source_to_model_url(self, source: str) -> str:
@@ -1924,6 +2039,10 @@ class PrivateCompanionPlugin(Star):
             return ""
         if re.match(r"^https?://", text, flags=re.I) or text.startswith("data:"):
             return text
+        if text.startswith("base64://"):
+            return f"data:image/jpeg;base64,{text[len('base64://'):]}"
+        if text.startswith("file://"):
+            text = text[len("file://"):]
         path = Path(text)
         if not path.exists() or not path.is_file():
             return ""
@@ -1934,6 +2053,151 @@ class PrivateCompanionPlugin(Star):
         except Exception as exc:
             logger.debug("[PrivateCompanion] 私聊图片转 data url 失败: %s", exc)
             return ""
+
+    def _private_image_source_cache_key(self, source: str) -> str:
+        text = str(source or "").strip()
+        if not text:
+            return ""
+        try:
+            if text.startswith("data:") and "," in text:
+                meta, payload = text.split(",", 1)
+                raw = base64.b64decode(payload, validate=False) if ";base64" in meta.lower() else payload.encode("utf-8", errors="ignore")
+                return "sha256:" + hashlib.sha256(raw).hexdigest()
+            if text.startswith("base64://"):
+                raw = base64.b64decode(text[len("base64://"):], validate=False)
+                return "sha256:" + hashlib.sha256(raw).hexdigest()
+            if text.startswith("file://"):
+                text = text[len("file://"):]
+            path = Path(text)
+            if path.exists() and path.is_file():
+                return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        except Exception as exc:
+            logger.debug("[PrivateCompanion] 私聊图片缓存键生成失败: %s", exc)
+        if re.match(r"^https?://", text, flags=re.I):
+            return "url:" + hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
+        return ""
+
+    def _private_image_cache_image_keys(self, sources: list[str]) -> list[str]:
+        keys: list[str] = []
+        for source in sources or []:
+            key = self._private_image_source_cache_key(source)
+            if key and key not in keys:
+                keys.append(key)
+        return keys[:4]
+
+    def _private_image_vision_cache_store(self) -> dict[str, Any]:
+        cache = self.data.setdefault("private_image_vision_cache", {})
+        if not isinstance(cache, dict):
+            cache = {}
+            self.data["private_image_vision_cache"] = cache
+        return cache
+
+    def _private_image_vision_cache_key(self, image_keys: list[str], provider_id: str, prompt: str) -> str:
+        clean_keys = [str(item).strip() for item in image_keys if str(item or "").strip()]
+        if not clean_keys:
+            return ""
+        prompt_sig = hashlib.sha1(str(prompt or "").encode("utf-8", errors="ignore")).hexdigest()[:16]
+        raw = "v1|" + str(provider_id or "") + "|" + prompt_sig + "|" + "|".join(clean_keys)
+        return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+
+    def _get_private_image_vision_cache(self, cache_key: str) -> str:
+        if not bool(getattr(self, "enable_private_image_vision_cache", True)):
+            return ""
+        cache = self._private_image_vision_cache_store()
+        item = cache.get(cache_key)
+        if not isinstance(item, dict):
+            return ""
+        text = _single_line(item.get("text"), 600)
+        if not text:
+            cache.pop(cache_key, None)
+            return ""
+        item["hits"] = _safe_int(item.get("hits"), 0, 0) + 1
+        item["last_hit_ts"] = _now_ts()
+        return text
+
+    def _set_private_image_vision_cache(self, cache_key: str, text: str, *, provider_id: str, image_keys: list[str]) -> None:
+        if not bool(getattr(self, "enable_private_image_vision_cache", True)):
+            return
+        cleaned = _single_line(text, 600)
+        if not cache_key or not cleaned:
+            return
+        cache = self._private_image_vision_cache_store()
+        cache[cache_key] = {
+            "text": cleaned,
+            "provider_id": _single_line(provider_id, 160),
+            "image_keys": [str(item) for item in image_keys[:4]],
+            "created_ts": _now_ts(),
+            "last_hit_ts": 0,
+            "hits": 0,
+        }
+        max_items = int(getattr(self, "private_image_vision_cache_max_items", 300) or 0)
+        if max_items > 0 and len(cache) > max_items:
+            stale = sorted(
+                cache.items(),
+                key=lambda item: _safe_float((item[1] if isinstance(item[1], dict) else {}).get("last_hit_ts"), 0)
+                or _safe_float((item[1] if isinstance(item[1], dict) else {}).get("created_ts"), 0),
+            )
+            for key, _ in stale[: max(1, len(cache) - max_items)]:
+                cache.pop(key, None)
+        try:
+            self._save_data_sync()
+        except Exception as exc:
+            logger.debug("[PrivateCompanion] 私聊图片视觉缓存保存失败: %s", exc)
+
+    def _invalidate_private_image_vision_cache_by_image_keys(self, image_keys: list[str], *, reason: str = "") -> int:
+        targets = {str(item) for item in image_keys or [] if str(item or "").strip()}
+        if not targets:
+            return 0
+        cache = self._private_image_vision_cache_store()
+        removed = 0
+        for key, item in list(cache.items()):
+            if not isinstance(item, dict):
+                continue
+            cached_keys = {str(value) for value in item.get("image_keys", []) if str(value or "").strip()}
+            if cached_keys & targets:
+                cache.pop(key, None)
+                removed += 1
+        if removed:
+            logger.info("[PrivateCompanion] 私聊图片视觉缓存已因负反馈失效: removed=%s reason=%s", removed, _single_line(reason, 120))
+            try:
+                self._save_data_sync()
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] 私聊图片视觉缓存失效保存失败: %s", exc)
+        return removed
+
+    def _is_private_image_vision_negative_feedback(self, text: str) -> bool:
+        cleaned = _single_line(text, 160)
+        if not cleaned:
+            return False
+        negative_patterns = (
+            r"(识别|看|理解|读|认).{0,8}(错|不对|不准|偏了|歪了)",
+            r"(不是|不对|错了).{0,12}(这个意思|这样|这意思|你说的|图里|图片|表情包)",
+            r"(你|bot|机器人).{0,8}(看错|认错|理解错|识别错)",
+            r"(不是.{0,8}你|不是.{0,8}bot|不是.{0,8}本人|不是.{0,8}这个)",
+        )
+        return any(re.search(pattern, cleaned, flags=re.I) for pattern in negative_patterns)
+
+    def _apply_private_image_vision_negative_feedback(self, user: dict[str, Any], text: str) -> bool:
+        if not self._is_private_image_vision_negative_feedback(text):
+            return False
+        target = user.get("last_private_image_vision_feedback_target")
+        if not isinstance(target, dict):
+            return False
+        ts = _safe_float(target.get("ts"), 0)
+        if ts <= 0 or _now_ts() - ts > 180:
+            return False
+        image_keys = [str(item) for item in target.get("image_keys", []) if str(item or "").strip()]
+        removed = self._invalidate_private_image_vision_cache_by_image_keys(image_keys, reason=text)
+        target["negative_feedback_ts"] = _now_ts()
+        target["negative_feedback_text"] = _single_line(text, 160)
+        target["invalidated_cache_items"] = removed
+        logger.info(
+            "[PrivateCompanion] 私聊图片视觉负反馈记录: user_image_keys=%s removed=%s text=%s",
+            len(image_keys),
+            removed,
+            _single_line(text, 120),
+        )
+        return bool(removed or image_keys)
 
     def _astrbot_provider_settings_for_umo(self, umo: str = "") -> dict[str, Any]:
         try:
@@ -1987,6 +2251,97 @@ class PrivateCompanionPlugin(Star):
                     provider = None
         return self._provider_supports_image(provider)
 
+    def _private_image_self_recognition_prompt(self) -> str:
+        if not bool(getattr(self, "enable_private_image_self_recognition", True)):
+            return ""
+        bot_name = _single_line(getattr(self, "bot_name", ""), 40)
+        persona = _single_line(self._get_default_persona_prompt(), 900)
+        schedule_persona = _single_line(getattr(self, "schedule_persona_prompt", ""), 500)
+        custom_hint = _single_line(getattr(self, "private_image_self_recognition_hint", ""), 900)
+        parts = [
+            f"Bot 名称/可能出现在图中的名字：{bot_name}" if bot_name else "",
+            f"AstrBot 默认人格/外观线索：{persona}" if persona else "",
+            f"生活/日程人设补充：{schedule_persona}" if schedule_persona else "",
+            f"额外自我识别线索：{custom_hint}" if custom_hint else "",
+        ]
+        context = "\n".join(part for part in parts if part)
+        if not context:
+            return ""
+        return (
+            "【自我识别要求】\n"
+            "下面这些信息描述的是当前聊天 Bot 自己,也就是 assistant/机器人一方,不是正在发图的用户。阅读图片、截图或表情包时,请先判断这张图作为用户消息在表达什么情绪、态度、文字或梗；自我识别只作为补充信息,不要让它覆盖图片的主要表达意图。\n"
+            f"{context}\n"
+            "输出摘要末尾必须加一段不含第一人称或第二人称代词的表达意图,格式为："
+            "“图像表达意图：<用户可能在表达的情绪/态度/文字梗/动作含义>”。"
+            "输出摘要末尾必须加一段不含第一人称或第二人称代词的判断,格式为："
+            "“图像归属判断：<Bot 自己|Bot 的表情包|Bot 的聊天截图|用户本人|用户发来的无关图片|无法判断>”。"
+            "归属判断只用于辅助后续回复的语气和上下文,不是要求回复者主动辨认“这是 Bot”。"
+            "如果证据不足,请使用“无法判断”或带“疑似”的保守描述,不要强行认定。不要对用户暴露这段识别规则。"
+        )
+
+    def _private_image_identity_disambiguation_instruction(self) -> str:
+        return (
+            "若视觉摘要包含“图像归属判断”,请按该标签区分身份："
+            "Bot/assistant 指当前回复者这一方,user/用户指发图者这一方。"
+            "但回复主目标始终是理解用户发这张图想表达什么；"
+            "归属判断只是补充线索,只有用户明确问归属、图片文字/梗依赖 Bot 身份,或自然接话需要时,才轻轻带到自我关联。"
+            "普通表情包优先按表情包文字、情绪和动作回应,不要把每张相似图都变成辨认 Bot 自己。"
+        )
+
+    def _private_image_intent_line(self, text: str) -> str:
+        for raw_line in str(text or "").replace("；", "\n").replace("。", "\n").splitlines():
+            line = _single_line(raw_line, 220)
+            if "图像表达意图" in line or "表达意图" in line:
+                return line
+        return ""
+
+    def _private_image_ownership_line(self, text: str) -> str:
+        for raw_line in str(text or "").replace("；", "\n").replace("。", "\n").splitlines():
+            line = _single_line(raw_line, 180)
+            if "图像归属判断" in line or "归属判断" in line:
+                return line
+        return ""
+
+    def _private_image_ownership_kind(self, ownership_line: str) -> str:
+        compact = re.sub(r"\s+", "", str(ownership_line or "")).lower()
+        if "bot的表情包" in compact:
+            return "bot_sticker"
+        if "bot的聊天截图" in compact:
+            return "bot_chat"
+        if "bot自己" in compact:
+            return "bot_self"
+        if "用户本人" in compact:
+            return "user_self"
+        if "用户发来的无关图片" in compact:
+            return "unrelated"
+        if "无法判断" in compact:
+            return "unknown"
+        return ""
+
+    def _private_image_reply_objective(self, ownership_line: str) -> str:
+        kind = self._private_image_ownership_kind(ownership_line)
+        if kind in {"bot_self", "bot_sticker", "bot_chat"}:
+            return (
+                "回复目标：优先回应图片作为用户消息的表达意图,例如表情包文字、情绪、动作或梗。"
+                "这张图是用户发来的聊天内容,不是让回复者复述图片台词或扮演图片角色；"
+                "请直接回应用户这次调侃、吐槽、撒娇或分享的行为。"
+                "不要使用括号动作、神态旁白或舞台描写,只写真正会发给用户看的短聊天句。"
+                "归属判断指向当前回复者这一方时,只把它作为语气辅助；"
+                "除非用户在问归属或语境明显需要,不要主动把重点放在辨认 Bot 自己。"
+            )
+        if kind == "user_self":
+            return (
+                "回复目标：优先回应图片作为用户消息的表达意图。"
+                "这张图是用户发来的聊天内容,不是让回复者复述图片台词或扮演图片角色；"
+                "不要使用括号动作、神态旁白或舞台描写。"
+                "归属判断指向用户本人时,注意不要说成是当前回复者自己。"
+            )
+        return (
+            "回复目标：优先回应图片作为用户消息的表达意图；"
+            "不要复述图片台词、不要扮演图片角色、不要使用括号动作或神态旁白。"
+            "如果归属无法判断,不要强行认定属于任何一方。"
+        )
+
     async def _transcribe_private_inbound_images(self, image_sources: list[str], *, umo: str = "") -> str:
         sources = [str(item).strip() for item in (image_sources or []) if str(item or "").strip()][:4]
         if not sources:
@@ -2006,17 +2361,47 @@ class PrivateCompanionPlugin(Star):
             if provider is None:
                 logger.info("[PrivateCompanion] 私聊图片视觉转述跳过: provider 不可用 id=%s", provider_id)
                 return ""
-        image_urls = [url for url in (self._private_image_source_to_model_url(source) for source in sources) if url]
+        image_items: list[tuple[str, str]] = []
+        seen_image_keys: set[str] = set()
+        for source in sources:
+            url = self._private_image_source_to_model_url(source)
+            if not url:
+                continue
+            image_key = self._private_image_source_cache_key(source) or ("model_url:" + hashlib.sha1(url.encode("utf-8", errors="ignore")).hexdigest())
+            if image_key in seen_image_keys:
+                continue
+            seen_image_keys.add(image_key)
+            image_items.append((image_key, url))
+        image_keys = [key for key, _ in image_items]
+        image_urls = [url for _, url in image_items]
         if not image_urls:
             return ""
         prompt = configured_prompt or (
             "请阅读用户刚刚单独发送的图片,输出一段供后续聊天模型使用的视觉摘要。\n"
             "要求：\n"
-            "1. 只描述画面里能看见的内容、文字、主体、情绪和可能需要注意的细节。\n"
+            "1. 先判断这张图片作为用户消息在表达什么,再描述画面里能看见的内容、文字、主体、情绪和可能需要注意的细节。\n"
             "2. 不要假装已经回复用户,不要输出工具名、模型名、路径或插件信息。\n"
             "3. 如果图片像表情包、截图、聊天记录、作业、网页或照片,请直接说明类型和关键信息。\n"
-            "4. 保持简洁自然,80-220 字。"
+            "4. 如果是表情包,要概括它可能传达的语气,例如吐槽、撒娇、调侃、拒绝、催促、夸赞或骂人梗。\n"
+            "5. 保持简洁自然,80-220 字。"
         )
+        self_recognition_prompt = self._private_image_self_recognition_prompt()
+        if self_recognition_prompt and self_recognition_prompt not in prompt:
+            prompt = f"{prompt}\n\n{self_recognition_prompt}"
+        cache_key = self._private_image_vision_cache_key(image_keys, provider_id, prompt)
+        cached_text = self._get_private_image_vision_cache(cache_key)
+        if cached_text:
+            intent_line = self._private_image_intent_line(cached_text)
+            ownership_line = self._private_image_ownership_line(cached_text)
+            logger.info(
+                "[PrivateCompanion] 私聊图片视觉转述命中缓存: provider=%s images=%s intent=%s ownership=%s preview=%s",
+                provider_id,
+                len(image_urls),
+                intent_line or "无",
+                ownership_line or "无",
+                _single_line(cached_text, 220),
+            )
+            return cached_text
         if not self._can_run_llm_task(provider_id, task="private_image_vision"):
             self._record_llm_budget_skip(provider_id=provider_id, task="private_image_vision", prompt=prompt)
             return ""
@@ -2024,6 +2409,9 @@ class PrivateCompanionPlugin(Star):
             start = time.time()
             result = await provider.text_chat(prompt=prompt, image_urls=image_urls)
             text = str(getattr(result, "completion_text", result) or "").strip()
+            cleaned_text = _single_line(_strip_internal_message_blocks(text), 600)
+            intent_line = self._private_image_intent_line(cleaned_text)
+            ownership_line = self._private_image_ownership_line(cleaned_text)
             self._record_llm_usage(
                 provider_id=provider_id,
                 task="private_image_vision",
@@ -2035,13 +2423,17 @@ class PrivateCompanionPlugin(Star):
                 budget_exempt=True,
             )
             logger.info(
-                "[PrivateCompanion] 私聊图片视觉转述完成: provider=%s source=%s images=%s chars=%s",
+                "[PrivateCompanion] 私聊图片视觉转述完成: provider=%s source=%s images=%s chars=%s intent=%s ownership=%s preview=%s",
                 provider_id,
                 provider_source,
                 len(image_urls),
                 len(text),
+                intent_line or "无",
+                ownership_line or "无",
+                _single_line(cleaned_text, 220),
             )
-            return _single_line(_strip_internal_message_blocks(text), 600)
+            self._set_private_image_vision_cache(cache_key, cleaned_text, provider_id=provider_id, image_keys=image_keys)
+            return cleaned_text
         except Exception as exc:
             logger.info("[PrivateCompanion] 私聊图片视觉转述失败: %s", _single_line(exc, 160))
             return ""
@@ -2139,24 +2531,130 @@ class PrivateCompanionPlugin(Star):
         vision_task = buffer.get("vision_task")
         vision_text = _single_line(buffer.get("vision_text"), 600)
         if not vision_text and isinstance(vision_task, asyncio.Task):
+            timeout = max(0.0, float(getattr(self, "private_image_vision_wait_seconds", 30.0) or 0.0))
             try:
-                vision_text = _single_line(await asyncio.wait_for(asyncio.shield(vision_task), timeout=2.5), 600)
+                if timeout > 0:
+                    logger.info("[PrivateCompanion] 私聊单图等待视觉转述完成: user=%s timeout=%.1fs", user_id, timeout)
+                    vision_text = _single_line(await asyncio.wait_for(asyncio.shield(vision_task), timeout=timeout), 600)
             except asyncio.TimeoutError:
-                logger.info("[PrivateCompanion] 私聊单图延迟处理时视觉转述仍未完成: user=%s", user_id)
+                logger.info("[PrivateCompanion] 私聊单图延迟处理时视觉转述仍未完成: user=%s timeout=%.1fs", user_id, timeout)
             except Exception as exc:
                 logger.info("[PrivateCompanion] 私聊单图延迟视觉转述失败: user=%s error=%s", user_id, _single_line(exc, 120))
+        ownership_line = self._private_image_ownership_line(vision_text)
+        intent_line = self._private_image_intent_line(vision_text)
+        prompt = _single_line(getattr(event, "message_str", ""), 120) or "[图片]"
+        reply_objective = self._private_image_reply_objective(ownership_line)
+        logger.info(
+            "[PrivateCompanion] 私聊单图准备进入主链: user=%s images=%s has_vision=%s intent=%s ownership=%s objective=%s vision_preview=%s",
+            user_id,
+            len(images),
+            bool(vision_text),
+            intent_line or "无",
+            ownership_line or "无",
+            _single_line(reply_objective, 120),
+            _single_line(vision_text, 220),
+        )
         setattr(event, "private_companion_deferred_private_image_only_ready", True)
         setattr(event, "private_companion_deferred_private_image_only", False)
         setattr(event, "private_companion_delayed_image_vision_text", vision_text)
         setattr(event, "private_companion_delayed_image_sources", [str(item) for item in images[:4] if str(item or "").strip()])
-        prompt = _single_line(getattr(event, "message_str", ""), 120) or "[图片]"
         try:
-            await event.send(
-                event.request_llm(
-                    prompt=prompt,
-                    session_id=event.session_id,
-                )
+            umo = str(getattr(event, "unified_msg_origin", "") or "")
+            conv = None
+            if umo:
+                conv_id = await self.context.conversation_manager.get_curr_conversation_id(umo)
+                if conv_id:
+                    conv = await self.context.conversation_manager.get_conversation(umo, conv_id)
+            cfg = self.context.get_config(umo=umo) if umo else self.context.get_config()
+            provider_settings = cfg.get("provider_settings", {}) if isinstance(cfg, dict) else {}
+            build_cfg = MainAgentBuildConfig(
+                tool_call_timeout=int(provider_settings.get("tool_call_timeout", 120) or 120),
+                llm_safety_mode=False,
+                streaming_response=False,
             )
+            req = ProviderRequest(
+                prompt=prompt,
+                conversation=conv,
+                session_id=getattr(event, "session_id", None) or umo,
+            )
+            await self.inject_humanized_state(event, req)
+            start = time.time()
+            result = await build_main_agent(
+                event=event,
+                plugin_context=self.context,
+                config=build_cfg,
+                req=req,
+            )
+            runner = getattr(result, "agent_runner", None) if result else None
+            llm_resp = runner.get_final_llm_resp() if runner else None
+            reply = str(getattr(llm_resp, "completion_text", "") or "").strip()
+            if reply:
+                logger.info(
+                    "[PrivateCompanion] 私聊单图主链回复生成: user=%s chars=%s intent=%s ownership=%s reply_preview=%s",
+                    user_id,
+                    len(reply),
+                    intent_line or "无",
+                    ownership_line or "无",
+                    _single_line(reply, 180),
+                )
+            if not reply:
+                fallback_prompt = (
+                    "用户刚刚只发了一张图片,没有补充文字。请用当前私聊人格自然回复一句,像 QQ 私聊短句；不要提模型、插件、视觉转述或路径,不要使用括号动作、神态旁白或舞台描写。\n"
+                    f"{self._private_image_identity_disambiguation_instruction()}\n"
+                    f"{reply_objective}\n"
+                    f"图片内容摘要：{vision_text}"
+                    if vision_text
+                    else "用户刚刚只发了一张图片,没有补充文字。当前没有可靠图片内容。请自然回复一句,不要编造画面,可以让用户补一句想让你看哪里。"
+                )
+                fallback_reply = await self._llm_call(
+                    fallback_prompt,
+                    max_tokens=160,
+                    task="private_image_only_fallback",
+                )
+                reply = _single_line(_strip_internal_message_blocks(fallback_reply or ""), 500)
+                logger.info(
+                    "[PrivateCompanion] 私聊单图兜底回复生成: user=%s chars=%s intent=%s ownership=%s objective=%s reply_preview=%s",
+                    user_id,
+                    len(reply),
+                    intent_line or "无",
+                    ownership_line or "无",
+                    _single_line(reply_objective, 120),
+                    _single_line(reply, 180),
+                )
+                if not reply:
+                    reply = (
+                        f"我看到了，{_single_line(vision_text, 120)}"
+                        if vision_text
+                        else "我看到你发了图片，但这边暂时没看清内容。你补一句想让我看哪里就好。"
+                    )
+                logger.warning("[PrivateCompanion] 私聊单图原生链路回复为空,已使用兜底回复: user=%s images=%s", user_id, len(images))
+            self._record_llm_usage(
+                provider_id="framework",
+                task="private_image_only_framework",
+                prompt=prompt,
+                completion=reply,
+                elapsed_ms=int((time.time() - start) * 1000),
+                success=True,
+                resp=llm_resp,
+                budget_exempt=True,
+            )
+            await event.send(event.plain_result(reply))
+            image_keys = self._private_image_cache_image_keys([str(item) for item in images[:4] if str(item or "").strip()])
+            if image_keys:
+                try:
+                    async with self._data_lock:
+                        user = self._get_user(user_id)
+                        user["last_private_image_vision_feedback_target"] = {
+                            "ts": _now_ts(),
+                            "image_keys": image_keys,
+                            "vision_text": _single_line(vision_text, 600),
+                            "reply": _single_line(reply, 300),
+                            "ownership": ownership_line,
+                            "intent": intent_line,
+                        }
+                        self._save_data_sync()
+                except Exception as exc:
+                    logger.debug("[PrivateCompanion] 私聊图片视觉反馈目标记录失败: %s", exc)
             logger.info("[PrivateCompanion] 私聊单图无补充说明,已延迟交给原生 LLM 链路: user=%s images=%s", user_id, len(images))
         except Exception as exc:
             logger.warning("[PrivateCompanion] 私聊单图延迟回复失败: user=%s error=%s", user_id, exc, exc_info=True)
@@ -4303,11 +4801,18 @@ class PrivateCompanionPlugin(Star):
     def _jm_cosmos_keywords_for_user(self, user: dict[str, Any] | None = None) -> list[str]:
         raw = str(self.jm_cosmos_default_keywords or "纯爱,恋爱,同人")
         candidates: list[str] = []
+        state = self.data.get("jm_cosmos_integration") if isinstance(self.data.get("jm_cosmos_integration"), dict) else {}
+        profile = state.get("preference_profile") if isinstance(state.get("preference_profile"), dict) else {}
+        liked = profile.get("liked_terms") if isinstance(profile.get("liked_terms"), list) else []
+        for item in liked[:8]:
+            text = _single_line(item.get("term") if isinstance(item, dict) else item, 16)
+            if text:
+                candidates.append(text)
         candidates.extend(part.strip() for part in re.split(r"[,，、\n]+", raw) if part.strip())
         if isinstance(user, dict):
             memory = user.get("companion_memory")
-            profile = memory.get("profile") if isinstance(memory, dict) else {}
-            interests = profile.get("interests") if isinstance(profile, dict) else []
+            user_profile = memory.get("profile") if isinstance(memory, dict) else {}
+            interests = user_profile.get("interests") if isinstance(user_profile, dict) else []
             if isinstance(interests, list):
                 for item in interests:
                     text = _single_line(item, 12)
@@ -4324,6 +4829,180 @@ class PrivateCompanionPlugin(Star):
             if len(result) >= 5:
                 break
         return result or ["纯爱"]
+
+    def _private_reading_candidate_score(self, detail: dict[str, Any], keyword: str = "") -> float:
+        state = self.data.get("jm_cosmos_integration") if isinstance(self.data.get("jm_cosmos_integration"), dict) else {}
+        profile = state.get("preference_profile") if isinstance(state.get("preference_profile"), dict) else {}
+        liked = profile.get("liked_terms") if isinstance(profile.get("liked_terms"), list) else []
+        disliked = profile.get("disliked_terms") if isinstance(profile.get("disliked_terms"), list) else []
+
+        def term_weights(items: list[Any]) -> dict[str, float]:
+            weights: dict[str, float] = {}
+            for item in items:
+                if isinstance(item, dict):
+                    term = self._normalize_private_reading_tag(item.get("term"))
+                    weight = _safe_float(item.get("weight"), 0)
+                else:
+                    term = self._normalize_private_reading_tag(item)
+                    weight = 1.0
+                if term:
+                    weights[term] = max(weights.get(term, 0.0), weight)
+            return weights
+
+        liked_weights = term_weights(liked)
+        disliked_weights = term_weights(disliked)
+        raw_tags = detail.get("tags") if isinstance(detail.get("tags"), list) else []
+        haystack = [
+            self._normalize_private_reading_tag(keyword),
+            self._normalize_private_reading_tag(detail.get("title")),
+            self._normalize_private_reading_tag(detail.get("author")),
+            *(self._normalize_private_reading_tag(tag) for tag in raw_tags),
+        ]
+        score = 0.0
+        for text in [item for item in haystack if item]:
+            for term, weight in liked_weights.items():
+                if term and term in text:
+                    score += max(0.1, weight)
+            for term, weight in disliked_weights.items():
+                if term and term in text:
+                    score -= max(0.1, weight)
+        return score
+
+    def _update_private_reading_preference_profile(self, album: dict[str, Any]) -> None:
+        user_rating = _safe_int(album.get("user_rating"), 0, 0, 10)
+        bot_rating = _safe_int(album.get("rating"), 0, 0, 10)
+        rating = user_rating or bot_rating
+        if rating <= 0:
+            return
+        state = self.data.setdefault("jm_cosmos_integration", {})
+        if not isinstance(state, dict):
+            state = {}
+            self.data["jm_cosmos_integration"] = state
+        profile = state.setdefault("preference_profile", {})
+        if not isinstance(profile, dict):
+            profile = {}
+            state["preference_profile"] = profile
+        history = profile.setdefault("history", [])
+        if not isinstance(history, list):
+            history = []
+            profile["history"] = history
+        raw_terms: list[str] = []
+        raw_terms.append(_single_line(album.get("keyword"), 24))
+        raw_terms.extend(_single_line(tag, 24) for tag in album.get("tags", [])[:8] if _single_line(tag, 24)) if isinstance(album.get("tags"), list) else None
+        raw_terms.extend(_single_line(tag, 24) for tag in album.get("preference_tags", [])[:8] if _single_line(tag, 24)) if isinstance(album.get("preference_tags"), list) else None
+        terms: list[str] = []
+        seen: set[str] = set()
+        for term in raw_terms:
+            normalized = self._normalize_private_reading_tag(term)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                terms.append(term)
+        history.append(
+            {
+                "album_id": _single_line(album.get("id") or album.get("album_id"), 32),
+                "title": _single_line(album.get("title"), 80),
+                "rating": rating,
+                "bot_rating": bot_rating,
+                "user_rating": user_rating,
+                "source": "user" if user_rating else "bot",
+                "reason": _single_line(album.get("user_rating_reason") or album.get("rating_reason"), 160),
+                "terms": terms[:12],
+                "created_ts": _safe_float(album.get("created_ts"), _now_ts()),
+            }
+        )
+        del history[:-60]
+
+        scores: dict[str, list[float]] = {}
+        labels: dict[str, str] = {}
+        for row in history:
+            if not isinstance(row, dict):
+                continue
+            row_rating = _safe_float(row.get("rating"), 0)
+            source_weight = 1.35 if str(row.get("source") or "") == "user" else 0.75
+            for term in row.get("terms", []) if isinstance(row.get("terms"), list) else []:
+                normalized = self._normalize_private_reading_tag(term)
+                if not normalized:
+                    continue
+                scores.setdefault(normalized, []).append(row_rating * source_weight + 5.5 * (1 - source_weight))
+                labels.setdefault(normalized, _single_line(term, 24))
+
+        liked_terms: list[dict[str, Any]] = []
+        disliked_terms: list[dict[str, Any]] = []
+        for normalized, values in scores.items():
+            if not values:
+                continue
+            avg = sum(values) / len(values)
+            weight = round(max(0.1, abs(avg - 5.5)) * min(2.0, 0.65 + len(values) * 0.18), 2)
+            row = {"term": labels.get(normalized, normalized), "avg": round(avg, 2), "count": len(values), "weight": weight}
+            if avg >= 7.2:
+                liked_terms.append(row)
+            elif avg <= 4.2:
+                disliked_terms.append(row)
+        liked_terms.sort(key=lambda item: (_safe_float(item.get("weight"), 0), _safe_float(item.get("avg"), 0), _safe_int(item.get("count"), 0)), reverse=True)
+        disliked_terms.sort(key=lambda item: (_safe_float(item.get("weight"), 0), _safe_int(item.get("count"), 0)), reverse=True)
+        profile["liked_terms"] = liked_terms[:16]
+        profile["disliked_terms"] = disliked_terms[:16]
+        profile["average_rating"] = round(sum(_safe_float(row.get("rating"), 0) for row in history if isinstance(row, dict)) / max(1, len(history)), 2)
+        profile["rating_count"] = len(history)
+
+    def _format_private_reading_preference_influence_for_reply(self, inbound_text: str = "") -> str:
+        if not getattr(self, "enable_private_reading_preference_influence", True):
+            return ""
+        state = self.data.get("jm_cosmos_integration") if isinstance(self.data.get("jm_cosmos_integration"), dict) else {}
+        profile = state.get("preference_profile") if isinstance(state.get("preference_profile"), dict) else {}
+        rating_count = _safe_int(profile.get("rating_count"), 0, 0, 999)
+        if rating_count < max(1, getattr(self, "private_reading_preference_min_ratings", 5)):
+            return ""
+        liked = profile.get("liked_terms") if isinstance(profile.get("liked_terms"), list) else []
+        disliked = profile.get("disliked_terms") if isinstance(profile.get("disliked_terms"), list) else []
+        max_terms = max(2, getattr(self, "private_reading_preference_max_terms", 8))
+
+        def format_terms(items: list[Any]) -> str:
+            rows: list[str] = []
+            for item in items:
+                if isinstance(item, dict):
+                    term = _single_line(item.get("term"), 24)
+                    avg = _safe_float(item.get("avg"), 0)
+                    count = _safe_int(item.get("count"), 0)
+                    if term:
+                        meta = []
+                        if avg:
+                            meta.append(f"均分{avg:.1f}")
+                        if count:
+                            meta.append(f"{count}次")
+                        rows.append(f"{term}（{'，'.join(meta)}）" if meta else term)
+                else:
+                    term = _single_line(item, 24)
+                    if term:
+                        rows.append(term)
+                if len(rows) >= max_terms:
+                    break
+            return "、".join(rows)
+
+        liked_text = format_terms(liked)
+        disliked_text = format_terms(disliked[: max_terms // 2])
+        if not liked_text and not disliked_text:
+            return ""
+        inbound = str(inbound_text or "")
+        private_cue = any(token in inbound for token in ("夹层", "书柜", "本子", "漫画", "喜欢", "亲", "抱", "贴", "害羞", "色色", "私密", "秘密", "想你", "陪我"))
+        cue_line = "本轮有私密/亲密/偏好相关线索，可以更明显地参考。" if private_cue else "本轮没有明显私密线索，只允许作为很轻的语气背景。"
+        lines = [
+            "【私密偏好画像】",
+            f"基于书柜夹层阅读评分沉淀出的长期偏好，样本数 {rating_count}，平均评分 {_safe_float(profile.get('average_rating'), 0):.1f}/10。",
+            cue_line,
+        ]
+        if liked_text:
+            lines.append(f"较稳定的高分倾向：{liked_text}。")
+        if disliked_text:
+            lines.append(f"低分或不稳定倾向：{disliked_text}。")
+        lines.extend(
+            [
+                "这些偏好只影响私聊里的私密互动、语气尺度、主动靠近方式和素材挑选；不要用于群聊。",
+                "不要说出偏好来源、评分、本子或插件记录；表现成相处久了后自然知道一点。",
+                "它是弱参考，必须服从当前 AstrBot 人格、关系阶段、用户当下情绪和安全边界，不要机械复刻标签。",
+            ]
+        )
+        return "\n".join(lines)
 
     @staticmethod
     def _normalize_private_reading_tag(value: Any) -> str:
@@ -4395,18 +5074,32 @@ class PrivateCompanionPlugin(Star):
                 self._format_state_for_prompt(daily_state if isinstance(daily_state, dict) else {}),
                 800,
             )
+            preference_state = self.data.get("jm_cosmos_integration") if isinstance(self.data.get("jm_cosmos_integration"), dict) else {}
+            preference_profile = preference_state.get("preference_profile") if isinstance(preference_state.get("preference_profile"), dict) else {}
+            liked_terms = preference_profile.get("liked_terms") if isinstance(preference_profile.get("liked_terms"), list) else []
+            disliked_terms = preference_profile.get("disliked_terms") if isinstance(preference_profile.get("disliked_terms"), list) else []
+            preference_text = "；".join(
+                part
+                for part in (
+                    "偏好较高：" + "、".join(_single_line(item.get("term") if isinstance(item, dict) else item, 16) for item in liked_terms[:6] if _single_line(item.get("term") if isinstance(item, dict) else item, 16)) if liked_terms else "",
+                    "偏好较低：" + "、".join(_single_line(item.get("term") if isinstance(item, dict) else item, 16) for item in disliked_terms[:6] if _single_line(item.get("term") if isinstance(item, dict) else item, 16)) if disliked_terms else "",
+                )
+                if part
+            )
             prompt = (
-                "请根据封面和抽样正文页,用 Bot 自己的口吻留下一段内部读后感,并给看过的对应页写短批注。\n"
+                "请根据封面和抽样正文页,用 Bot 自己的口吻留下一段内部读后感,并给看过的对应页写短批注,最后按自己的喜好给这本打分。\n"
                 "封面只用于确认标题、画风和整体气质；内容理解主要参考后续正文页。抽样页已尽量避开开头的封面、书脊、目录,以及结尾的汉化组、致谢、后记页。\n"
                 "如果某张图明显是版权页、目录、汉化组说明、鸣谢或空白页,请忽略它,不要当作剧情或人物关系来解读。\n"
                 "可以写画风、氛围、人物关系、叙事节奏和读完后的感觉；不要写成客观数据库摘要,也不要提插件、视觉模型、抽样、页码或数据来源。\n"
                 "表达风格应顺着当前bot人格与状态,不要固定成害羞、含蓄或直白。\n"
                 "批注是 Bot 私下读漫画时留在书页旁边的小吐槽/感想,语气、尺度、害羞或坦然都必须服从下面的人格,不要写成通用解说。\n"
-                "只输出 JSON,不要使用 Markdown。格式：{\"impression\":\"160字以内总读后感\",\"page_comments\":[{\"page\":12,\"comment\":\"35字以内吐槽或评论\"}]}。\n"
+                "rating 是 Bot 自己读完后的主观分数,1 到 10 的整数；不是用户评分。rating_reason 用一句话说明为什么喜欢或不喜欢。preference_tags 写出这次影响喜好的关键词,用于以后慢慢找到阅读偏好。\n"
+                "只输出 JSON,不要使用 Markdown。格式：{\"impression\":\"160字以内总读后感\",\"rating\":8,\"rating_reason\":\"60字以内评分理由\",\"preference_tags\":[\"画风\",\"节奏\"],\"page_comments\":[{\"page\":12,\"comment\":\"35字以内吐槽或评论\"}]}。\n"
                 "page_comments 只为正文参考页里真正看懂的页生成；page 必须来自正文参考页数字。\n"
                 f"\n【AstrBot 默认人格】\n{persona or '未读取到默认人格。'}\n"
                 f"\n【生活/日程人设补充】\n{schedule_persona or '（无）'}\n"
                 f"\n【当前状态】\n{state_text or '（无）'}\n"
+                f"\n【已有阅读偏好】\n{preference_text or '还没有稳定偏好,这次评分会成为早期样本。'}\n"
                 f"\n{worldview_context}\n"
                 f"标题：{_single_line(detail.get('title'), 80)}\n"
                 f"标签：{_single_line(','.join(str(item) for item in (detail.get('tags') or [])) if isinstance(detail.get('tags'), list) else detail.get('tags'), 120)}"
@@ -4461,6 +5154,13 @@ class PrivateCompanionPlugin(Star):
                 break
         return {
             "impression": _single_line(data.get("impression"), 420),
+            "rating": _safe_int(data.get("rating"), 0, 0, 10),
+            "rating_reason": _single_line(data.get("rating_reason") or data.get("reason"), 160),
+            "preference_tags": [
+                _single_line(tag, 24)
+                for tag in (data.get("preference_tags") if isinstance(data.get("preference_tags"), list) else [])
+                if _single_line(tag, 24)
+            ][:8],
             "page_comments": comments,
         }
 
@@ -4669,6 +5369,16 @@ class PrivateCompanionPlugin(Star):
             "impression": _single_line(album.get("impression"), 600),
             "reading_impression": _single_line(album.get("reading_impression") or album.get("impression"), 600),
             "vision": _single_line(album.get("vision"), 500),
+            "rating": _safe_int(album.get("rating"), 0, 0, 10),
+            "rating_reason": _single_line(album.get("rating_reason"), 160),
+            "user_rating": _safe_int(album.get("user_rating"), 0, 0, 10),
+            "user_rating_reason": _single_line(album.get("user_rating_reason"), 160),
+            "user_rated_ts": _safe_float(album.get("user_rated_ts"), 0),
+            "preference_tags": [
+                _single_line(tag, 24)
+                for tag in (album.get("preference_tags") if isinstance(album.get("preference_tags"), list) else [])
+                if _single_line(tag, 24)
+            ][:8],
             "page_comments": [
                 {
                     "page": _safe_int(item.get("page"), 0, 1),
@@ -4706,12 +5416,18 @@ class PrivateCompanionPlugin(Star):
         keyword = _single_line(item.get("keyword"), 24)
         impression = _single_line(item.get("impression"), 160)
         vision = _single_line(item.get("vision"), 140)
+        rating = _safe_int(item.get("rating"), 0, 0, 10)
+        user_rating = _safe_int(item.get("user_rating"), 0, 0, 10)
+        rating_reason = _single_line(item.get("user_rating_reason") or item.get("rating_reason"), 120)
         parts = [
             "私密阅读线索：她刚刚在书柜夹层里翻到一本漫画,可以按人格自然决定要不要提、怎么提。",
             f"标题：{title}" if title else "",
             f"搜索缘由：{keyword}" if keyword else "",
             f"封面印象：{vision}" if vision else "",
             f"内部读后印象：{impression}" if impression else "",
+            f"Bot 自评分：{rating}/10" if rating else "",
+            f"用户读后评分：{user_rating}/10" if user_rating else "",
+            f"评分理由：{rating_reason}" if rating_reason else "",
         ]
         return "\n".join(part for part in parts if part)
 
@@ -4736,11 +5452,13 @@ class PrivateCompanionPlugin(Star):
             author = _single_line(item.get("author"), 40)
             tags = "、".join(_single_line(tag, 18) for tag in item.get("tags", [])[:5] if _single_line(tag, 18)) if isinstance(item.get("tags"), list) else ""
             impression = _single_line(item.get("impression") or item.get("vision"), 160)
+            rating = _safe_int(item.get("user_rating") or item.get("rating"), 0, 0, 10)
             read_at = self._format_timestamp_elapsed(item.get("created_ts", 0))
             parts = [
                 f"标题《{title}》" if title else "未命名的一本",
                 f"作者 {author}" if author else "",
                 f"标签 {tags}" if tags else "",
+                f"评分 {rating}/10" if rating else "",
                 f"读后印象：{impression}" if impression else "",
                 f"放入书柜：{read_at}" if read_at else "",
             ]
@@ -4766,6 +5484,10 @@ class PrivateCompanionPlugin(Star):
                 results = []
             candidates = [item for item in (results or []) if isinstance(item, dict)]
             random.shuffle(candidates)
+            candidates.sort(
+                key=lambda item: self._private_reading_candidate_score(item, keyword) + random.random() * 0.25,
+                reverse=True,
+            )
             for candidate in candidates[:5]:
                 album_id = _single_line(candidate.get("id"), 32)
                 if not album_id:
@@ -4850,6 +5572,9 @@ class PrivateCompanionPlugin(Star):
                 )
                 vision = _single_line(vision_result.get("impression"), 420) if isinstance(vision_result, dict) else ""
                 page_comments = vision_result.get("page_comments", []) if isinstance(vision_result, dict) else []
+                bot_rating = _safe_int(vision_result.get("rating"), 0, 0, 10) if isinstance(vision_result, dict) else 0
+                rating_reason = _single_line(vision_result.get("rating_reason"), 160) if isinstance(vision_result, dict) else ""
+                preference_tags = vision_result.get("preference_tags", []) if isinstance(vision_result, dict) else []
                 impression = vision or self._jm_cosmos_textual_impression(detail)
                 title = _single_line(detail.get("title") or candidate.get("title"), 80)
                 description = _single_line(
@@ -4873,6 +5598,9 @@ class PrivateCompanionPlugin(Star):
                     "vision": vision,
                     "impression": _single_line(impression, 420),
                     "reading_impression": _single_line(impression, 420),
+                    "rating": bot_rating,
+                    "rating_reason": rating_reason,
+                    "preference_tags": [_single_line(tag, 24) for tag in preference_tags[:8] if _single_line(tag, 24)] if isinstance(preference_tags, list) else [],
                     "page_comments": page_comments if isinstance(page_comments, list) else [],
                     "cover_path": str(cover_path or ""),
                     "download_path": str(candidate_paths[0] if candidate_paths else ""),
@@ -4881,6 +5609,7 @@ class PrivateCompanionPlugin(Star):
                     "created_ts": _now_ts(),
                 }
                 self._remember_bookshelf_jm_album(result)
+                self._update_private_reading_preference_profile(result)
                 return result
         return None
 
@@ -5667,10 +6396,11 @@ class PrivateCompanionPlugin(Star):
         )
         return [item] if item else await self._fetch_bilibili_news_search_fallback(source)
 
-    async def _fetch_bilibili_news_source(self, source: dict[str, str]) -> list[dict[str, Any]]:
+    async def _fetch_bilibili_news_source(self, source: dict[str, str], *, limit: int | None = None) -> list[dict[str, Any]]:
         mid = re.sub(r"\D+", "", str(source.get("mid") or ""))
         if not mid:
             return []
+        item_limit = max(1, _safe_int(limit if limit is not None else self.news_max_items_per_source, self.news_max_items_per_source, 1))
         payloads: list[dict[str, Any]] = await self._fetch_bilibili_space_payloads_via_integration(mid)
         try:
             import aiohttp
@@ -5682,21 +6412,20 @@ class PrivateCompanionPlugin(Star):
                 "Accept": "application/json, text/plain, */*",
             }
             api_urls = [
-                f"https://api.bilibili.com/x/space/arc/search?mid={mid}&pn=1&ps={max(1, min(30, self.news_max_items_per_source))}&order=pubdate&jsonp=jsonp",
+                f"https://api.bilibili.com/x/space/arc/search?mid={mid}&pn=1&ps={max(1, min(30, item_limit))}&order=pubdate&jsonp=jsonp",
                 f"https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid={mid}&timezone_offset=-480&features=itemOpusStyle",
             ]
-            if not payloads:
-                async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-                    for url in api_urls:
-                        try:
-                            async with session.get(url) as resp:
-                                if resp.status >= 400:
-                                    continue
-                                data = await resp.json(content_type=None)
-                                if isinstance(data, dict) and int(data.get("code") or 0) == 0:
-                                    payloads.append(data)
-                        except Exception:
-                            continue
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                for url in api_urls:
+                    try:
+                        async with session.get(url) as resp:
+                            if resp.status >= 400:
+                                continue
+                            data = await resp.json(content_type=None)
+                            if isinstance(data, dict) and int(data.get("code") or 0) == 0:
+                                payloads.append(data)
+                    except Exception:
+                        continue
         except Exception as exc:
             logger.debug("[PrivateCompanion] B站新闻源抓取失败 mid=%s: %s", mid, exc)
             if not payloads:
@@ -5750,7 +6479,7 @@ class PrivateCompanionPlugin(Star):
                 unique.append(item)
         unique.sort(key=lambda item: (_safe_float(item.get("published_ts"), 0), _safe_float(item.get("fetched_ts"), 0)), reverse=True)
         if unique:
-            return unique[: max(1, self.news_max_items_per_source)]
+            return unique[:item_limit]
         return await self._fetch_bilibili_news_search_fallback(source)
 
     async def _fetch_news_source(self, source: dict[str, str]) -> list[dict[str, Any]]:
@@ -6193,6 +6922,193 @@ class PrivateCompanionPlugin(Star):
         self._save_data_sync()
         logger.info("[PrivateCompanion] 已完成一次新闻阅读: %s", reason)
 
+    def _ai_daily_state(self) -> dict[str, Any]:
+        state = self.data.setdefault("news_integration", {})
+        if not isinstance(state, dict):
+            self.data["news_integration"] = {}
+            state = self.data["news_integration"]
+        ai_state = state.setdefault("ai_daily", {})
+        if not isinstance(ai_state, dict):
+            ai_state = {}
+            state["ai_daily"] = ai_state
+        return ai_state
+
+    def _is_now_in_ai_daily_window(self, now_dt: datetime | None = None) -> bool:
+        now_dt = now_dt or datetime.now()
+        start, end = self._parse_window_minutes(str(getattr(self, "ai_daily_check_window", "") or "07:30-12:30"))
+        if start is None or end is None:
+            start, end = 7 * 60 + 30, 12 * 60 + 30
+        minute = now_dt.hour * 60 + now_dt.minute
+        if end < start:
+            return minute >= start or minute <= end
+        return start <= minute <= end
+
+    def _ai_daily_window_has_passed(self, now_dt: datetime | None = None) -> bool:
+        now_dt = now_dt or datetime.now()
+        start, end = self._parse_window_minutes(str(getattr(self, "ai_daily_check_window", "") or "07:30-12:30"))
+        if start is None or end is None:
+            start, end = 7 * 60 + 30, 12 * 60 + 30
+        minute = now_dt.hour * 60 + now_dt.minute
+        if end < start:
+            return False
+        return minute > end
+
+    @staticmethod
+    def _news_item_is_today(item: dict[str, Any], today: str | None = None) -> bool:
+        today = today or _today_key()
+        published_ts = _safe_float(item.get("published_ts"), 0)
+        if published_ts > 0:
+            try:
+                return datetime.fromtimestamp(published_ts).strftime("%Y-%m-%d") == today
+            except Exception:
+                pass
+        text = f"{item.get('title') or ''} {item.get('published') or ''} {item.get('summary') or ''}"
+        now_dt = datetime.now()
+        today_cn = now_dt.strftime("%Y年%m月%d日").replace("年0", "年").replace("月0", "月")
+        today_dash = now_dt.strftime("%Y-%m-%d")
+        today_slash = now_dt.strftime("%Y/%m/%d")
+        today_md = f"{now_dt.month}月{now_dt.day}日"
+        return any(token in text for token in (today_cn, today_dash, today_slash, today_md))
+
+    def _ai_daily_candidate_snapshot(self, items: list[dict[str, Any]], today: str) -> list[dict[str, Any]]:
+        snapshot: list[dict[str, Any]] = []
+        for item in items[:10]:
+            if not isinstance(item, dict):
+                continue
+            published_ts = _safe_float(item.get("published_ts"), 0)
+            published_date = ""
+            if published_ts > 0:
+                try:
+                    published_date = datetime.fromtimestamp(published_ts).strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    published_date = ""
+            snapshot.append(
+                {
+                    "title": _single_line(item.get("title"), 140),
+                    "published": published_date or _single_line(item.get("published"), 80),
+                    "link": _single_line(item.get("video_link") or item.get("link"), 420),
+                    "media_type": _single_line(item.get("media_type"), 40),
+                    "is_today": self._news_item_is_today(item, today),
+                }
+            )
+        return snapshot
+
+    async def _maybe_track_ai_daily(self, *, force: bool = False) -> None:
+        if not (self.enable_news_integration and self.enable_ai_daily_watch):
+            return
+        ai_state = self._ai_daily_state()
+        today = _today_key()
+        now = _now_ts()
+        now_dt = datetime.now()
+        if ai_state.get("last_success_date") == today and not force:
+            return
+        if not force and not self._is_now_in_ai_daily_window(now_dt):
+            status = "missed_today_ai_daily" if self._ai_daily_window_has_passed(now_dt) else "waiting_window"
+            if ai_state.get("date") != today or ai_state.get("status") != status:
+                ai_state.update({"date": today, "status": status, "last_checked_at": ai_state.get("last_checked_at", 0)})
+                self._save_data_sync()
+            return
+        interval = max(10, getattr(self, "ai_daily_check_interval_minutes", 40)) * 60
+        if not force and now - _safe_float(ai_state.get("last_checked_at"), 0) < interval:
+            return
+        ai_state.update({"date": today, "last_checked_at": now, "status": "checking"})
+        self._save_data_sync()
+
+        source = {
+            "name": "B站 AI早报",
+            "type": "bilibili",
+            "mid": str(getattr(self, "ai_daily_source_uid", "") or "285286947"),
+            "url": f"https://space.bilibili.com/{getattr(self, 'ai_daily_source_uid', '285286947')}",
+        }
+        items = await self._fetch_bilibili_news_source(
+            source,
+            limit=max(10, _safe_int(getattr(self, "news_max_items_per_source", 6), 6, 1)),
+        )
+        today_items = [item for item in items if isinstance(item, dict) and self._news_item_is_today(item, today)]
+        if not today_items:
+            fallback_items = await self._fetch_bilibili_news_search_fallback(source)
+            if fallback_items:
+                seen = {str(item.get("key") or item.get("link") or item.get("title") or "") for item in items if isinstance(item, dict)}
+                for item in fallback_items:
+                    if not isinstance(item, dict):
+                        continue
+                    key = str(item.get("key") or item.get("link") or item.get("title") or "")
+                    if key and key in seen:
+                        continue
+                    if key:
+                        seen.add(key)
+                    items.append(item)
+                items.sort(key=lambda item: (_safe_float(item.get("published_ts"), 0), _safe_float(item.get("fetched_ts"), 0)), reverse=True)
+                today_items = [item for item in items if isinstance(item, dict) and self._news_item_is_today(item, today)]
+        ai_state["last_candidates"] = self._ai_daily_candidate_snapshot(items, today)
+        if not today_items:
+            ai_state["status"] = "waiting_today_video"
+            ai_state["last_checked_at"] = now
+            ai_state["last_candidate_count"] = len(items)
+            self._save_data_sync()
+            return
+        today_items.sort(key=lambda item: (_safe_float(item.get("published_ts"), 0), _safe_float(item.get("fetched_ts"), 0)), reverse=True)
+        item = today_items[0]
+        bvid = _single_line(item.get("video_link"), 120)
+        bvid_match = re.search(r"(BV[0-9A-Za-z]+)", bvid)
+        bvid_key = bvid_match.group(1) if bvid_match else _single_line(item.get("key"), 32)
+        if bvid_key and str(ai_state.get("last_video_bvid") or "") == bvid_key and not force:
+            ai_state["status"] = "already_read_today_video"
+            ai_state["last_success_date"] = today
+            self._save_data_sync()
+            return
+        if getattr(self, "ai_daily_prefer_text_version", True) and not item.get("article_readable"):
+            ai_state.update(
+                {
+                    "status": "today_video_without_text",
+                    "last_video_bvid": bvid_key,
+                    "last_video_title": _single_line(item.get("title"), 120),
+                }
+            )
+            # 仍然继续用简介整理，避免文字版偶发缺失时今天完全没读到。
+        digest = await self._summarize_news_items([item])
+        if not digest:
+            ai_state["status"] = "digest_failed"
+            self._save_data_sync()
+            return
+        wish = await self._build_external_event_wish(digest, source_type="news")
+        if wish:
+            digest["self_link"] = wish
+        state = self.data.setdefault("news_integration", {})
+        if not isinstance(state, dict):
+            self.data["news_integration"] = {}
+            state = self.data["news_integration"]
+        state["last_read_at"] = now
+        state["last_status"] = "read"
+        state["last_reason"] = "ai_daily"
+        state["last_digest"] = digest
+        state["latest_items"] = [item]
+        digests = state.setdefault("digests", [])
+        if not isinstance(digests, list):
+            digests = []
+            state["digests"] = digests
+        digests.append({**digest, "reason": "ai_daily"})
+        del digests[:-80]
+        read_keys = state.setdefault("read_keys", [])
+        if isinstance(read_keys, list):
+            selected_key = _single_line(digest.get("selected_key"), 32)
+            if selected_key and selected_key not in read_keys:
+                read_keys.append(selected_key)
+                del read_keys[:-80]
+        ai_state.update(
+            {
+                "status": "read",
+                "last_success_date": today,
+                "last_video_bvid": bvid_key,
+                "last_video_title": _single_line(item.get("title"), 120),
+                "last_video_pub_ts": _safe_float(item.get("published_ts"), 0),
+                "last_text_link": _single_line(item.get("article_link") or item.get("link"), 400),
+                "last_digest": digest,
+            }
+        )
+        self._save_data_sync()
+        logger.info("[PrivateCompanion] 已读取今日 AI 日报: %s", _single_line(item.get("title"), 120))
+
     async def _maybe_trigger_news_boredom_read(self) -> None:
         if not (self.enable_news_integration and self.enable_news_boredom_read):
             return
@@ -6281,6 +7197,7 @@ class PrivateCompanionPlugin(Star):
 
     async def _run_astrbot_web_search(self, query: str, *, umo: str = "", topic: str = "general") -> list[dict[str, Any]]:
         cleaned_query = _single_line(query, 120)
+        self._last_web_search_error = ""
         if not cleaned_query:
             return []
         settings = self._astrbot_web_search_provider_settings(umo)
@@ -6294,12 +7211,16 @@ class PrivateCompanionPlugin(Star):
             "websearch_bocha_key",
             "websearch_brave_key",
             "websearch_firecrawl_key",
-            "websearch_baidu_app_builder_key",
         ):
             value = settings.get(key)
             if isinstance(value, str):
                 value = value.strip()
                 settings[key] = [value] if value else []
+        baidu_key = settings.get("websearch_baidu_app_builder_key")
+        if isinstance(baidu_key, list):
+            settings["websearch_baidu_app_builder_key"] = str(baidu_key[0] if baidu_key else "").strip()
+        elif isinstance(baidu_key, str):
+            settings["websearch_baidu_app_builder_key"] = baidu_key.strip()
         try:
             from astrbot.core.tools import web_search_tools as ws
             if provider == "tavily":
@@ -6350,7 +7271,8 @@ class PrivateCompanionPlugin(Star):
             else:
                 return []
         except Exception as exc:
-            logger.debug("[PrivateCompanion] AstrBot 网页搜索失败: provider=%s query=%s err=%s", provider, cleaned_query, exc)
+            self._last_web_search_error = _single_line(str(exc), 240)
+            logger.warning("[PrivateCompanion] AstrBot 网页搜索失败: provider=%s query=%s err=%s", provider, cleaned_query, exc)
             return []
         results: list[dict[str, Any]] = []
         for item in raw_results or []:
@@ -6596,6 +7518,23 @@ class PrivateCompanionPlugin(Star):
     async def _summarize_web_exploration(self, query_info: dict[str, Any], results: list[dict[str, Any]]) -> dict[str, Any]:
         if not results:
             return {}
+
+        def fallback_digest() -> dict[str, Any]:
+            first = results[0] if results else {}
+            note = fallback_note() or _single_line(first.get("snippet"), 260) or _single_line(first.get("title"), 120)
+            return {
+                "query": _single_line(query_info.get("query"), 80),
+                "topic": _single_line(first.get("title"), 80) or _single_line(query_info.get("query"), 80) or "主动搜索",
+                "note": note or "这次搜索拿到了结果,但还没整理出清晰笔记。",
+                "source_title": _single_line(first.get("title"), 120),
+                "source_url": _single_line(first.get("url"), 420),
+                "reason": _single_line(query_info.get("reason"), 120),
+                "possible_share": False,
+                "results": results[:6],
+                "created_ts": _now_ts(),
+                "fallback": True,
+            }
+
         def fallback_note() -> str:
             parts = []
             for item in results[:3]:
@@ -6647,7 +7586,7 @@ class PrivateCompanionPlugin(Star):
         raw = await self._llm_call(prompt, max_tokens=280, provider_id=provider_id, task="web_exploration_digest")
         parsed = self._parse_json_object(raw)
         if not isinstance(parsed, dict):
-            return {}
+            return fallback_digest()
         source_index = _safe_int(parsed.get("source_index"), 1, 1, len(results[:8])) - 1
         source = results[source_index] if 0 <= source_index < len(results) else results[0]
         note = (
@@ -6707,16 +7646,23 @@ class PrivateCompanionPlugin(Star):
             topic=str(query_info.get("topic") or "general"),
         )
         if not results:
-            state["last_status"] = "no_results"
+            error_text = _single_line(getattr(self, "_last_web_search_error", ""), 240)
+            state["last_status"] = "search_failed" if error_text else "no_results"
             state["last_query"] = query_info
+            state["last_explore_at"] = now
+            state["last_digest"] = {
+                "query": _single_line(query_info.get("query"), 80),
+                "topic": _single_line(query_info.get("query"), 80) or "主动搜索",
+                "note": f"搜索调用失败：{error_text}" if error_text else "这次搜索没有拿到可用结果。",
+                "reason": _single_line(query_info.get("reason"), 120),
+                "results": [],
+                "created_ts": now,
+                "no_results": not bool(error_text),
+                "search_failed": bool(error_text),
+            }
             self._save_data_sync()
             return
         digest = await self._summarize_web_exploration(query_info, results)
-        if not digest:
-            state["last_status"] = "digest_failed"
-            state["last_query"] = query_info
-            self._save_data_sync()
-            return
         notes = state.setdefault("notes", [])
         if not isinstance(notes, list):
             notes = []
@@ -7070,23 +8016,66 @@ class PrivateCompanionPlugin(Star):
                 project["point_of_view_policy_version"] = 2
         return valid_projects
 
-    def _creative_speed_chars_per_hour(self) -> int:
+    def _creative_chars_per_session(self) -> int:
         style = str(self.default_style or "")
         persona = f"{self.schedule_persona_prompt} {self.default_style} {self.bot_name}"
-        speed = self.creative_base_chars_per_hour
+        budget = self.creative_chars_per_session
         if any(token in persona for token in ("慢热", "寡言", "内敛", "病弱", "疲惫", "懒", "迟钝")):
-            speed = int(speed * 0.55)
+            budget = int(budget * 0.72)
         elif any(token in persona for token in ("活泼", "话多", "元气", "急性子")) or style == "活泼":
-            speed = int(speed * 1.25)
+            budget = int(budget * 1.18)
         elif style == "校园风":
-            speed = int(speed * 0.85)
+            budget = int(budget * 0.88)
         state = self.data.get("daily_state", {})
         energy = _safe_int(state.get("energy") if isinstance(state, dict) else 70, 70, 0, 100)
         if energy < 40:
-            speed = int(speed * 0.58)
+            budget = int(budget * 0.72)
         elif energy > 82:
-            speed = int(speed * 1.15)
-        return max(40, min(1400, speed))
+            budget = int(budget * 1.12)
+        return max(60, min(1200, budget))
+
+    def _bot_currently_idle_for_creative_writing(self) -> bool:
+        now_dt = datetime.now()
+        if now_dt.hour < 7:
+            return False
+        current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
+        if self._is_sleepy_plan_item(current_item):
+            return False
+        activity = _single_line((current_item or {}).get("activity"), 100)
+        mood = _single_line((current_item or {}).get("mood"), 40)
+        seed = _single_line((current_item or {}).get("message_seed"), 100)
+        state = self.data.get("daily_state", {})
+        state_mood = _single_line(state.get("mood_bias") if isinstance(state, dict) else "", 30)
+        energy = _safe_int(state.get("energy") if isinstance(state, dict) else 70, 70, 0, 100)
+        text = f"{activity} {mood} {seed} {state_mood}"
+        busy_tokens = (
+            "上课", "学习", "复习", "考试", "作业", "工作", "开会", "通勤",
+            "忙", "赶", "处理", "训练", "任务", "外出", "出门", "睡",
+        )
+        if any(token in text for token in busy_tokens):
+            return False
+        idle_tokens = (
+            "创作", "写字", "写作", "灵感", "读书", "阅读", "休息", "摸鱼",
+            "发呆", "无聊", "闲", "空", "散步", "听歌", "整理", "安静",
+            "下午也要加油", "缓一缓", "歇", "偷懒",
+        )
+        if any(token in text for token in idle_tokens):
+            return random.random() < 0.55
+        return 38 <= energy <= 82 and random.random() < 0.18
+
+    def _creative_has_pending_proactive_plan(self) -> bool:
+        now = _now_ts()
+        users = self.data.get("users", {})
+        if not isinstance(users, dict):
+            return False
+        for user in users.values():
+            if not isinstance(user, dict):
+                continue
+            next_at = _safe_float(user.get("next_proactive_at"), 0)
+            source = str(user.get("planned_proactive_source") or "")
+            if next_at > now and (next_at - now <= 45 * 60 or source in {"timer", "simulation"}):
+                return True
+        return False
 
     def _creative_persona_style_context(self) -> str:
         default_persona = _single_line(self._get_default_persona_prompt(), 700)
@@ -7251,7 +8240,7 @@ class PrivateCompanionPlugin(Star):
         point_of_view = self._creative_point_of_view(project)
         output_rule = self._creative_work_output_rule(work_type, point_of_view)
         prompt = f"""
-你正在模拟拟人化 Bot 慢慢创作一个文本作品。请只写本次能写出来的一小段。
+你正在模拟拟人化 Bot 在闲暇时慢慢创作一个文本作品。请只写本次随手能写下的一小段。
 
 【作者人格与身份】
 {persona_context}
@@ -7269,7 +8258,7 @@ class PrivateCompanionPlugin(Star):
 要求：
 1. {output_rule}
 2. 不要标题、说明、JSON、系统旁白或“下面是”。
-3. 模拟真实创作速度,只写一个片段,不要一口气完成整个作品。
+3. 这是一次可选的闲暇创作行为,只写一个片段,不要一口气完成整个作品。
 4. 文风要像这个人格与身份自然写出的作品：用词、观察角度、人物成熟度、知识范围都不能越过人设。
 5. 作者人格影响文风,但作者不等于必须直接出现在作品里；不要把所有作品都写成 Bot 的日记或对用户的自白。
 6. 细节要具体,但不要堆辞藻；可以有一点梦境感或生活感。
@@ -7295,8 +8284,10 @@ class PrivateCompanionPlugin(Star):
             ])
         return cleaned
 
-    async def _maybe_start_creative_project(self) -> bool:
+    async def _maybe_start_creative_project(self, *, idle_checked: bool = False) -> bool:
         if not self.enable_creative_writing:
+            return False
+        if not idle_checked and not self._bot_currently_idle_for_creative_writing():
             return False
         projects = self._creative_projects()
         active = [item for item in projects if item.get("status") == "drafting"]
@@ -7324,7 +8315,11 @@ class PrivateCompanionPlugin(Star):
     async def _maybe_advance_creative_projects(self) -> None:
         if not self.enable_creative_writing:
             return
-        await self._maybe_start_creative_project()
+        if self._creative_has_pending_proactive_plan():
+            return
+        if not self._bot_currently_idle_for_creative_writing():
+            return
+        await self._maybe_start_creative_project(idle_checked=True)
         projects = self._creative_projects()
         now = _now_ts()
         changed = False
@@ -7333,10 +8328,8 @@ class PrivateCompanionPlugin(Star):
                 continue
             if now < _safe_float(project.get("next_advance_at"), 0):
                 continue
-            elapsed_hours = max(0.25, (now - _safe_float(project.get("last_advanced_at"), now)) / 3600)
-            speed = self._creative_speed_chars_per_hour()
-            budget = int(speed * elapsed_hours * random.uniform(0.38, 0.82))
-            budget = max(70, min(280, budget))
+            budget = int(self._creative_chars_per_session() * random.uniform(0.72, 1.18))
+            budget = max(60, min(1200, budget))
             remaining = _safe_int(project.get("target_chars"), 2400, 300, 5200) - _safe_int(project.get("current_chars"), 0, 0)
             if remaining <= 0:
                 project["status"] = "finished"
@@ -7355,7 +8348,7 @@ class PrivateCompanionPlugin(Star):
             del chunks[:-40]
             project["current_chars"] = _safe_int(project.get("current_chars"), 0, 0) + len(chunk)
             project["last_advanced_at"] = now
-            project["next_advance_at"] = now + random.randint(55, 210) * 60
+            project["next_advance_at"] = now + random.randint(95, 320) * 60
             if project["current_chars"] >= _safe_int(project.get("target_chars"), 2400, 300, 5200):
                 project["status"] = "finished"
             changed = True
@@ -13288,6 +14281,70 @@ Bot 主动后用户回复次数：{reply_count}
                     lines.append(f"- {title}" + (f"（{source}）" if source else ""))
         return "\n".join(lines)
 
+    def _format_ai_daily_status_for_command(self) -> str:
+        state = self.data.get("news_integration") if isinstance(self.data.get("news_integration"), dict) else {}
+        ai_state = state.get("ai_daily") if isinstance(state.get("ai_daily"), dict) else {}
+        status_labels = {
+            "read": "已阅读",
+            "waiting_window": "等待窗口",
+            "checking": "正在检查",
+            "waiting_today_video": "等待今日视频",
+            "today_video_without_text": "今日视频暂无文字版",
+            "already_read_today_video": "今日已读",
+            "missed_today_ai_daily": "今日窗口已过",
+            "digest_failed": "整理失败",
+        }
+        status = _single_line(ai_state.get("status"), 60) or "未知"
+        lines = [
+            "AI 早报测试结果：",
+            f"- 新闻集成：{'开启' if self.enable_news_integration else '关闭'}",
+            f"- AI早报追踪：{'开启' if self.enable_ai_daily_watch else '关闭'}",
+            f"- UP 主 UID：{_single_line(getattr(self, 'ai_daily_source_uid', ''), 32) or '未配置'}",
+            f"- 检查窗口：{_single_line(getattr(self, 'ai_daily_check_window', ''), 32) or '07:30-12:30'}",
+            f"- 状态：{status_labels.get(status, status)}",
+        ]
+        date = _single_line(ai_state.get("date"), 20)
+        checked = self._format_timestamp_elapsed(ai_state.get("last_checked_at", 0))
+        success_date = _single_line(ai_state.get("last_success_date"), 20)
+        title = _single_line(ai_state.get("last_video_title"), 120)
+        text_link = _single_line(ai_state.get("last_text_link"), 420)
+        candidate_count = _safe_int(ai_state.get("last_candidate_count"), 0, 0)
+        if date:
+            lines.append(f"- 状态日期：{date}")
+        if checked:
+            lines.append(f"- 最近检查：{checked}")
+        if success_date:
+            lines.append(f"- 最近成功日期：{success_date}")
+        if title:
+            lines.append(f"- 视频：{title}")
+        if text_link:
+            lines.append(f"- 文字版/链接：{text_link}")
+        if candidate_count:
+            lines.append(f"- 候选数量：{candidate_count}")
+        digest = ai_state.get("last_digest") if isinstance(ai_state.get("last_digest"), dict) else {}
+        if digest:
+            headline = _single_line(digest.get("headline") or digest.get("topic"), 120)
+            impression = _single_line(digest.get("impression"), 220)
+            if headline:
+                lines.append(f"- 摘要重点：{headline}")
+            if impression:
+                lines.append(f"- 阅读印象：{impression}")
+        candidates = ai_state.get("last_candidates") if isinstance(ai_state.get("last_candidates"), list) else []
+        if candidates:
+            lines.append("最近候选：")
+            for item in candidates[:5]:
+                if not isinstance(item, dict):
+                    continue
+                title_line = _single_line(item.get("title"), 90) or "未命名"
+                published = _single_line(item.get("published"), 24) or "无发布时间"
+                today_mark = "今天" if item.get("is_today") else "非今天"
+                lines.append(f"- [{today_mark}] {published}｜{title_line}")
+        if not self.enable_news_integration:
+            lines.append("提示：新闻集成关闭时不会执行抓取。")
+        elif not self.enable_ai_daily_watch:
+            lines.append("提示：AI 早报追踪关闭时不会执行抓取。")
+        return "\n".join(lines)
+
     def _format_creative_share_action_context(self, user: dict[str, Any]) -> str:
         creative = user.get("creative_share_context")
         if not isinstance(creative, dict):
@@ -16158,6 +17215,12 @@ Bot 主动后用户回复次数：{reply_count}
             kept.append(line)
         return "\n".join(kept).strip()
 
+    @staticmethod
+    def _strip_leading_sentence_boundary_artifacts(text: str) -> str:
+        cleaned = str(text or "").strip()
+        cleaned = re.sub(r"^(?:[。！？!?；;，,、：:]+[\s\u3000]*)+", "", cleaned).strip()
+        return cleaned
+
     def _split_proactive_text(self, text: str, *, image_path: str = "", extra_components: list[Any] | None = None) -> list[str]:
         normalized = str(text or "").strip()
         if not normalized:
@@ -16283,6 +17346,71 @@ Bot 主动后用户回复次数：{reply_count}
 
         protected_normalized, protected_literals = _protect_segmented_literals(normalized)
 
+        def _split_words_outside_protected(value: str, words: list[str]) -> list[str]:
+            sorted_words = sorted({str(word) for word in words if str(word) != ""}, key=len, reverse=True)
+            if not sorted_words:
+                return [str(value or "")]
+            segments: list[str] = []
+            current: list[str] = []
+            url_pattern = re.compile(r"(?i)^(?:https?://|www\.)")
+
+            def protected_starts_with_split_word(chunk: str) -> bool:
+                stripped = str(chunk or "").lstrip()
+                return any(stripped.startswith(word) for word in sorted_words)
+
+            def push_current() -> None:
+                if current:
+                    segments.append("".join(current))
+                    current.clear()
+
+            def feed_plain(chunk: str) -> None:
+                index = 0
+                text_chunk = str(chunk or "")
+                while index < len(text_chunk):
+                    matched = ""
+                    for word in sorted_words:
+                        if text_chunk.startswith(word, index):
+                            matched = word
+                            break
+                    if matched:
+                        delimiter = matched
+                        if matched == ".":
+                            end = index + len(matched)
+                            while end < len(text_chunk) and text_chunk[end] == ".":
+                                delimiter += text_chunk[end]
+                                end += 1
+                            current.append(delimiter)
+                            push_current()
+                            index = end
+                            continue
+                        if matched in {"…", "~", "～"}:
+                            end = index + len(matched)
+                            while end < len(text_chunk) and text_chunk.startswith(matched, end):
+                                delimiter += matched
+                                end += len(matched)
+                            current.append(delimiter)
+                            push_current()
+                            index = end
+                            continue
+                        current.append(delimiter)
+                        push_current()
+                        index += len(matched)
+                    else:
+                        current.append(text_chunk[index])
+                        index += 1
+
+            for chunk, protected in _protected_cleanup_chunks(str(value or "")):
+                if protected:
+                    if current and protected_starts_with_split_word(chunk):
+                        push_current()
+                    current.append(chunk)
+                    if url_pattern.match(chunk.strip()):
+                        push_current()
+                else:
+                    feed_plain(chunk)
+            push_current()
+            return segments
+
         def _clean_segment(segment: str) -> str:
             original = str(segment or "")
             cleaned_parts: list[str] = []
@@ -16298,17 +17426,7 @@ Bot 主动后用户回复次数：{reply_count}
                     cleaned_chunk = cleanup_pattern.sub("", cleaned_chunk)
                 cleaned_parts.append(cleaned_chunk)
             cleaned = "".join(cleaned_parts)
-            cleaned = cleaned.strip()
-            original_tail = re.search(r"[。！？!?…~～]+$", original.strip())
-            tail_cleaned = _single_line(original_tail.group(0), 20) if original_tail else ""
-            if tail_cleaned:
-                if cleanup_words:
-                    for word in cleanup_words:
-                        tail_cleaned = tail_cleaned.replace(word, "")
-                elif cleanup_pattern:
-                    tail_cleaned = cleanup_pattern.sub("", tail_cleaned)
-            if cleaned and tail_cleaned and not re.search(r"[。！？!?…~～]+$", cleaned):
-                cleaned += tail_cleaned
+            cleaned = self._strip_leading_sentence_boundary_artifacts(cleaned)
             return cleaned
 
         def _visible_len(value: str) -> int:
@@ -16321,6 +17439,8 @@ Bot 主动后用户回复次数：{reply_count}
             body = re.sub(r"[。！？!?…~～,.，、\s]+$", "", cleaned)
             if _visible_len(cleaned) <= max(1, self.segmented_proactive_min_segment_chars):
                 return True
+            if re.search(r"(?:\.{2,}|…{1,}|~{2,}|～{2,})$", cleaned):
+                return False
             return body in {
                 "哈哈",
                 "哈",
@@ -16386,17 +17506,17 @@ Bot 主动后用户回复次数：{reply_count}
 
         if self.segmented_proactive_split_mode == "words":
             split_words = [word for word in self.segmented_proactive_split_words if word]
+            if "\n" not in split_words:
+                split_words.append("\n")
             if not split_words:
                 return [normalized]
-            escaped_words = sorted([re.escape(word) for word in split_words], key=len, reverse=True)
-            pattern = re.compile(f"(.*?({'|'.join(escaped_words)})|.+$)", re.DOTALL)
-            raw_segments = pattern.findall(protected_normalized)
+            raw_segments = _split_words_outside_protected(normalized, split_words)
             segments: list[str] = []
             for segment in raw_segments:
                 content = segment[0] if isinstance(segment, tuple) else segment
                 if not isinstance(content, str):
                     continue
-                cleaned = _restore_segmented_literals(_clean_segment(content), protected_literals)
+                cleaned = _clean_segment(content)
                 if cleaned:
                     segments.append(cleaned)
             segments = _merge_segments(segments)
@@ -16478,8 +17598,9 @@ Bot 主动后用户回复次数：{reply_count}
             extra_components=None,
         )
         if len(segments) <= 1:
-            if text:
-                await self._send_chain_components(umo, [Plain(text)])
+            outbound_text = segments[0] if segments else ""
+            if outbound_text:
+                await self._send_chain_components(umo, [Plain(outbound_text)])
         else:
             for index, segment in enumerate(segments):
                 await self._send_chain_components(umo, [Plain(segment)])
@@ -16514,9 +17635,10 @@ Bot 主动后用户回复次数：{reply_count}
             extra_components=extra_components,
         )
         if len(segments) <= 1:
+            outbound_text = segments[0] if segments else text
             await self._send_chain_components(
                 umo,
-                self._build_outbound_chain(text, image_path, extra_components=extra_components),
+                self._build_outbound_chain(outbound_text, image_path, extra_components=extra_components),
             )
             return
         for index, segment in enumerate(segments):
@@ -16547,6 +17669,9 @@ Bot 主动后用户回复次数：{reply_count}
             return
         segments = self._split_proactive_text(text)
         if len(segments) <= 1:
+            cleaned_text = segments[0] if segments else ""
+            if cleaned_text and cleaned_text != text:
+                event.set_result(self._build_result_from_chain([Plain(cleaned_text)]))
             return
         logger.debug("[PrivateCompanion] 按插件规则分段 LLM 回复: %s -> %s 段", len(text), len(segments))
         for index, segment in enumerate(segments):
@@ -16790,7 +17915,7 @@ Bot 主动后用户回复次数：{reply_count}
 
         cleaned = re.sub(r"^[（(]\s*[^()（）\n]{1,50}\s*[）)]\s*", "", cleaned)
         cleaned = re.sub(r"[（(]\s*([^()（）\n]{1,50})\s*[）)]", _replace, cleaned)
-        return re.sub(r"\s+", " ", cleaned).strip()
+        return self._strip_leading_sentence_boundary_artifacts(re.sub(r"\s+", " ", cleaned).strip())
 
     def _normalize_proactive_sentence_flow(self, text: str) -> str:
         cleaned = str(text or "").strip()
@@ -22266,7 +23391,13 @@ Bot 主动后用户回复次数：{reply_count}
 
     @staticmethod
     def _is_llm_budget_exempt_task(task: str | None) -> bool:
-        return str(task or "") in {"proactive_framework", "voice_framework"}
+        return str(task or "") in {
+            "proactive_framework",
+            "voice_framework",
+            "private_image_vision",
+            "private_image_only_framework",
+            "private_image_only_fallback",
+        }
 
     def _today_llm_token_total(self, *, include_budget_exempt: bool = False) -> int:
         usage = self.data.get("token_usage")
@@ -22300,6 +23431,12 @@ Bot 主动后用户回复次数：{reply_count}
         if limit <= 0:
             return None
         return max(0, limit - self._today_llm_token_total())
+
+    def _can_run_llm_task(self, provider_id: str = "", *, task: str | None = None) -> bool:
+        task_key = _single_line(task, 40) or "other"
+        if self._is_llm_budget_exempt_task(task_key):
+            return True
+        return self._llm_daily_budget_remaining() != 0
 
     def _record_llm_budget_skip(self, *, provider_id: str, task: str, prompt: str) -> None:
         now_ts = _now_ts()
@@ -22937,6 +24074,7 @@ Bot 主动后用户回复次数：{reply_count}
         await self._maybe_settle_skill_growth()
         await self._maybe_trigger_bilibili_boredom_watch()
         await self._maybe_trigger_web_exploration()
+        await self._maybe_track_ai_daily()
         await self._maybe_trigger_news_boredom_read()
         await self._maybe_trigger_jm_cosmos_boredom_read()
         await self._maybe_publish_qzone_life_post()
@@ -23909,7 +25047,61 @@ Bot 主动后用户回复次数：{reply_count}
         value = seg_data.get("file")
         if isinstance(value, str) and value.strip().startswith(("http://", "https://", "file://", "data:")):
             return value.strip()
+        for key in ("path", "file"):
+            value = seg_data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
         return ""
+
+    def _extract_image_sources_from_message_obj(self, message_obj: Any) -> list[str]:
+        sources: list[str] = []
+
+        def add(value: Any) -> None:
+            text = str(value or "").strip()
+            if text and text not in sources:
+                sources.append(text)
+
+        def visit(value: Any) -> None:
+            if value is None:
+                return
+            if isinstance(value, list):
+                for item in value:
+                    visit(item)
+                return
+            if isinstance(value, dict):
+                type_name = self._component_type_name(value)
+                data = self._component_data(value)
+                if type_name == "image":
+                    add(self._extract_image_url_from_segment_data(data))
+                    for key in ("url", "file", "path", "src", "origin_url", "source_url"):
+                        add(data.get(key))
+                        add(value.get(key))
+                for key in ("message", "raw_message", "content", "messages", "data"):
+                    nested = value.get(key)
+                    if nested is not value:
+                        visit(nested)
+                return
+            type_name = self._component_type_name(value)
+            if type_name == "image":
+                add(self._image_component_source(value))
+                data = self._component_data(value)
+                add(self._extract_image_url_from_segment_data(data))
+                for key in ("url", "file", "path", "src", "origin_url", "source_url"):
+                    add(data.get(key))
+            raw_text = str(value or "")
+            for match in re.finditer(r"\[CQ:image,([^\]]+)\]", raw_text):
+                fields: dict[str, str] = {}
+                for part in match.group(1).split(","):
+                    if "=" not in part:
+                        continue
+                    key, val = part.split("=", 1)
+                    fields[key.strip()] = html.unescape(val.strip())
+                add(self._extract_image_url_from_segment_data(fields))
+                for key in ("url", "file", "path"):
+                    add(fields.get(key))
+
+        visit(message_obj)
+        return [source for source in sources if source]
 
     def _extract_messages_from_forward_data(self, forward_data: Any) -> list[dict[str, Any]]:
         if isinstance(forward_data, list):
@@ -24018,6 +25210,37 @@ Bot 主动后用户回复次数：{reply_count}
             return "", {}
         raw_message = message_obj.get("message") if isinstance(message_obj, dict) else message_obj
         return self._extract_forward_id_from_message_obj(raw_message), self._extract_forward_payload_from_message_obj(raw_message)
+
+    async def _extract_image_sources_from_reply(self, event: AstrMessageEvent, reply_seg: Any) -> list[str]:
+        message_id = self._extract_reply_message_id(reply_seg)
+        if not message_id:
+            return []
+        message_obj = None
+        try:
+            message_obj = await self._call_platform_action(event, "get_msg", message_id=int(message_id))
+        except Exception:
+            try:
+                message_obj = await self._call_platform_action(event, "get_msg", message_id=message_id)
+            except Exception as exc:
+                logger.info("[PrivateCompanion] 引用图片读取失败: message_id=%s error=%s", message_id, _single_line(exc, 120))
+                return []
+        if isinstance(message_obj, dict):
+            raw_message = message_obj.get("message") or message_obj.get("raw_message") or message_obj.get("content")
+        else:
+            raw_message = message_obj
+        sources = self._extract_image_sources_from_message_obj(raw_message)
+        if sources:
+            logger.info("[PrivateCompanion] 引用消息图片已解析: message_id=%s images=%s", message_id, len(sources))
+        return sources[:4]
+
+    async def _find_reply_image_sources_for_event(self, event: AstrMessageEvent) -> list[str]:
+        for item in self._event_components(event):
+            type_name = self._component_type_name(item)
+            if type_name == "reply" or "reply" in type_name:
+                sources = await self._extract_image_sources_from_reply(event, item)
+                if sources:
+                    return sources
+        return []
 
     async def _find_forward_descriptor_for_event(self, event: AstrMessageEvent) -> tuple[str, dict[str, Any]]:
         message_obj = getattr(event, "message_obj", None)
@@ -24385,10 +25608,22 @@ Bot 主动后用户回复次数：{reply_count}
                 injection_parts.append(
                     "【本轮延迟图片】\n"
                     "用户刚刚先单独发了一张图片,随后补充了文字。图片已随本轮请求一起交给当前视觉主模型；"
-                    "请把图片和用户文字作为同一轮发言理解,不要提插件或处理过程。"
+                    "请优先理解用户发这张图想表达的情绪、态度、文字或梗,再把图片和用户文字作为同一轮发言理解,不要提插件或处理过程。"
+                    f"{self._private_image_identity_disambiguation_instruction()}"
                 )
             elif buffered_image_vision:
-                logger.info("[PrivateCompanion] 私聊延迟图片已注入视觉摘要: user=%s chars=%s", user_id, len(buffered_image_vision))
+                intent_line = self._private_image_intent_line(buffered_image_vision)
+                ownership_line = self._private_image_ownership_line(buffered_image_vision)
+                reply_objective = self._private_image_reply_objective(ownership_line)
+                logger.info(
+                    "[PrivateCompanion] 私聊延迟图片已注入视觉摘要: user=%s chars=%s intent=%s ownership=%s objective=%s preview=%s",
+                    user_id,
+                    len(buffered_image_vision),
+                    intent_line or "无",
+                    ownership_line or "无",
+                    _single_line(reply_objective, 120),
+                    _single_line(buffered_image_vision, 220),
+                )
                 image_context_intro = (
                     "用户刚刚只发了一张图片,没有继续补充文字。"
                     if bool(getattr(event, "private_companion_deferred_private_image_only_ready", False))
@@ -24397,7 +25632,9 @@ Bot 主动后用户回复次数：{reply_count}
                 injection_parts.append(
                     "【本轮延迟图片】\n"
                     f"{image_context_intro}下面是视觉模型对刚才那张图的内部摘要；"
-                    "请把它和用户本轮文字一起理解,不要提模型、插件或路径。\n"
+                    "请优先理解用户发这张图想表达的情绪、态度、文字或梗,再结合画面内容和用户本轮文字回复；不要提模型、插件或路径。"
+                    f"{self._private_image_identity_disambiguation_instruction()}\n"
+                    f"{reply_objective}\n"
                     f"{buffered_image_vision}"
                 )
             else:
@@ -24426,6 +25663,62 @@ Bot 主动后用户回复次数：{reply_count}
                     "用户刚刚只发了一张图片,没有继续补充文字。当前没有拿到可用图片内容；"
                     "请不要沉默,也不要编造画面,可以自然地表示这边暂时没看清并等用户补一句。"
                 )
+        reply_image_sources: list[str] = []
+        if not buffered_images and not bool(getattr(event, "private_companion_deferred_private_image_only_ready", False)):
+            reply_image_sources = await self._find_reply_image_sources_for_event(event)
+            if reply_image_sources:
+                reply_image_vision = _single_line(
+                    await self._transcribe_private_inbound_images(
+                        reply_image_sources,
+                        umo=str(getattr(event, "unified_msg_origin", "") or ""),
+                    ),
+                    600,
+                )
+                if reply_image_vision:
+                    intent_line = self._private_image_intent_line(reply_image_vision)
+                    ownership_line = self._private_image_ownership_line(reply_image_vision)
+                    reply_objective = self._private_image_reply_objective(ownership_line)
+                    logger.info(
+                        "[PrivateCompanion] 私聊引用图片已注入视觉摘要: user=%s images=%s intent=%s ownership=%s objective=%s preview=%s",
+                        user_id,
+                        len(reply_image_sources),
+                        intent_line or "无",
+                        ownership_line or "无",
+                        _single_line(reply_objective, 120),
+                        _single_line(reply_image_vision, 220),
+                    )
+                    injection_parts.append(
+                        "【本轮引用图片】\n"
+                        f"用户这轮引用/回复了一张图片,并发送文字：{inbound_text or '（空）'}。\n"
+                        "下面是视觉模型对被引用图片的内部摘要。请优先回答用户当前这句文字针对引用图片提出的问题；"
+                        "不要把历史记忆里的旧图片、旧声音或旧描述当成当前引用目标。\n"
+                        f"{self._private_image_identity_disambiguation_instruction()}\n"
+                        f"{reply_objective}\n"
+                        f"{reply_image_vision}"
+                    )
+                    image_keys = self._private_image_cache_image_keys(reply_image_sources)
+                    if image_keys:
+                        try:
+                            async with self._data_lock:
+                                user = self._get_user(user_id)
+                                user["last_private_image_vision_feedback_target"] = {
+                                    "ts": _now_ts(),
+                                    "image_keys": image_keys,
+                                    "vision_text": _single_line(reply_image_vision, 600),
+                                    "reply": "",
+                                    "ownership": ownership_line,
+                                    "intent": intent_line,
+                                    "source": "reply_image",
+                                }
+                                self._save_data_sync()
+                        except Exception as exc:
+                            logger.debug("[PrivateCompanion] 私聊引用图片视觉反馈目标记录失败: %s", exc)
+                else:
+                    injection_parts.append(
+                        "【本轮引用图片】\n"
+                        f"用户这轮引用/回复了一张图片,并发送文字：{inbound_text or '（空）'}。"
+                        "当前未能拿到可用视觉摘要；如果用户问的是引用图片内容,请自然说明这边暂时没看清,不要编造。"
+                    )
         hidden_creative_context = self._format_hidden_creative_context_for_reply(inbound_text)
         if hidden_creative_context:
             injection_parts.append(hidden_creative_context)
@@ -24435,6 +25728,9 @@ Bot 主动后用户回复次数：{reply_count}
         bookshelf_reading_context = self._format_bookshelf_reading_context_for_reply(inbound_text)
         if bookshelf_reading_context:
             injection_parts.append(bookshelf_reading_context)
+        private_preference_context = self._format_private_reading_preference_influence_for_reply(inbound_text)
+        if private_preference_context:
+            injection_parts.append(private_preference_context)
         news_context = self._format_recent_news_context_for_reply(inbound_text)
         if news_context:
             injection_parts.append(news_context)
@@ -24746,6 +26042,7 @@ Bot 主动后用户回复次数：{reply_count}
             "测试本子", "测试书柜本子", "测试夹层本子", "测试夹层阅读", "测试私密阅读",
             "测试QQ空间", "测试空间", "QQ空间测试", "测试说说",
             "发说说", "发QQ空间", "发布说说", "空间发布", "发布空间",
+            "测试AI早报", "AI早报测试", "测试早报", "测试AI日报", "AI日报测试",
             "新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报",
         }
 
@@ -24862,6 +26159,8 @@ Bot 主动后用户回复次数：{reply_count}
                 response = "正在测试 QQ 空间动态层：只检查读取能力，不会发布、点赞或评论。"
             elif action in {"发说说", "发QQ空间", "发布说说", "空间发布", "发布空间"}:
                 response = "正在发布 QQ 空间说说。"
+            elif action in {"测试AI早报", "AI早报测试", "测试早报", "测试AI日报", "AI日报测试"}:
+                response = "正在测试 AI 早报追踪：忽略今日时间窗口，直接检查配置的 B 站 UP 主。"
             elif action in {"新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报"}:
                 response = "正在读今天的新闻源。"
             elif action in {"生成日记", "刷新日记"}:
@@ -24932,6 +26231,12 @@ Bot 主动后用户回复次数：{reply_count}
             await self._reply(event, response)
             result = await self._test_qzone_integration(event, value)
             await self._reply(event, result)
+            event.stop_event()
+            return
+        if action in {"测试AI早报", "AI早报测试", "测试早报", "测试AI日报", "AI日报测试"}:
+            await self._reply(event, response)
+            await self._maybe_track_ai_daily(force=True)
+            await self._reply(event, self._format_ai_daily_status_for_command())
             event.stop_event()
             return
         if action in {"新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报"}:
@@ -25538,7 +26843,16 @@ Bot 主动后用户回复次数：{reply_count}
             if self._is_duplicate_inbound_message(event, scope=f"private:{user_id}", sender_id=user_id, text=text):
                 self._save_data_sync()
                 return
-            private_image_only = is_target_user and self._is_private_image_only_message(event, text)
+            private_image_enhancement_enabled = (
+                bool(getattr(self, "enable_private_image_self_recognition", True))
+                and bool(getattr(self, "enable_semantic_message_debounce", True))
+                and max(0.0, float(getattr(self, "semantic_message_debounce_seconds", 0.0) or 0.0)) > 0
+            )
+            private_image_only = (
+                is_target_user
+                and private_image_enhancement_enabled
+                and self._is_private_image_only_message(event, text)
+            )
             if private_image_only:
                 setattr(event, "private_companion_deferred_private_image_only", True)
                 key = self._semantic_buffer_key(f"private:{user_id}", user_id)
@@ -25550,6 +26864,17 @@ Bot 主动后用户回复次数：{reply_count}
                 buffers = getattr(self, "_semantic_message_buffers", None)
                 if isinstance(buffers, dict) and isinstance(buffers.get(key), dict):
                     persisted_images = await self._persist_private_inbound_images(event, user_id)
+                    has_model_usable_image = any(self._private_image_source_to_model_url(source) for source in persisted_images)
+                    if not persisted_images or not has_model_usable_image:
+                        buffers.pop(key, None)
+                        setattr(event, "private_companion_deferred_private_image_only", False)
+                        logger.info(
+                            "[PrivateCompanion] 私聊单图未解析到可用图片源,放行原始事件: user=%s sources=%s",
+                            user_id,
+                            len(persisted_images),
+                        )
+                        self._save_data_sync()
+                        return
                     buffers[key]["images"] = persisted_images
                     buffers[key]["original_event"] = event
                     direct_image_mode = bool(persisted_images) and self._event_main_provider_supports_image(event)
@@ -25637,6 +26962,7 @@ Bot 主动后用户回复次数：{reply_count}
             user["ignored_streak"] = 0
             if text:
                 user["last_user_message"] = text
+                self._apply_private_image_vision_negative_feedback(user, text)
                 user["episode_message_count"] = _safe_int(user.get("episode_message_count"), 0, 0) + 1
                 self._update_expression_profile_from_message(user, text)
                 self._update_companion_memory_from_message(user, text)

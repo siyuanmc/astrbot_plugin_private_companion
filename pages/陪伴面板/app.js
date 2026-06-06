@@ -52,10 +52,13 @@ const privateReadingConfigKeys = new Set([
   "enable_private_reading_integration",
   "enable_private_reading_boredom_read",
   "enable_private_reading_ask_recommendation",
+  "enable_private_reading_preference_influence",
   "private_reading_min_interval_hours",
   "private_reading_max_photo_count",
   "private_reading_share_probability",
   "private_reading_ask_probability",
+  "private_reading_preference_min_ratings",
+  "private_reading_preference_max_terms",
   "private_reading_default_keywords",
   "private_reading_blocked_tags",
 ]);
@@ -110,7 +113,7 @@ const featureMeta = {
   inject_passive_states: ["被动状态注入", "普通聊天前把当前拟人状态注入提示词，让被动回复也受状态影响。"],
   enable_cycle_state: ["生理周期模拟", "允许符合人格的人类角色出现周期前、周期中和恢复期状态。"],
   enable_skill_growth_simulation: ["技能成长", "技能等级与能力边界。"],
-  enable_semantic_message_debounce: ["语义收口等待", "合并连续补充。"],
+  enable_private_image_self_recognition: ["图片转述增强", "私聊单图防抖、视觉转述等待和 Bot 自我识别。"],
   enable_environment_perception: ["环境感知", "注入当前时间、日期语境、平台、群聊/私聊和消息媒介信息。"],
   enable_holiday_perception: ["节假日感知", "识别工作日、周末、节假日和调休，影响生活节奏判断。"],
   enable_platform_perception: ["平台感知", "识别 QQ/平台、私聊/群聊、群号群名以及图片语音视频消息。"],
@@ -143,6 +146,7 @@ const featureMeta = {
   enable_news_integration: ["新闻阅读", "低频读取 RSS/Atom 新闻源，形成近期见闻和主动分享素材。"],
   enable_news_daily_hot_read: ["每日热点", "随日程或后台检查读取热点候选，形成当天的时讯见闻。"],
   enable_news_boredom_read: ["无聊看新闻", "空档或无聊时扫几条新闻，按人格决定是否私聊提起。"],
+  enable_ai_daily_watch: ["AI 早报追踪", "在早间窗口反复检查 B 站 AI 早报，读到当天新视频后停止。"],
   enable_external_event_self_link: ["外界信息自我关联", "让新闻和搜索结果先变成“这和我有什么关系”的内部意愿，再进入主动候选。"],
   enable_web_exploration: ["主动搜索", "按人格兴趣、最近话题、日程和心情低频使用 AstrBot 网页搜索，形成探索笔记。"],
   enable_web_exploration_boredom_search: ["空档自主搜索", "空闲或无聊时先自行决定搜索主题，再调用网页搜索了解新鲜事物。"],
@@ -151,8 +155,9 @@ const featureMeta = {
   enable_private_reading_integration: ["夹层阅读素材", "检测到可用素材能力时，允许作为低频私下阅读来源。"],
   enable_private_reading_boredom_read: ["私下阅读", "空档、无聊或夜里低频自己搜索并阅读，形成内部印象。"],
   enable_private_reading_ask_recommendation: ["征求推荐", "空档或无聊时，低频私聊询问用户有没有好看的本子或漫画推荐。"],
+  enable_private_reading_preference_influence: ["私密偏好影响", "评分样本足够后，把稳定偏好作为私聊私密互动的弱背景。"],
   enable_unanswered_screen_peek_followup: ["沉默后窥屏", "主动消息后用户长时间没回、且 Bot 正好无聊时，可免日次数窥屏确认用户在做什么。"],
-  enable_creative_writing: ["私下创作", "因生活小事、日记碎片或梦境灵感开文本作品，并按人格速度慢慢写。"],
+  enable_creative_writing: ["私下创作", "闲暇时可选地因生活小事、日记碎片或梦境灵感写一点文本作品。"],
   creative_hidden_mode: ["低调创作模式", "默认不汇报创作，只在节点或用户询问时自然提起。"],
 };
 
@@ -177,7 +182,7 @@ const featureGroups = [
       "inject_passive_states",
       "enable_cycle_state",
       "enable_skill_growth_simulation",
-      "enable_semantic_message_debounce",
+      "enable_private_image_self_recognition",
     ],
   },
   {
@@ -233,6 +238,7 @@ const featureGroups = [
       "enable_bilibili_boredom_watch",
       "enable_news_integration",
       "enable_news_daily_hot_read",
+      "enable_ai_daily_watch",
       "enable_news_boredom_read",
       "enable_external_event_self_link",
       "enable_web_exploration",
@@ -242,6 +248,7 @@ const featureGroups = [
       "enable_private_reading_integration",
       "enable_private_reading_boredom_read",
       "enable_private_reading_ask_recommendation",
+      "enable_private_reading_preference_influence",
       "enable_unanswered_screen_peek_followup",
       "enable_creative_writing",
       "creative_hidden_mode",
@@ -259,7 +266,7 @@ const safeFeatureKeys = [
   "enable_dialogue_episode_memory",
   "enable_open_loop_tracking",
   "enable_user_habit_learning",
-  "enable_semantic_message_debounce",
+  "enable_private_image_self_recognition",
   "enable_environment_perception",
   "enable_holiday_perception",
   "enable_platform_perception",
@@ -275,8 +282,13 @@ const configLabels = {
   default_style: "默认语气",
   max_daily_messages: "每日主动上限",
   inbound_message_debounce_seconds: "用户消息防抖秒数",
-  enable_semantic_message_debounce: "语义收口等待",
+  enable_semantic_message_debounce: "图片防抖",
   semantic_message_debounce_seconds: "收口等待秒数",
+  private_image_vision_wait_seconds: "单图等待识图秒数",
+  enable_private_image_self_recognition: "图片转述增强",
+  private_image_self_recognition_hint: "Bot 自我识别线索",
+  enable_private_image_vision_cache: "重复图片转述缓存",
+  private_image_vision_cache_max_items: "图片转述缓存上限",
   enable_segmented_proactive_reply: "主动分段发送",
   segmented_proactive_scope: "分段作用范围",
   segmented_proactive_threshold: "不分段字数阈值",
@@ -381,6 +393,11 @@ const configLabels = {
   external_event_self_link_cooldown_hours: "自我关联冷却",
   news_max_items_per_source: "单源读取条数",
   news_sources: "新闻源",
+  enable_ai_daily_watch: "AI 早报追踪",
+  ai_daily_source_uid: "AI 早报 UP 主 UID",
+  ai_daily_check_window: "AI 早报检查窗口",
+  ai_daily_check_interval_minutes: "AI 早报检查间隔",
+  ai_daily_prefer_text_version: "优先文字版",
   enable_news_daily_hot_read: "每日获取热点",
   enable_news_boredom_read: "无聊看新闻",
   news_hot_sources: "热点来源",
@@ -398,11 +415,13 @@ const configLabels = {
   private_reading_default_keywords: "默认搜索关键词",
   private_reading_blocked_tags: "过滤标签",
   private_reading_ask_probability: "征求推荐概率",
+  private_reading_preference_min_ratings: "偏好生效最少评分数",
+  private_reading_preference_max_terms: "偏好注入最多词条",
   unanswered_screen_peek_after_minutes: "沉默多久后窥屏",
   unanswered_screen_peek_cooldown_minutes: "沉默窥屏冷却",
   creative_inspiration_probability: "创作灵感概率",
   creative_share_probability: "创作透露概率",
-  creative_base_chars_per_hour: "基础写作速度",
+  creative_chars_per_session: "每次创作字数",
   creative_max_active_projects: "同时创作项目上限",
   active_projects: "进行中创作",
   project_count: "创作项目",
@@ -428,14 +447,19 @@ const configDescriptions = {
   min_interval_minutes: "同一私聊对象两次主动消息之间的最小间隔，避免频繁打扰。",
   max_daily_messages: "每个私聊对象每天最多收到多少条插件主动消息。",
   inbound_message_debounce_seconds: "收到用户消息后等待多久再处理，用于合并短时间内连续发来的文字。",
+  enable_semantic_message_debounce: "开启后，私聊单图会先进入收口窗口，等待用户是否继续补充文字，再决定是否走图片转述回复。",
   semantic_message_debounce_seconds: "语义收口窗口。用户唤醒后继续补充时，会把窗口内文本当成一轮完整发言。",
+  private_image_vision_wait_seconds: "私聊单图确认没有继续补充后，最多等待视觉转述多久。不是图片防抖时间；视觉提前完成会立刻进入主链。",
+  private_image_self_recognition_hint: "补充 Bot 外观、头像、名字、表情包特征或常见自称，让视觉转述更容易判断图里是不是 Bot 自己。",
+  enable_private_image_vision_cache: "开启后，同一张图片或表情包会按内容哈希复用上次视觉摘要，避免重复调用识图模型；不会缓存最终聊天回复。",
+  private_image_vision_cache_max_items: "最多保留多少条图片视觉摘要缓存。达到上限后会清理最久未命中的旧缓存，0 表示不限制。",
   segmented_proactive_threshold: "主动文本短于或等于该字数时才考虑分段；太长的内容保持一整条，避免读起来散。",
   segmented_proactive_scope: "插件主动只影响插件主动消息；全部 LLM 回复会额外拆普通模型纯文本回复，图片、语音、AT 或工具转述等复杂消息不会拆。",
   segmented_proactive_min_segment_chars: "分段后短于或等于该字数的片段会并入相邻消息，避免“哈哈”“我也觉得”这类附和语单独发出。",
   segmented_proactive_max_segments: "一次主动消息最多拆成几条。默认 3，过高会显得刷屏。",
   segmented_proactive_split_mode: "regex 使用正则切句；words 使用分段词列表，更适合清理句号、空格等固定分隔符。网址会自动保护，不会被按点号或斜杠拆开。",
   segmented_proactive_regex: "分段模式为 regex 时使用的切分正则。",
-  segmented_proactive_split_words: "分段模式为 words 时使用的分段词。可用换行、逗号或顿号分隔；命中网址内部字符时会自动跳过。",
+  segmented_proactive_split_words: "分段模式为 words 时使用的分段词。推荐一行一个；中文逗号要单独写一行，或写“逗号”。英文点号会把连续 ... 当成一个省略号边界；网址内部字符会自动保护，完整网址结束处可作为自然断点；括号或引号内部字符会跳过。",
   enable_segmented_proactive_content_cleanup: "开启后会在分段时清理分隔符或无意义字符。",
   segmented_proactive_content_cleanup_rule: "regex 模式下的后清理正则。",
   segmented_proactive_content_cleanup_words: "words 模式下的后清理词。可用于清理句号、空格等词模式分隔符。",
@@ -497,6 +521,11 @@ const configDescriptions = {
   external_event_self_link_cooldown_hours: "同一用户两次因外界信息自我关联而主动找人的最小间隔。",
   news_max_items_per_source: "每个新闻源最多读取多少条候选。",
   news_sources: "新闻源地址。可填 RSS/Atom、B 站空间链接、bilibili:UID、bvid:BV... 或单条 B 站视频链接；如果 B 站视频简介里有文字版链接，会优先抓取并阅读完整文字版正文，失败才退回视频简介。",
+  enable_ai_daily_watch: "开启后会在指定窗口内反复检查 AI 早报 UP 主；读到当天新视频后当天停止。",
+  ai_daily_source_uid: "AI 早报 UP 主的 B 站 UID。默认 285286947。",
+  ai_daily_check_window: "每天检查 AI 早报的时间窗口，格式 HH:MM-HH:MM。",
+  ai_daily_check_interval_minutes: "窗口内每隔多少分钟检查一次，避免发布时间不固定导致漏读。",
+  ai_daily_prefer_text_version: "开启后优先读取视频简介里的文字版链接，失败时退回视频简介。",
   news_hot_sources: "热点来源配置。用于每日热点候选。",
   news_hot_max_items: "热点候选最多抓取多少条。",
   web_exploration_interests: "主动搜索时的兴趣倾向。不是硬名单，Bot 会结合人格、日程和最近聊天自行决定。",
@@ -512,11 +541,13 @@ const configDescriptions = {
   private_reading_default_keywords: "私下阅读时默认搜索关键词。多个词可用逗号或换行分隔。",
   private_reading_blocked_tags: "过滤标签。匹配到这些标签时跳过对应素材。",
   private_reading_ask_probability: "无聊时向用户征求推荐的概率，0-1。",
+  private_reading_preference_min_ratings: "累计评分达到这个数量后，偏好画像才会影响私聊私密互动。",
+  private_reading_preference_max_terms: "每次注入最多参考多少个稳定偏好词，避免上下文太长或风格偏移。",
   unanswered_screen_peek_after_minutes: "主动消息发出后，用户沉默多久才允许尝试识屏观察。",
   unanswered_screen_peek_cooldown_minutes: "沉默识屏触发后的冷却时间。",
   creative_inspiration_probability: "从生活小事、梦境或日记里长出创作灵感的概率，0-1。",
   creative_share_probability: "创作达到节点后自然透露给用户的概率，0-1。",
-  creative_base_chars_per_hour: "模拟 Bot 写作速度的基础字数/小时。",
+  creative_chars_per_session: "每次闲暇创作行为大约写多少字；实际字数会受人格和当天能量影响。",
   creative_max_active_projects: "同时保留多少个进行中的创作项目。",
   worldbook_auto_import: "启动或打开页面时自动从关系网资料源刷新用户/群资料。",
   worldbook_member_match_aliases: "提到别名或称呼时辅助匹配 QQ 锚点，但 QQ 号仍是身份主锚点。",
@@ -548,7 +579,8 @@ const featureSettingGroups = {
   inject_passive_states: ["humanized_state_intensity"],
   enable_cycle_state: ["humanized_state_intensity"],
   enable_skill_growth_simulation: ["skill_growth_rate", "skill_growth_custom_skills", "enable_skill_growth_schedule_influence", "skill_growth_schedule_influence_strength"],
-  enable_semantic_message_debounce: ["inbound_message_debounce_seconds", "semantic_message_debounce_seconds"],
+  enable_private_image_self_recognition: ["enable_semantic_message_debounce", "inbound_message_debounce_seconds", "semantic_message_debounce_seconds", "private_image_vision_wait_seconds", "enable_private_image_vision_cache", "private_image_vision_cache_max_items", "private_image_self_recognition_hint"],
+  enable_semantic_message_debounce: ["inbound_message_debounce_seconds", "semantic_message_debounce_seconds", "private_image_vision_wait_seconds"],
   enable_environment_perception: ["environment_perception_timezone", "holiday_country", "enable_holiday_perception", "enable_platform_perception", "enable_model_perception", "enable_lunar_perception", "enable_solar_term_perception", "enable_almanac_perception"],
   enable_holiday_perception: ["holiday_country"],
   enable_platform_perception: ["environment_perception_timezone"],
@@ -577,23 +609,47 @@ const featureSettingGroups = {
   enable_livingmemory_integration: [],
   enable_bilibili_integration: ["bilibili_boredom_min_interval_hours", "bilibili_share_probability", "bilibili_share_min_score"],
   enable_bilibili_boredom_watch: ["bilibili_boredom_min_interval_hours", "bilibili_share_probability", "bilibili_share_min_score"],
-  enable_news_integration: ["enable_news_daily_hot_read", "enable_news_boredom_read", "enable_external_event_self_link", "news_hot_sources", "news_hot_max_items", "news_sources", "news_min_interval_hours", "news_share_probability", "external_event_self_link_probability", "external_event_self_link_cooldown_hours", "news_max_items_per_source"],
-  enable_news_daily_hot_read: ["news_hot_sources", "news_hot_max_items"],
+  enable_news_integration: ["enable_news_daily_hot_read", "enable_ai_daily_watch", "enable_news_boredom_read", "enable_external_event_self_link", "news_hot_sources", "news_hot_max_items", "news_sources", "ai_daily_source_uid", "ai_daily_check_window", "ai_daily_check_interval_minutes", "ai_daily_prefer_text_version", "news_min_interval_hours", "news_share_probability", "external_event_self_link_probability", "external_event_self_link_cooldown_hours", "news_max_items_per_source"],
+  enable_news_daily_hot_read: ["news_hot_sources", "news_hot_max_items", "enable_ai_daily_watch", "ai_daily_check_window", "ai_daily_check_interval_minutes"],
+  enable_ai_daily_watch: ["ai_daily_source_uid", "ai_daily_check_window", "ai_daily_check_interval_minutes", "ai_daily_prefer_text_version"],
   enable_news_boredom_read: ["news_min_interval_hours", "news_share_probability", "enable_external_event_self_link", "external_event_self_link_probability", "external_event_self_link_cooldown_hours", "news_max_items_per_source"],
   enable_external_event_self_link: ["external_event_self_link_probability", "external_event_self_link_cooldown_hours", "news_share_probability", "web_exploration_share_probability"],
   enable_web_exploration: ["web_exploration_interests", "enable_web_exploration_boredom_search", "web_exploration_min_interval_hours", "web_exploration_share_probability", "enable_external_event_self_link", "external_event_self_link_probability", "external_event_self_link_cooldown_hours", "web_exploration_max_results"],
   enable_web_exploration_boredom_search: ["web_exploration_interests", "web_exploration_min_interval_hours", "enable_external_event_self_link", "external_event_self_link_probability", "external_event_self_link_cooldown_hours", "web_exploration_max_results"],
   enable_qzone_integration: ["qzone_life_publish_min_interval_hours", "qzone_life_publish_probability"],
   enable_qzone_life_publish: ["qzone_life_publish_min_interval_hours", "qzone_life_publish_probability"],
-  enable_private_reading_integration: ["private_reading_min_interval_hours", "private_reading_max_photo_count", "private_reading_default_keywords", "private_reading_blocked_tags"],
-  enable_private_reading_boredom_read: ["private_reading_min_interval_hours", "private_reading_max_photo_count", "private_reading_share_probability", "private_reading_default_keywords", "private_reading_blocked_tags"],
+  enable_private_reading_integration: ["private_reading_min_interval_hours", "private_reading_max_photo_count", "private_reading_default_keywords", "private_reading_blocked_tags", "enable_private_reading_preference_influence", "private_reading_preference_min_ratings", "private_reading_preference_max_terms"],
+  enable_private_reading_boredom_read: ["private_reading_min_interval_hours", "private_reading_max_photo_count", "private_reading_share_probability", "private_reading_default_keywords", "private_reading_blocked_tags", "enable_private_reading_preference_influence", "private_reading_preference_min_ratings", "private_reading_preference_max_terms"],
   enable_private_reading_ask_recommendation: ["private_reading_ask_probability"],
+  enable_private_reading_preference_influence: ["private_reading_preference_min_ratings", "private_reading_preference_max_terms"],
   enable_unanswered_screen_peek_followup: ["unanswered_screen_peek_after_minutes", "unanswered_screen_peek_cooldown_minutes"],
-  enable_creative_writing: ["creative_inspiration_probability", "creative_share_probability", "creative_base_chars_per_hour", "creative_max_active_projects"],
+  enable_creative_writing: ["creative_inspiration_probability", "creative_share_probability", "creative_chars_per_session", "creative_max_active_projects"],
   creative_hidden_mode: ["creative_share_probability"],
 };
 
 const featureSettingSections = {
+  enable_private_image_self_recognition: [
+    {
+      title: "防抖收口",
+      note: "用户只发图时先等一小段时间，看是否继续补充文字说明。",
+      keys: ["enable_semantic_message_debounce", "inbound_message_debounce_seconds", "semantic_message_debounce_seconds"],
+    },
+    {
+      title: "视觉等待",
+      note: "收口结束后等待图片转述结果；视觉提前完成会直接进入主链。",
+      keys: ["private_image_vision_wait_seconds"],
+    },
+    {
+      title: "重复图片缓存",
+      note: "复用相同图片的视觉摘要，避免表情包反复触发识图模型。",
+      keys: ["enable_private_image_vision_cache", "private_image_vision_cache_max_items"],
+    },
+    {
+      title: "自我识别",
+      note: "把 Bot 名字、人设和自定义线索交给视觉模型，辅助判断图里是不是 Bot 自己。",
+      keys: ["private_image_self_recognition_hint"],
+    },
+  ],
   enable_segmented_proactive_reply: [
     {
       title: "切分规则",
@@ -649,6 +705,7 @@ const featureSettingTypes = {
   group_wakeup_direct_words: { type: "textarea" },
   group_wakeup_context_words: { type: "textarea" },
   group_wakeup_interest_keywords: { type: "textarea" },
+  private_image_self_recognition_hint: { type: "textarea" },
   segmented_proactive_regex: { type: "textarea" },
   segmented_proactive_split_words: { type: "textarea" },
   segmented_proactive_content_cleanup_rule: { type: "textarea" },
@@ -1048,8 +1105,15 @@ function insightStatus(value) {
     explored: "已搜索",
     no_items: "暂无候选",
     no_results: "无结果",
+    search_failed: "搜索失败",
     digest_failed: "整理失败",
     web_search_disabled_or_unconfigured: "搜索未配置",
+    waiting_window: "等待窗口",
+    checking: "正在检查",
+    waiting_today_video: "等待今日视频",
+    today_video_without_text: "今日视频暂无文字版",
+    already_read_today_video: "今日已读",
+    missed_today_ai_daily: "今日窗口已过",
   };
   return labels[text] || text || "暂无";
 }
@@ -1060,6 +1124,7 @@ function renderNewsInsightPanel() {
   const items = Array.isArray(news.latest_items) ? news.latest_items : [];
   const enabled = Boolean(news.enabled);
   const dailyHot = Boolean(news.daily_hot_enabled);
+  const aiDaily = news.ai_daily || {};
   const headline = digest.headline || digest.topic || "暂无新闻见闻";
   const impression = digest.impression || (enabled ? "暂无整理结果。" : "新闻阅读未开启");
   const itemHtml = items.length
@@ -1082,6 +1147,7 @@ function renderNewsInsightPanel() {
     <div class="insight-meta">
       <span>${escapeHtml(insightStatus(news.last_status))}</span>
       <span>${dailyHot ? "每日热点开启" : "每日热点关闭"}</span>
+      <span>${news.ai_daily_enabled ? `AI早报：${escapeHtml(insightStatus(aiDaily.status))}` : "AI早报关闭"}</span>
       <span>${news.boredom_read_enabled ? "空档阅读开启" : "空档阅读关闭"}</span>
     </div>
     <ul class="insight-list">${itemHtml}</ul>
@@ -1094,8 +1160,10 @@ function renderWebExplorationPanel() {
   const query = exploration.last_query || {};
   const history = Array.isArray(exploration.history) ? exploration.history : [];
   const enabled = Boolean(exploration.enabled);
-  const title = digest.topic || query.query || "暂无主动搜索记录";
-  const note = digest.note || (enabled ? "暂无搜索笔记。" : "主动搜索未开启");
+  const recentWebHistory = history.slice().reverse().find((item) => item && item.source !== "news") || {};
+  const displayTitle = digest.topic || recentWebHistory.title || query.query || "暂无主动搜索记录";
+  const displayNote = digest.note || recentWebHistory.intro || recentWebHistory.content || (enabled ? "等待下一次主动搜索留下笔记。" : "主动搜索未开启");
+  const displayTime = exploration.last_explore_at || recentWebHistory.generated_at || recentWebHistory.date || "未搜索";
   const historyHtml = history.length
     ? history.slice().reverse().map((item) => {
       const sourceLabel = item.source_label || (item.source === "news" ? "新闻阅读" : "主动搜索");
@@ -1118,11 +1186,11 @@ function renderWebExplorationPanel() {
     <div class="insight-head">
       <div>
         <span class="eyebrow">${enabled ? "主动搜索" : "未开启"}</span>
-        <b>${escapeHtml(title)}</b>
+        <b>${escapeHtml(displayTitle)}</b>
       </div>
-      <small>${escapeHtml(exploration.last_explore_at || "未搜索")}</small>
+      <small>${escapeHtml(displayTime)}</small>
     </div>
-    <p>${escapeHtml(note)}</p>
+    <p>${escapeHtml(displayNote)}</p>
     <div class="insight-meta">
       <span>${escapeHtml(insightStatus(exploration.last_status))}</span>
       <span>${exploration.available ? "网页搜索可用" : "网页搜索未配置"}</span>
@@ -1391,7 +1459,7 @@ function renderFeatureMatrix() {
     ["陪伴", ["enable_mai_style_integration", "enable_expression_learning", "enable_response_self_review", "enable_dialogue_episode_memory"]],
     ["群聊", ["enable_group_companion", "enable_group_context_injection", "enable_group_slang_learning", "enable_group_topic_threads", "enable_group_relationship_graph"]],
     ["记忆", ["enable_companion_memory", "enable_open_loop_tracking", "enable_livingmemory_integration"]],
-    ["主动联动", ["enable_unanswered_screen_peek_followup", "enable_bilibili_integration", "enable_bilibili_boredom_watch", "enable_private_reading_integration", "enable_private_reading_boredom_read", "enable_private_reading_ask_recommendation", "enable_creative_writing", "creative_hidden_mode"]],
+    ["主动联动", ["enable_unanswered_screen_peek_followup", "enable_bilibili_integration", "enable_bilibili_boredom_watch", "enable_news_integration", "enable_ai_daily_watch", "enable_private_reading_integration", "enable_private_reading_boredom_read", "enable_private_reading_ask_recommendation", "enable_creative_writing", "creative_hidden_mode"]],
   ];
   $("#featureMatrix").innerHTML = groups.map(([label, keys]) => `
     <section>
@@ -2716,7 +2784,7 @@ function renderBookshelf() {
     "提起方式": creative.hidden_mode ? "节点自然提起" : "普通模式",
     "灵感触发概率": formatPercent(settings.creative_inspiration_probability),
     "节点提起概率": formatPercent(settings.creative_share_probability),
-    "写作速度": `${settings.creative_base_chars_per_hour || 0} 字/小时`,
+    "单次创作": `${settings.creative_chars_per_session || settings.creative_base_chars_per_hour || 0} 字/次`,
   };
   if (privateReading.available) {
     creativeSettings["夹层阅读"] = privateReading.boredom_read_enabled ? "可触发" : "关闭";
@@ -2928,13 +2996,28 @@ function renderBookDetailPanel() {
   const readingImpressionText = book.kind === "jm_album"
     ? String(book.reading_impression || book.impression || "").replace(/^读后感[:：]\s*/, "").trim()
     : "";
+  const botRating = Number(book.rating || 0);
+  const userRating = Number(book.user_rating || 0);
+  const ratingReason = String(book.user_rating_reason || book.rating_reason || "").trim();
+  const ratingMeta = book.kind === "jm_album" && (botRating || userRating || ratingReason)
+    ? `
+      <div class="book-rating-row">
+        ${botRating ? `<span>Bot 评分 <b>${escapeHtml(botRating)}/10</b></span>` : ""}
+        ${userRating ? `<span>你的评分 <b>${escapeHtml(userRating)}/10</b></span>` : ""}
+        ${ratingReason ? `<small>${escapeHtml(ratingReason)}</small>` : ""}
+      </div>
+    `
+    : "";
   const readingImpression = readingImpressionText
     ? `
       <section class="book-reading-impression">
         <span>Bot 的读后感</span>
+        ${ratingMeta}
         <p>${escapeHtml(readingImpressionText)}</p>
       </section>
     `
+    : ratingMeta
+      ? `<section class="book-reading-impression"><span>读后评分</span>${ratingMeta}</section>`
     : "";
   const manageActions = book.kind === "browsing" ? "" : `
     <div class="book-manage-actions">
@@ -2960,6 +3043,10 @@ function renderBookDetailPanel() {
   }
   if (state.bookshelfPage === "reader" && book.kind === "browsing") {
     panel.innerHTML = renderBrowsingBookReader(book, kindLabel, diaryEntries);
+    return;
+  }
+  if (state.bookshelfPage === "reader" && book.kind === "creative") {
+    panel.innerHTML = renderCreativeBookReader(book, kindLabel, displayTitle, displayIntro, displayContent);
     return;
   }
   panel.innerHTML = state.bookshelfPage === "reader"
@@ -3038,6 +3125,26 @@ function renderJmAlbumReader(book, kindLabel, displayTitle, displayIntro, readin
   const spread = pages.slice(state.selectedBookSpreadIndex, state.selectedBookSpreadIndex + 2);
   const firstPage = spread[0]?.index || state.selectedBookSpreadIndex + 1;
   const lastPage = spread[spread.length - 1]?.index || firstPage;
+  const isLastSpread = state.selectedBookSpreadIndex + 2 >= pages.length;
+  const userRating = Number(book.user_rating || 0);
+  const userRatingReason = String(book.user_rating_reason || "").trim();
+  const ratingPanel = isLastSpread
+    ? `
+      <section class="manga-rating-panel">
+        <div>
+          <span>读完评分</span>
+          <b>${userRating ? `你给了 ${escapeHtml(userRating)}/10` : "读完后给它打个分"}</b>
+          ${userRatingReason ? `<p>${escapeHtml(userRatingReason)}</p>` : ""}
+        </div>
+        <div class="manga-rating-buttons" data-book-rating-album="${escapeHtml(book.album_id || "")}">
+          ${Array.from({ length: 10 }, (_, index) => {
+            const value = index + 1;
+            return `<button type="button" data-book-rating="${value}" class="${userRating === value ? "is-active" : ""}">${value}</button>`;
+          }).join("")}
+        </div>
+      </section>
+    `
+    : "";
   return `
     <article class="reader-page subpage jm_album image-reader">
       <nav class="book-breadcrumb">
@@ -3087,6 +3194,7 @@ function renderJmAlbumReader(book, kindLabel, displayTitle, displayIntro, readin
           `; }).join("")}
           ${spread.length < 2 ? `<figure class="manga-page blank"><span>末页</span></figure>` : ""}
         </div>
+        ${ratingPanel}
       </div>
     </article>
   `;
@@ -3238,6 +3346,133 @@ function formatBookContent(value) {
   return parts.length
     ? parts.map((part) => `<p>${escapeHtml(part)}</p>`).join("")
     : `<p>这本书暂时没有正文。</p>`;
+}
+
+function creativeReadingMode(book) {
+  const type = String(book?.work_type || book?.category || "").toLowerCase();
+  if (/诗|歌词|歌/.test(type)) return "poetry";
+  if (/剧本|短剧|脚本|对白|分镜/.test(type)) return "script";
+  if (/设定|世界观|角色|图鉴|怪谈|档案/.test(type)) return "lore";
+  if (/随笔|散文|札记|观察|影评|读后感/.test(type)) return "essay";
+  return "prose";
+}
+
+function creativeModeLabel(mode) {
+  return {
+    poetry: "诗页",
+    script: "剧本",
+    lore: "设定册",
+    essay: "札记",
+    prose: "正文",
+  }[mode] || "正文";
+}
+
+function splitCreativeChunks(book, fallbackContent) {
+  const chunks = Array.isArray(book?.chunks) ? book.chunks : [];
+  const rows = chunks
+    .map((chunk, index) => ({
+      index: Number(chunk.index || index + 1),
+      text: String(chunk.text || "").trim(),
+      created: String(chunk.created || "").trim(),
+    }))
+    .filter((chunk) => chunk.text);
+  if (rows.length) return rows;
+  return [{ index: 1, text: String(fallbackContent || "").trim() || "这本书还没有正文。", created: "" }];
+}
+
+function formatCreativeScript(text) {
+  const lines = String(text || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  return lines.length
+    ? lines.map((line) => {
+      const match = line.match(/^([^：:]{1,14})[：:]\s*(.+)$/);
+      if (match) {
+        return `<p class="script-line"><b>${escapeHtml(match[1])}</b><span>${escapeHtml(match[2])}</span></p>`;
+      }
+      return `<p class="script-stage">${escapeHtml(line)}</p>`;
+    }).join("")
+    : `<p class="script-stage">这段剧本还没有正文。</p>`;
+}
+
+function formatCreativeLore(text) {
+  const blocks = String(text || "").split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  return blocks.length
+    ? blocks.map((block) => {
+      const lines = block.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+      const head = lines[0] || "设定条目";
+      const body = lines.slice(1).join("\n") || block;
+      return `
+        <section class="lore-entry">
+          <b>${escapeHtml(head.replace(/^#+\s*/, ""))}</b>
+          <p>${escapeHtml(body)}</p>
+        </section>
+      `;
+    }).join("")
+    : `<section class="lore-entry"><b>空白条目</b><p>这本设定册还没有正文。</p></section>`;
+}
+
+function formatCreativeContentByMode(text, mode) {
+  if (mode === "poetry") {
+    const lines = String(text || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+    return `<div class="poem-lines">${(lines.length ? lines : ["这首诗还没有正文。"]).map((line) => `<p>${escapeHtml(line)}</p>`).join("")}</div>`;
+  }
+  if (mode === "script") return formatCreativeScript(text);
+  if (mode === "lore") return formatCreativeLore(text);
+  return formatBookContent(text);
+}
+
+function renderCreativeBookReader(book, kindLabel, displayTitle, displayIntro, displayContent) {
+  const mode = creativeReadingMode(book);
+  const chunks = splitCreativeChunks(book, displayContent);
+  const chunkNav = chunks.length > 1
+    ? `<aside class="creative-chapter-rail">
+        <span>片段</span>
+        ${chunks.map((chunk) => `<a href="#creative-chunk-${escapeHtml(chunk.index)}">${escapeHtml(chunk.index)}</a>`).join("")}
+      </aside>`
+    : "";
+  const contentHtml = chunks.map((chunk) => `
+    <section class="creative-reader-chunk" id="creative-chunk-${escapeHtml(chunk.index)}">
+      <header>
+        <span>${escapeHtml(creativeModeLabel(mode))} ${escapeHtml(chunk.index)}</span>
+        ${chunk.created ? `<small>${escapeHtml(chunk.created)}</small>` : ""}
+      </header>
+      <div class="reader-content creative-content ${escapeHtml(mode)}">${formatCreativeContentByMode(chunk.text, mode)}</div>
+    </section>
+  `).join("");
+  return `
+    <article class="reader-page subpage creative creative-reader ${escapeHtml(mode)}">
+      <nav class="book-breadcrumb">
+        <button type="button" data-book-close>书柜</button>
+        <span>/</span>
+        <button type="button" data-book-back>${escapeHtml(book.title || "未命名")}</button>
+        <span>/ 阅读</span>
+      </nav>
+      <div class="reader-toolbar">
+        <button type="button" data-book-back>返回简介</button>
+        <span>${escapeHtml(kindLabel)} · ${escapeHtml(creativeModeLabel(mode))}</span>
+        <button type="button" data-book-close>收回书柜</button>
+      </div>
+      <div class="reader-book-shell creative-shell ${escapeHtml(mode)}">
+        <aside class="reader-cover creative-cover ${escapeHtml(mode)}">
+          ${renderBookCoverInner(book, kindLabel, displayTitle, book.progress || "")}
+        </aside>
+        <section class="reader-paper creative-paper ${escapeHtml(mode)}">
+          <header class="reader-page-head">
+            <span>${escapeHtml(kindLabel)} · ${escapeHtml(book.point_of_view || "无固定叙事视角")}</span>
+            <h2>${escapeHtml(displayTitle)}</h2>
+            ${displayIntro ? `<p>${escapeHtml(displayIntro)}</p>` : ""}
+          </header>
+          <div class="creative-reader-body">
+            ${chunkNav}
+            <div class="creative-reader-main">${contentHtml}</div>
+          </div>
+          <footer class="reader-page-foot">
+            <span>${escapeHtml(book.created || "书柜藏本")}</span>
+            <span>${escapeHtml(book.tone || book.status || "")}</span>
+          </footer>
+        </section>
+      </div>
+    </article>
+  `;
 }
 
 function renderProactiveCandidates() {
@@ -3856,6 +4091,8 @@ function decodeSegmentedWordToken(value) {
   if (["<space>", "{space}", "[space]", "\\s", "\\u0020", "空格"].includes(lower)) return " ";
   if (["<newline>", "{newline}", "[newline]", "\\n", "换行"].includes(lower)) return "\n";
   if (["<tab>", "{tab}", "[tab]", "\\t", "tab"].includes(lower)) return "\t";
+  if (["<comma>", "{comma}", "[comma]", "comma", "英文逗号"].includes(lower)) return ",";
+  if (["<zh_comma>", "{zh_comma}", "[zh_comma]", "zh_comma", "中文逗号", "逗号"].includes(lower)) return "，";
   return raw;
 }
 
@@ -3863,8 +4100,11 @@ function parseSegmentedWordList(value) {
   if (Array.isArray(value)) {
     return value.map(decodeSegmentedWordToken).filter((item) => item !== "");
   }
-  return String(value ?? "")
-    .split(/[\n,，、]+/)
+  const raw = String(value ?? "");
+  const parts = raw.includes("\n") || raw.includes("\r")
+    ? raw.split(/\r?\n/)
+    : raw.split(/[,、]+/);
+  return parts
     .map(decodeSegmentedWordToken)
     .filter((item) => item !== "");
 }
@@ -3957,6 +4197,86 @@ function restoreSegmentedUrls(value, replacements) {
   return restored;
 }
 
+function segmentedProtectedSplitWordCount(value, splitWords) {
+  const words = Array.isArray(splitWords) ? splitWords.filter((item) => item !== "") : [];
+  if (!words.length) return 0;
+  let count = 0;
+  segmentedProtectedCleanupChunks(value).forEach(([chunk, protectedChunk]) => {
+    if (!protectedChunk) return;
+    words.forEach((word) => {
+      if (!word) return;
+      count += Math.max(0, String(chunk).split(word).length - 1);
+    });
+  });
+  return count;
+}
+
+function splitSegmentedWordsOutsideProtected(value, splitWords) {
+  const words = [...new Set((splitWords || []).filter((item) => item !== ""))]
+    .sort((left, right) => right.length - left.length);
+  if (!words.length) return [String(value || "")];
+  const urlPattern = /^(?:https?:\/\/|www\.)/i;
+  const protectedStartsWithSplitWord = (chunk) => {
+    const stripped = String(chunk || "").trimStart();
+    return words.some((word) => stripped.startsWith(word));
+  };
+  const segments = [];
+  let current = "";
+  const pushCurrent = () => {
+    if (current) segments.push(current);
+    current = "";
+  };
+  const feedPlain = (chunk) => {
+    const text = String(chunk || "");
+    let index = 0;
+    while (index < text.length) {
+      const matched = words.find((word) => text.startsWith(word, index));
+      if (matched) {
+        let delimiter = matched;
+        if (matched === ".") {
+          let end = index + matched.length;
+          while (end < text.length && text[end] === ".") {
+            delimiter += text[end];
+            end += 1;
+          }
+          current += delimiter;
+          pushCurrent();
+          index = end;
+          continue;
+        }
+        if (["…", "~", "～"].includes(matched)) {
+          let end = index + matched.length;
+          while (end < text.length && text.startsWith(matched, end)) {
+            delimiter += matched;
+            end += matched.length;
+          }
+          current += delimiter;
+          pushCurrent();
+          index = end;
+          continue;
+        }
+        current += delimiter;
+        pushCurrent();
+        index += matched.length;
+      } else {
+        current += text[index];
+        index += 1;
+      }
+    }
+  };
+  segmentedProtectedCleanupChunks(value).forEach(([chunk, protectedChunk]) => {
+    if (protectedChunk) {
+      if (current && protectedStartsWithSplitWord(chunk)) pushCurrent();
+      current += chunk;
+      if (urlPattern.test(String(chunk || "").trim())) pushCurrent();
+    } else {
+      feedPlain(chunk);
+    }
+  });
+  pushCurrent();
+  return segments;
+}
+
 function segmentedVisibleLen(value) {
   return String(value || "").replace(/\s+/g, "").length;
 }
@@ -3966,6 +4286,7 @@ function segmentedIsSoftShort(value, minChars) {
   if (!cleaned) return false;
   const body = cleaned.replace(/[。！？!?…~～,.，、\s]+$/g, "");
   if (segmentedVisibleLen(cleaned) <= Math.max(1, minChars)) return true;
+  if (/(?:\.{2,}|…{1,}|~{2,}|～{2,})$/.test(cleaned)) return false;
   return new Set(["哈哈", "哈", "嗯", "唔", "诶", "欸", "啊", "呀", "我也觉得", "确实", "真的", "对吧", "不是", "那个", "还有"]).has(body);
 }
 
@@ -4039,6 +4360,7 @@ function simulateSegmentedProactive(text, values) {
   const maxSegments = Math.max(1, Number(values.segmented_proactive_max_segments || 3));
   const cleanupWords = parseSegmentedWordList(values.segmented_proactive_content_cleanup_words);
   const [protectedNormalized, protectedUrls] = protectSegmentedUrls(normalized);
+  let protectedSplitHits = 0;
   let cleanupRegex = null;
   if (cleanupEnabled && splitMode !== "words" && values.segmented_proactive_content_cleanup_rule) {
     cleanupRegex = new RegExp(String(values.segmented_proactive_content_cleanup_rule), "g");
@@ -4067,9 +4389,10 @@ function simulateSegmentedProactive(text, values) {
   try {
     if (splitMode === "words") {
       const splitWords = parseSegmentedWordList(values.segmented_proactive_split_words);
+      if (!splitWords.includes("\n")) splitWords.push("\n");
       if (!splitWords.length) return { segments: [normalized], status: "分段模式为 words，但分段词为空。" };
-      const pattern = new RegExp(`.*?(?:${splitWords.map(escapeRegex).sort((a, b) => b.length - a.length).join("|")})|.+$`, "gs");
-      rawSegments = protectedNormalized.match(pattern) || [];
+      protectedSplitHits = segmentedProtectedSplitWordCount(normalized, splitWords);
+      rawSegments = splitSegmentedWordsOutsideProtected(normalized, splitWords);
     } else {
       const pattern = new RegExp(String(values.segmented_proactive_regex || ".*?[。？！~…\\n]+|.+$"), "gms");
       rawSegments = protectedNormalized.match(pattern) || [];
@@ -4112,7 +4435,8 @@ function simulateSegmentedProactive(text, values) {
     return { segments: [normalized], status: "当前规则没有产生有效分段，真实发送会保持一整条。" };
   }
   const scopeText = scope === "all_llm" ? "插件主动与普通 LLM 纯文本回复都会使用此规则" : "仅插件主动消息使用此规则";
-  return { segments, status: `预计发送 ${segments.length} 段；${scopeText}。` };
+  const protectedText = protectedSplitHits ? `；${protectedSplitHits} 个分隔符位于括号/引号/网址内，已按保护规则跳过` : "";
+  return { segments, status: `预计发送 ${segments.length} 段；${scopeText}${protectedText}。` };
 }
 
 function segmentedPreviewPanelHtml() {
@@ -4156,7 +4480,7 @@ function renderSegmentedPreview(panel = null) {
       <div class="segmented-preview-summary">
         <span>${escapeHtml(result.status || "")}</span>
         <span>原文 ${escapeHtml(String(input.value || "").length)} 字</span>
-        <span>清理保护：括号 / 双引号</span>
+        <span>保护：网址内部不拆，链接结束可断；括号 / 双引号内部不拆</span>
         <span>空格可写作 &lt;space&gt; 或 空格</span>
       </div>
       <div class="segmented-preview-list">
@@ -4501,7 +4825,7 @@ function featureSettingInput(key, value) {
     return `<textarea data-feature-param="${safeKey}" rows="3">${escapeHtml(Array.isArray(value) ? value.join("\n") : value ?? "")}</textarea>`;
   }
   const numeric = spec.type === "number" || typeof value === "number";
-  const step = percentSettingKeys.has(key) ? "1" : probabilitySettingKeys.has(key) || key === "skill_growth_rate" ? "0.01" : "1";
+  const step = percentSettingKeys.has(key) ? "1" : probabilitySettingKeys.has(key) || key === "skill_growth_rate" ? "0.01" : "any";
   const min = percentSettingKeys.has(key) || probabilitySettingKeys.has(key) ? "0" : "";
   const max = percentSettingKeys.has(key) ? "100" : probabilitySettingKeys.has(key) ? "1" : "";
   return `
@@ -4551,6 +4875,7 @@ function featureDependencyLines(key) {
   if (["enable_web_exploration", "enable_web_exploration_boredom_search"].includes(key)) dependencies.push(["依赖", "AstrBot 网页搜索"]);
   if (["enable_qzone_life_publish"].includes(key)) dependencies.push(["依赖", "QQ 空间动态层"]);
   if (key.startsWith("enable_private_reading_")) dependencies.push(["依赖", "素材能力可用"]);
+  if (key === "enable_private_image_self_recognition") dependencies.push(["依赖", "总视觉模型"]);
   if (["enable_group_interjection", "enable_bilibili_boredom_watch", "enable_news_boredom_read", "enable_web_exploration_boredom_search", "enable_private_reading_boredom_read", "enable_private_reading_ask_recommendation", "enable_unanswered_screen_peek_followup"].includes(key)) {
     dependencies.push(["注意", "高主动项"]);
   }
@@ -4653,6 +4978,12 @@ const featureDetailGuides = {
     trigger: "日程包含学习、练习、创作或兴趣活动后。",
     enabled: "技能会从低等级慢慢成长，高等级技能不会再写出明显不符合能力的日程。",
     disabled: "技能页不再增长，日程不受技能等级约束。",
+  },
+  enable_private_image_self_recognition: {
+    summary: "把私聊单图收口、视觉转述等待和 Bot 自我识别合在一起。用户只发图片或表情包时，先等补充文字，再看图并判断图里是否像 Bot 自己。",
+    trigger: "私聊用户只发图片、截图或表情包，且防抖窗口内没有继续补充文字时。",
+    enabled: "图片转述会带上 Bot 名字、人设和自定义线索，主链更容易识别“这是你/你的表情包/不像你”。",
+    disabled: "不再额外做 Bot 自我识别；图片防抖和等待秒数仍可作为相关参数单独控制。",
   },
   enable_semantic_message_debounce: {
     summary: "等待用户把一轮话说完后再回复，尤其适合连续短句、图片后补充说明和群聊无 @ 续接判断。",
@@ -4846,6 +5177,12 @@ const featureDetailGuides = {
     enabled: "Bot 会有当天热点印象，但不一定主动分享。",
     disabled: "不会自动获取每日热点。",
   },
+  enable_ai_daily_watch: {
+    summary: "在早间时间窗口内追踪 AI 早报 UP 主，解决发布时间从 8 点到 10 点不固定的问题。",
+    trigger: "后台检查进入配置窗口后，按间隔读取 UP 主最新视频。",
+    enabled: "读到当天新视频后优先读取文字版正文，并当天停止重复检查。",
+    disabled: "AI 早报只会作为普通新闻源参与抓取，可能错过不固定更新时间。",
+  },
   enable_news_boredom_read: {
     summary: "Bot 空闲或无聊时低频看新闻，按人格判断是否提起。",
     trigger: "无聊状态、空档日程或长线主动检查时。",
@@ -4900,6 +5237,12 @@ const featureDetailGuides = {
     enabled: "Bot 可能主动问用户有没有推荐。",
     disabled: "不会主动征求推荐。",
   },
+  enable_private_reading_preference_influence: {
+    summary: "把书柜夹层阅读评分沉淀成私密偏好画像，只在私聊里弱影响亲密互动和语气尺度。",
+    trigger: "私聊回复前，且累计评分数达到配置阈值时。",
+    enabled: "Bot 会更自然地参考用户稳定高分倾向，但不会说出评分来源或覆盖人格。",
+    disabled: "评分仍用于后续素材挑选，但不注入私聊回复。",
+  },
   enable_unanswered_screen_peek_followup: {
     summary: "Bot 主动发消息后用户长时间没回时，可窥屏看看用户是不是在忙。",
     trigger: "主动消息发出后超过配置分钟数且冷却通过。",
@@ -4907,9 +5250,9 @@ const featureDetailGuides = {
     disabled: "用户不回时不会因此额外识屏。",
   },
   enable_creative_writing: {
-    summary: "Bot 会从生活小事、梦境、日记或阅读灵感中慢慢创作文本作品，并放入书柜。",
-    trigger: "日程、梦境、日记或灵感概率命中时。",
-    enabled: "会按人格身份和写作速度推进作品，不会一口气写完。",
+    summary: "Bot 会在闲暇时从生活小事、梦境、日记或阅读灵感中可选地写一点文本作品，并放入书柜。",
+    trigger: "日程处于休息、摸鱼、读书、写字等空闲片段，且灵感概率命中时。",
+    enabled: "每次只写一小段，不按小时产出，也不会一口气写完。",
     disabled: "不会新建或推进创作项目。",
   },
   creative_hidden_mode: {
@@ -4945,6 +5288,8 @@ function featureImpactLines(key) {
   lines.push(["模块", group]);
   if (key.startsWith("enable_group_") || key === "enable_atrelay_tools" || key === "enable_worldbook_member_recognition") {
     lines.push(["场景", "群聊 / 转述 / 关系网"]);
+  } else if (key === "enable_private_image_self_recognition") {
+    lines.push(["场景", "私聊图片 / 表情包"]);
   } else if (key.startsWith("enable_bilibili_") || key.startsWith("enable_news_") || key === "enable_external_event_self_link" || key.startsWith("enable_web_exploration") || key.startsWith("enable_qzone_") || key.startsWith("enable_private_reading_") || key === "enable_creative_writing" || key === "creative_hidden_mode") {
     lines.push(["场景", "长线主动"]);
   } else if (key.startsWith("enable_environment_") || key.includes("perception")) {
@@ -5610,6 +5955,11 @@ document.addEventListener("click", (event) => {
     renderBookDetailPanel();
     return;
   }
+  const ratingButton = element?.closest("[data-book-rating]");
+  if (ratingButton) {
+    void rateSelectedBookshelfItem(ratingButton);
+    return;
+  }
   const diaryJump = element?.closest("[data-diary-jump]");
   if (diaryJump) {
     state.selectedDiaryDate = diaryJump.dataset.diaryJump || "";
@@ -5687,6 +6037,26 @@ async function deleteSelectedBookshelfItem(button = null) {
       button.textContent = kind === "diary" ? "删除当前日记" : "从书柜移除";
     }
   }
+}
+
+async function rateSelectedBookshelfItem(button = null) {
+  const book = state.selectedBook || {};
+  const albumId = book.album_id || button?.closest("[data-book-rating-album]")?.dataset?.bookRatingAlbum || "";
+  const rating = Number(button?.dataset?.bookRating || 0);
+  if (!albumId || !rating) {
+    showToast("没有找到要评分的藏书。", "error");
+    return;
+  }
+  const reason = "";
+  await runAction(async () => {
+    const result = await postJson("/bookshelf/rate", { album_id: albumId, rating, reason });
+    state.bookshelfUnlocked = result.bookshelf || null;
+    const updated = allBookshelfBooks().find((item) => item.kind === "jm_album" && String(item.album_id || "") === String(albumId));
+    if (updated) state.selectedBook = updated;
+    renderBookshelf();
+    state.bookshelfPage = "reader";
+    renderBookDetailPanel();
+  }, `已评分 ${rating}/10`, button);
 }
 
 document.addEventListener("change", (event) => {
