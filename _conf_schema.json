@@ -336,7 +336,7 @@
     "default": 8
   },
   "inbound_message_debounce_seconds": {
-    "description": "用户消息防抖秒数",
+    "description": "重复消息防抖秒数",
     "type": "float",
     "hint": "拦截平台或适配器短时间重复上报的同一条用户消息。优先按 message_id 做约 60 秒去重；没有 message_id 时按会话、发送者、原始消息和组件指纹做短窗口判断。设为 0 可关闭。",
     "slider": {
@@ -379,7 +379,7 @@
   "enable_private_image_self_recognition": {
     "description": "启用图片转述增强",
     "type": "bool",
-    "hint": "总开关。开启后，私聊单图会先进入图片防抖，确认用户没有补充文字后再等待视觉转述，并额外判断图片、表情包、聊天截图里是否疑似出现当前角色自己、头像、名字或二创形象。关闭后不拦截私聊单图。",
+    "hint": "总开关。开启后，私聊单图会先进入语义收口窗口，确认用户没有补充文字后再等待视觉转述，并额外判断图片、表情包、聊天截图里是否疑似出现当前角色自己、头像、名字或二创形象。关闭后不拦截私聊单图。",
     "default": true
   },
   "private_image_self_recognition_hint": {

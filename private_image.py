@@ -647,8 +647,22 @@ class PrivateImageMixin:
     def _event_main_provider_supports_image(self, event: AstrMessageEvent) -> bool:
         provider = None
         try:
-            selected = event.get_extra("selected_provider")
+            selected = _single_line(event.get_extra("selected_provider"), 160)
         except Exception:
+            selected = ""
+        try:
+            umo = str(getattr(event, "unified_msg_origin", "") or "")
+            image_caption_provider_id = _single_line(
+                self._astrbot_provider_settings_for_umo(umo).get("default_image_caption_provider_id"),
+                160,
+            )
+        except Exception:
+            image_caption_provider_id = ""
+        if selected and image_caption_provider_id and selected == image_caption_provider_id:
+            logger.info(
+                "[PrivateCompanion] 私聊图片 selected_provider 是图片转述模型,不按主视觉模型直挂: provider=%s",
+                selected,
+            )
             selected = ""
         getter = getattr(self.context, "get_provider_by_id", None)
         if selected and callable(getter):
@@ -711,9 +725,13 @@ class PrivateImageMixin:
         return (
             "【角色识别线索】\n"
             "以下只用于给图片归属打标签,不要展开推理,不要复述规则。当前角色不是发图用户。\n"
+            "这里的“当前角色自己/当前角色的表情包”包括头像、Q版、二创、表情包、同人图和风格化卡通形象；"
+            "不要求图片写出角色名字,也不要求完全等同官方立绘。\n"
+            "如果画面主体同时命中多个当前角色显著视觉锚点,例如发色/发型、瞳色、发饰、服饰、物种、星月等专属元素,"
+            "且没有明显冲突,请优先判断为当前角色自己；如果明显是表情包或贴纸语境,判断为当前角色的表情包。\n"
+            "只有视觉锚点过少、与角色线索冲突,或主体明显是无关人物/物品时,才写无法判断或用户发来的无关图片。\n"
             f"{context}\n"
             "只在最后一行输出归属标签：图像归属判断：当前角色自己/当前角色的表情包/当前角色的聊天截图/发图用户本人/用户发来的无关图片/无法判断。"
-            "证据不足直接写无法判断。"
         )
 
     def _roleplay_labeled_value(self, text: str, label: str, *, limit: int = 180) -> str:
@@ -748,6 +766,9 @@ class PrivateImageMixin:
         )
 
     def _private_image_intent_line(self, text: str) -> str:
+        segment = self._private_image_labeled_segment(text, "图像表达意图")
+        if segment:
+            return segment
         for raw_line in str(text or "").replace("；", "\n").replace("。", "\n").splitlines():
             line = _single_line(raw_line, 220)
             if "图像表达意图" in line or "表达意图" in line:
@@ -755,11 +776,42 @@ class PrivateImageMixin:
         return ""
 
     def _private_image_ownership_line(self, text: str) -> str:
+        segment = self._private_image_labeled_segment(text, "图像归属判断")
+        if segment:
+            return segment
         for raw_line in str(text or "").replace("；", "\n").replace("。", "\n").splitlines():
             line = _single_line(raw_line, 180)
             if "图像归属判断" in line or "归属判断" in line:
                 return line
         return ""
+
+    @staticmethod
+    def _private_image_labeled_segment(text: str, label: str) -> str:
+        source = _single_line(text, 900)
+        if not source or not label:
+            return ""
+        next_labels = ("图片类型", "可见内容", "图像表达意图", "图像归属判断")
+        starts = [source.find(f"{label}："), source.find(f"{label}:")]
+        starts = [idx for idx in starts if idx >= 0]
+        if not starts:
+            return ""
+        start = min(starts)
+        colon_idx = source.find("：", start)
+        ascii_colon_idx = source.find(":", start)
+        colon_candidates = [idx for idx in (colon_idx, ascii_colon_idx) if idx >= 0]
+        if not colon_candidates:
+            return ""
+        value_start = min(colon_candidates) + 1
+        value_end = len(source)
+        for next_label in next_labels:
+            if next_label == label:
+                continue
+            for marker in (f" {next_label}：", f" {next_label}:", f"{next_label}：", f"{next_label}:"):
+                idx = source.find(marker, value_start)
+                if idx >= 0:
+                    value_end = min(value_end, idx)
+        value = _single_line(source[value_start:value_end], 160)
+        return f"{label}：{value}" if value else ""
 
     def _private_image_ownership_kind(self, ownership_line: str) -> str:
         compact = re.sub(r"\s+", "", str(ownership_line or "")).lower()
@@ -990,6 +1042,37 @@ class PrivateImageMixin:
             logger.info("[PrivateCompanion] 私聊单图后台视觉任务结果读取失败: %s", _single_line(exc, 120))
             return ""
 
+    def _normalize_private_image_reply_text(self, text: str) -> str:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return ""
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        if "\n" not in cleaned and re.search(r"[\u4e00-\u9fff][ \t]+[\u4e00-\u9fff]", cleaned):
+            # Some providers use spaces as short-message pauses. Preserve that intent for manual sends.
+            cleaned = re.sub(r"(?<=[\u4e00-\u9fff…！？?！~～])\s+(?=[\u4e00-\u9fff])", "\n", cleaned)
+        return cleaned.strip()
+
+    async def _send_private_image_reply_text(self, event: AstrMessageEvent, reply: str) -> None:
+        text = self._normalize_private_image_reply_text(reply)
+        if not text:
+            return
+        should_segment = (
+            bool(getattr(self, "enable_segmented_proactive_reply", False))
+            and str(getattr(self, "segmented_proactive_scope", "") or "") == "all_llm"
+        )
+        segments = self._split_proactive_text(text) if should_segment else [part.strip() for part in text.splitlines() if part.strip()]
+        segments = [segment for segment in segments if segment]
+        if not segments:
+            segments = [text]
+        if len(segments) <= 1:
+            await event.send(event.plain_result(segments[0]))
+            return
+        logger.info("[PrivateCompanion] 私聊单图回复按手动链路分段发送: segments=%s", len(segments))
+        for index, segment in enumerate(segments):
+            await event.send(event.plain_result(segment))
+            if index < len(segments) - 1:
+                await asyncio.sleep(await self._calc_segmented_proactive_interval(segment))
+
     def _take_buffered_private_image_context_for_event(self, event: AstrMessageEvent) -> dict[str, Any]:
         try:
             sender_id = str(event.get_sender_id())
@@ -1047,23 +1130,62 @@ class PrivateImageMixin:
             _single_line(reply_objective, 120),
             _single_line(vision_text, 220),
         )
-        setattr(event, "private_companion_deferred_private_image_only_ready", True)
-        setattr(event, "private_companion_deferred_private_image_only", False)
-        setattr(event, "private_companion_delayed_image_vision_text", vision_text)
         raw_image_sources = [str(item) for item in images[:4] if str(item or "").strip()]
         image_items = self._private_image_model_image_items(raw_image_sources)
         model_image_urls = [url for _, url in image_items]
         request_image_refs = self._private_image_sources_for_astrbot_request(raw_image_sources)
-        setattr(event, "private_companion_delayed_image_sources", list(request_image_refs))
         try:
             umo = str(getattr(event, "unified_msg_origin", "") or "")
-            direct_provider_id, direct_provider_source, _direct_prompt, _direct_provider = self._select_private_image_visual_provider(umo)
-            direct_image_mode = bool(request_image_refs and direct_provider_id)
+            framework_event = event
+            if umo:
+                try:
+                    from astrbot.core.platform.message_session import MessageSession
+                    from .proactive_message import SyntheticPrivateWakeEvent
+
+                    session = MessageSession.from_str(umo)
+                    sender_name = ""
+                    try:
+                        sender_name = _single_line(event.get_sender_name(), 60)
+                    except Exception:
+                        sender_name = ""
+                    framework_event = SyntheticPrivateWakeEvent(
+                        context=self.context,
+                        session=session,
+                        message="[图片]",
+                        sender_name=sender_name or "PrivateCompanion",
+                    )
+                    try:
+                        selected_provider = event.get_extra("selected_provider")
+                        if selected_provider:
+                            framework_event.set_extra("selected_provider", selected_provider)
+                    except Exception:
+                        pass
+                    logger.info("[PrivateCompanion] 私聊单图主链使用合成私聊事件执行: user=%s session=%s", user_id, umo)
+                except Exception as exc:
+                    framework_event = event
+                    logger.info("[PrivateCompanion] 私聊单图合成私聊事件创建失败,回退原事件: user=%s error=%s", user_id, _single_line(exc, 160))
+            setattr(framework_event, "private_companion_deferred_private_image_only_ready", True)
+            setattr(framework_event, "private_companion_deferred_private_image_only", False)
+            setattr(framework_event, "private_companion_delayed_image_vision_text", vision_text)
+            setattr(framework_event, "private_companion_delayed_image_sources", list(request_image_refs))
+            buffered_image_mode = _single_line(buffer.get("image_mode"), 20)
+            main_provider_supports_image = self._event_main_provider_supports_image(framework_event)
+            direct_image_mode = bool(request_image_refs and buffered_image_mode == "direct" and main_provider_supports_image)
+            direct_provider_id = ""
+            direct_provider_source = "current_main_provider"
             if direct_image_mode:
-                setattr(event, "private_companion_delayed_image_mode", "direct")
+                try:
+                    direct_provider_id = _single_line(framework_event.get_extra("selected_provider"), 160)
+                except Exception:
+                    direct_provider_id = ""
+                if not direct_provider_id:
+                    direct_provider_id = "current_main_provider"
+                setattr(framework_event, "private_companion_delayed_image_mode", "direct")
+            elif request_image_refs:
+                setattr(framework_event, "private_companion_delayed_image_mode", "caption")
             elif not vision_text and images:
                 vision_text = _single_line(await self._transcribe_private_inbound_images(images, umo=umo), 600)
-                setattr(event, "private_companion_delayed_image_vision_text", vision_text)
+                setattr(framework_event, "private_companion_delayed_image_vision_text", vision_text)
                 ownership_line = self._private_image_ownership_line(vision_text)
                 intent_line = self._private_image_intent_line(vision_text)
                 reply_objective = self._private_image_reply_objective(ownership_line)
@@ -1082,22 +1204,13 @@ class PrivateImageMixin:
             req = ProviderRequest(
                 prompt=prompt,
                 conversation=conv,
-                session_id=getattr(event, "session_id", None) or umo,
+                session_id=getattr(framework_event, "session_id", None) or umo,
             )
             previous_selected_provider = ""
             selected_provider_changed = False
             if direct_image_mode:
-                try:
-                    previous_selected_provider = str(event.get_extra("selected_provider") or "")
-                except Exception:
-                    previous_selected_provider = ""
-                try:
-                    event.set_extra("selected_provider", direct_provider_id)
-                    selected_provider_changed = True
-                except Exception:
-                    selected_provider_changed = False
                 req.image_urls = list(request_image_refs)
-            await self.inject_humanized_state(event, req)
+            await self.inject_humanized_state(framework_event, req)
             if direct_image_mode:
                 existing = getattr(req, "image_urls", None)
                 if not isinstance(existing, list):
@@ -1115,22 +1228,71 @@ class PrivateImageMixin:
                     bool(vision_text),
                 )
             start = time.time()
+            captured_tool_sends = []
             try:
-                result = await build_main_agent(
-                    event=event,
-                    plugin_context=self.context,
-                    config=build_cfg,
-                    req=req,
-                )
+                async def _runner_factory():
+                    return await build_main_agent(
+                        event=framework_event,
+                        plugin_context=self.context,
+                        config=build_cfg,
+                        req=req,
+                    )
+
+                capture_runner = getattr(self, "_capture_framework_send_message_calls", None)
+                if callable(capture_runner) and umo:
+                    result, captured_tool_sends = await capture_runner(
+                        target_session=umo,
+                        runner_factory=_runner_factory,
+                    )
+                    if captured_tool_sends:
+                        logger.info(
+                            "[PrivateCompanion] 私聊单图主链拦截到框架工具直发: user=%s count=%s",
+                            user_id,
+                            len(captured_tool_sends),
+                        )
+                else:
+                    result = await _runner_factory()
+                    runner_for_step = getattr(result, "agent_runner", None) if result else None
+                    if runner_for_step is not None and hasattr(runner_for_step, "step_until_done"):
+                        async for _ in runner_for_step.step_until_done(20):
+                            pass
             finally:
                 if selected_provider_changed:
                     try:
-                        event.set_extra("selected_provider", previous_selected_provider)
+                        framework_event.set_extra("selected_provider", previous_selected_provider)
                     except Exception:
                         pass
             runner = getattr(result, "agent_runner", None) if result else None
             llm_resp = runner.get_final_llm_resp() if runner else None
             reply = str(getattr(llm_resp, "completion_text", "") or "").strip()
+            reply_source = "main_chain"
+            if not reply and captured_tool_sends:
+                captured_text_parts: list[str] = []
+                sanitizer = getattr(self, "_sanitize_captured_plain_text", None)
+                for call in reversed(captured_tool_sends):
+                    messages = getattr(call, "messages", [])
+                    if not isinstance(messages, list):
+                        continue
+                    for item in messages:
+                        if not isinstance(item, dict):
+                            continue
+                        if str(item.get("type") or "").strip().lower() != "plain":
+                            continue
+                        raw_text = item.get("text")
+                        text_value = sanitizer(raw_text) if callable(sanitizer) else _single_line(raw_text, 260)
+                        if text_value:
+                            captured_text_parts.append(text_value)
+                    if captured_text_parts:
+                        break
+                reply = _single_line("\n".join(captured_text_parts), 500)
+                if reply:
+                    reply_source = "main_chain_tool_capture"
+                    logger.info(
+                        "[PrivateCompanion] 私聊单图主链工具直发文本已转为普通回复: user=%s chars=%s reply_preview=%s",
+                        user_id,
+                        len(reply),
+                        _single_line(reply, 180),
+                    )
             if reply:
                 logger.info(
                     "[PrivateCompanion] 私聊单图主链回复生成: user=%s chars=%s intent=%s ownership=%s reply_preview=%s",
@@ -1169,6 +1331,7 @@ class PrivateImageMixin:
                     task="private_image_only_fallback",
                 )
                 reply = _single_line(_strip_internal_message_blocks(fallback_reply or ""), 500)
+                reply_source = "fallback_llm"
                 logger.info(
                     "[PrivateCompanion] 私聊单图兜底回复生成: user=%s chars=%s intent=%s ownership=%s objective=%s reply_preview=%s",
                     user_id,
@@ -1179,6 +1342,7 @@ class PrivateImageMixin:
                     _single_line(reply, 180),
                 )
                 if not reply:
+                    reply_source = "fallback_static"
                     reply = (
                         f"我看到了，{_single_line(vision_text, 120)}"
                         if vision_text
@@ -1195,7 +1359,7 @@ class PrivateImageMixin:
                 resp=llm_resp,
                 budget_exempt=True,
             )
-            await event.send(event.plain_result(reply))
+            await self._send_private_image_reply_text(event, reply)
             image_keys = self._private_image_cache_image_keys([str(item) for item in images[:4] if str(item or "").strip()])
             if image_keys:
                 try:
@@ -1212,7 +1376,15 @@ class PrivateImageMixin:
                         self._save_data_sync()
                 except Exception as exc:
                     logger.debug("[PrivateCompanion] 私聊图片视觉反馈目标记录失败: %s", exc)
-            logger.info("[PrivateCompanion] 私聊单图无补充说明,已延迟交给原生 LLM 链路: user=%s images=%s", user_id, len(images))
+            if reply_source == "main_chain":
+                logger.info("[PrivateCompanion] 私聊单图无补充说明,已由原生 LLM 链路回复: user=%s images=%s", user_id, len(images))
+            else:
+                logger.info(
+                    "[PrivateCompanion] 私聊单图无补充说明,原生链路为空,已由兜底回复发送: user=%s images=%s source=%s",
+                    user_id,
+                    len(images),
+                    reply_source,
+                )
         except Exception as exc:
             logger.warning("[PrivateCompanion] 私聊单图延迟回复失败: user=%s error=%s", user_id, _single_line(exc, 180), exc_info=True)
 
