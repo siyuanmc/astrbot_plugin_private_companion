@@ -288,7 +288,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "3.1.1",
+    "3.1.2",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -340,6 +340,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         self.default_nickname = self._cfg_str(c, "default_nickname", "你", "你")
         self.require_private_opt_in = self._cfg_bool(c, "require_private_opt_in", True)
         self.target_user_ids = c.get("target_user_ids", [])
+        self.private_user_aliases = self._parse_private_user_aliases(c.get("private_user_aliases", ""))
         self.target_platform = self._cfg_str(c, "target_platform", "aiocqhttp", "aiocqhttp")
         self.default_enable_configured_targets = self._cfg_bool(c, "default_enable_configured_targets", True)
         self.enable_environment_perception = self._cfg_bool(c, "enable_environment_perception", True)
@@ -371,6 +372,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         self.bot_name = self._cfg_str(c, "bot_name", "小星", "小星")
         self.include_schedule_in_messages = self._cfg_bool(c, "include_schedule_in_messages", True)
         self.daily_plan_prompt = self._cfg_str(c, "daily_plan_prompt", "")
+        self.plugin_specific_persona_id = self._cfg_str(c, "plugin_specific_persona_id", "")
         self.schedule_persona_prompt = self._cfg_str(c, "schedule_persona_prompt", "")
         self.schedule_worldview_prompt = self._cfg_str(c, "schedule_worldview_prompt", "")
         self.private_image_self_recognition_hint = self._cfg_str(c, "private_image_self_recognition_hint", "")
@@ -789,9 +791,15 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         self._data_lock = asyncio.Lock()
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._default_persona_prompt_cache = ""
+        self._default_persona_prompt_cache_at = 0.0
+        self._default_persona_prompt_cache_umo = ""
+        self._default_persona_prompt_cache_persona_id = ""
         self._framework_captured_send_cache: dict[str, list[Any]] = {}
         self._last_input_status_at: dict[str, float] = {}
         self.data = self._load_data_sync()
+        if self._merge_private_user_alias_records():
+            self._save_data_sync()
         if self._cleanup_all_group_slang_terms():
             self._save_data_sync()
         if self.worldbook_auto_import:
@@ -810,6 +818,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         if not self.enabled:
             logger.info("[PrivateCompanion] 插件总开关已关闭,不启动主动消息循环")
             return
+        await self._refresh_default_persona_prompt()
         async with self._data_lock:
             if self._prime_enabled_user_schedules():
                 self._save_data_sync()
@@ -1167,6 +1176,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
             user_id = str(event.get_sender_id())
         except Exception:
             return
+        await self._refresh_default_persona_prompt(getattr(event, "unified_msg_origin", "") or user_id)
         raw_users = self.data.get("users", {})
         current_user = raw_users.get(user_id) if isinstance(raw_users, dict) else None
         if not isinstance(current_user, dict):
@@ -1175,7 +1185,11 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
             return
 
         state = await self._ensure_daily_state()
-        injection_parts = [self._format_state_injection(state)]
+        injection_parts = []
+        persona_injection = self._format_plugin_persona_request_injection()
+        if persona_injection:
+            injection_parts.append(persona_injection)
+        injection_parts.append(self._format_state_injection(state))
         worldview_context = self._format_worldview_adaptation_prompt()
         if worldview_context:
             injection_parts.append(worldview_context)
@@ -1522,6 +1536,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                 f"{framework_prompt}"
             )
         if normalized in {"回复注入", "reply", "injection"}:
+            await self._refresh_default_persona_prompt(getattr(event, "unified_msg_origin", "") or "")
             state = await self._ensure_daily_state()
             parts = [self._format_state_injection(state)]
             detail_injection = self._format_detail_injection()

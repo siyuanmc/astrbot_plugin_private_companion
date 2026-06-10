@@ -9,6 +9,7 @@ import base64
 import gc
 import hashlib
 import html
+import inspect
 import importlib
 import json
 import math
@@ -132,6 +133,8 @@ DEFAULT_NEWS_SOURCES = "\n".join(
         DEFAULT_AI_DAILY_NEWS_SOURCE,
     ]
 )
+
+DEFAULT_PERSONA_PROMPT_FALLBACK = "未读取到 AstrBot 默认人格。请保持简洁、温和、有边界,不额外创造新身份。"
 
 LEGACY_DEFAULT_NEWS_SOURCES = "\n".join(
     [
@@ -3353,15 +3356,81 @@ class DailyStateMixin:
         return build_detail_enhancement_prompt(self, segment, plan, state)
 
     def _get_default_persona_prompt(self) -> str:
+        cached = str(getattr(self, "_default_persona_prompt_cache", "") or "").strip()
+        if cached:
+            return cached
+        return DEFAULT_PERSONA_PROMPT_FALLBACK
+
+    def _extract_default_persona_prompt(self, persona: Any) -> str:
+        if isinstance(persona, dict):
+            return str(persona.get("prompt") or "").strip()
+        if isinstance(persona, str):
+            return persona.strip()
+        for attr in ("prompt", "system_prompt", "content"):
+            try:
+                value = getattr(persona, attr, None)
+            except Exception:
+                value = None
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
+    async def _refresh_default_persona_prompt(self, umo: str = "") -> str:
         try:
-            persona = self.context.persona_manager.get_default_persona_v3()
-            if isinstance(persona, dict):
-                prompt = str(persona.get("prompt") or "").strip()
-                if prompt:
-                    return prompt
+            manager = getattr(getattr(self, "context", None), "persona_manager", None)
+            specific_id = str(getattr(self, "plugin_specific_persona_id", "") or "").strip()
+            if manager and specific_id:
+                try:
+                    specific_getter = getattr(manager, "get_persona", None)
+                    if callable(specific_getter):
+                        result = specific_getter(specific_id)
+                        if inspect.isawaitable(result):
+                            result = await result
+                        prompt = self._extract_default_persona_prompt(result)
+                        if prompt:
+                            self._default_persona_prompt_cache = prompt
+                            self._default_persona_prompt_cache_at = _now_ts()
+                            self._default_persona_prompt_cache_umo = umo
+                            self._default_persona_prompt_cache_persona_id = specific_id
+                            return prompt
+                except Exception as e:
+                    logger.warning(f"[PrivateCompanion] 读取插件指定人格失败(ID: {specific_id}): {e}")
+            getter = getattr(manager, "get_default_persona_v3", None) if manager else None
+            if not callable(getter):
+                return self._get_default_persona_prompt()
+            try:
+                result = getter(umo=umo)
+            except TypeError:
+                try:
+                    result = getter(umo)
+                except TypeError:
+                    result = getter()
+            if inspect.isawaitable(result):
+                result = await result
+            prompt = self._extract_default_persona_prompt(result)
+            if prompt:
+                self._default_persona_prompt_cache = prompt
+                self._default_persona_prompt_cache_at = _now_ts()
+                self._default_persona_prompt_cache_umo = umo
+                return prompt
         except Exception as e:
             logger.warning(f"[PrivateCompanion] 读取 AstrBot 默认人格失败: {e}")
-        return "未读取到 AstrBot 默认人格。请保持简洁、温和、有边界,不额外创造新身份。"
+        return self._get_default_persona_prompt()
+
+    def _format_plugin_persona_request_injection(self) -> str:
+        specific_id = str(getattr(self, "plugin_specific_persona_id", "") or "").strip()
+        if not specific_id:
+            return ""
+        persona = self._get_default_persona_prompt()
+        if not persona or persona == DEFAULT_PERSONA_PROMPT_FALLBACK:
+            return ""
+        return (
+            "【本插件指定人格】\n"
+            "本轮私聊陪伴相关回复请优先遵循下面的人格设定。"
+            "如果它与更高优先级系统安全规则冲突,以安全规则为准；如果与插件的状态/记忆材料冲突,以人格设定为准。\n"
+            f"{persona}"
+        )
 
     def _persona_state_profile(self) -> dict[str, bool]:
         prompt = self._get_default_persona_prompt()

@@ -16,6 +16,13 @@
     "hint": "用于日程、状态、日记和拓展页面展示，不会覆盖 AstrBot 全局人格名。",
     "default": "小星"
   },
+  "plugin_specific_persona_id": {
+    "description": "插件指定人格 ID",
+    "type": "string",
+    "_special": "select_persona",
+    "default": "",
+    "hint": "选择系统中已定义的人设后，本插件内部的关系评估、状态注入、日程、主动消息等人格参考会优先使用该人格。留空时回退到 AstrBot 当前默认人格。"
+  },
   "LLM_PROVIDER_ID": {
     "description": "主模型 / 日程模型（留空用 AstrBot 默认）",
     "type": "string",
@@ -47,6 +54,12 @@
     "type": "list",
     "hint": "填写后启动时会自动预热这些私聊对象。只想被动聊天也可以留空。",
     "default": []
+  },
+  "private_user_aliases": {
+    "description": "私聊身份别名归并",
+    "type": "text",
+    "hint": "把临时会话 ID、异常 sender_id 或机器人侧误报 ID 归并到主 QQ。每行一个映射,例如：688C2CE7...=100012345。留空则不归并。",
+    "default": ""
   },
   "target_platform": {
     "description": "私聊目标平台名",

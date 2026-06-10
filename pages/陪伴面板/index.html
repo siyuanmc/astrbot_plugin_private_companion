@@ -94,6 +94,22 @@
             <span class="muted">集中维护本插件用于日程、状态、主动行为、识图和世界观翻译的设定补充</span>
           </div>
         </div>
+        <article class="module-card">
+          <div class="module-card-head">
+            <div>
+              <h2>主回复人格</h2>
+              <span class="section-desc">这里决定 Bot 以谁的主身份说话；留空则继承 AstrBot 当前默认人格。</span>
+            </div>
+            <span class="module-badge">Persona</span>
+          </div>
+          <div class="module-form">
+            <label>当前使用人格
+              <input id="currentPersonaDisplay" readonly value="读取中..." />
+            </label>
+            <p class="section-desc">和下方“设定工作台”的区别：这里是主回复人格，会影响私聊被动回复、关系评估和主动消息；下方角色设定补充只给日程、状态、日记、识图和生活背景使用，不应拿来覆盖主聊天人格。</p>
+            <p class="section-desc">如需修改，请到 AstrBot 插件配置页，打开“我会永远陪着你”的配置项，在“插件指定人格 ID”里使用人格选择器选择；留空即继承 AstrBot 当前默认人格。</p>
+          </div>
+        </article>
         <article class="roleplay-studio module-card" data-roleplay-mode="freeform">
           <div class="module-card-head">
             <div>
@@ -111,8 +127,8 @@
               <div class="persona-card-head">
                 <span class="persona-avatar" aria-hidden="true">设</span>
                 <div>
-                  <h3>角色</h3>
-                  <p>她是谁、怎样说话、能做到什么。</p>
+                  <h3>角色设定补充</h3>
+                  <p>她今天怎样生活、有哪些外貌/世界观/日常细节；这是陪伴插件的背景材料，不是 AstrBot 主人格。</p>
                 </div>
                 <button type="button" class="roleplay-example-btn" data-roleplay-example="persona">填入示例</button>
               </div>
@@ -253,6 +269,10 @@ QQ空间 = 公开札记
           <label>QQ 号 <input name="user_id" placeholder="例如 123456789" required /></label>
           <label>称呼 <input name="nickname" placeholder="可选" /></label>
           <button type="submit">新增对象</button>
+        </form>
+        <form id="privateAliasForm" class="inline-form manage-form">
+          <label>身份别名归并 <textarea name="private_user_aliases" rows="3" placeholder="临时ID=主QQ&#10;机器人侧ID=主QQ"></textarea></label>
+          <button type="submit">保存归并规则</button>
         </form>
         <div class="table-wrap">
           <table class="private-user-table">

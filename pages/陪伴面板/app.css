@@ -5927,6 +5927,38 @@ table {
   text-align: right;
 }
 
+.user-id-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.user-id-line .mono {
+  display: inline-block;
+  max-width: min(190px, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+.copy-id-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--line-soft);
+  background: var(--panel-soft);
+  color: var(--text-muted);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.copy-id-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 th,
 td {
   padding: 10px 12px;

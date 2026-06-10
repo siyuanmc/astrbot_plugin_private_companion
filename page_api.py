@@ -1484,6 +1484,11 @@ class PrivateCompanionPageApi:
             "dialogue_episode_count": len(user.get("dialogue_episodes") or []),
             "open_loop_count": len(user.get("open_loops") or []),
             "habit_count": len(self._behavior_habit_summary(user).get("items", [])),
+            "alias_user_ids": [
+                self._single_line(item, 80)
+                for item in (user.get("alias_user_ids") if isinstance(user.get("alias_user_ids"), list) else [])
+                if self._single_line(item, 80)
+            ],
         }
 
     def _behavior_habit_summary(self, user: dict[str, Any]) -> dict[str, Any]:
@@ -2012,7 +2017,9 @@ class PrivateCompanionPageApi:
     def _runtime_settings(self) -> dict[str, Any]:
         keys = [
             "bot_name",
+            "plugin_specific_persona_id",
             "target_user_ids",
+            "private_user_aliases",
             "target_platform",
             "environment_perception_timezone",
             "holiday_country",
@@ -2201,6 +2208,7 @@ class PrivateCompanionPageApi:
             "atrelay_multi_target_limit",
         ]
         values = {key: getattr(self.plugin, key, self._config_get(key)) for key in keys}
+        values["private_user_aliases"] = self._config_get("private_user_aliases")
         values.update(
             {
                 "enable_private_reading_integration": bool(getattr(self.plugin, "enable_jm_cosmos_integration", False)),
@@ -2546,6 +2554,16 @@ class PrivateCompanionPageApi:
         if key in private_reading_attr_map:
             setattr(self.plugin, private_reading_attr_map[key], value)
             return
+        if key == "plugin_specific_persona_id":
+            self.plugin.plugin_specific_persona_id = str(value or "").strip()
+            self.plugin._default_persona_prompt_cache = ""
+            self.plugin._default_persona_prompt_cache_persona_id = ""
+            return
+        if key == "private_user_aliases":
+            self.plugin.private_user_aliases = self.plugin._parse_private_user_aliases(value)
+            if self.plugin._merge_private_user_alias_records():
+                self.plugin._save_data_sync()
+            return
         if key in {"group_repeat_follow_probability", "group_repeat_interrupt_probability", "group_repeat_interrupt_probability_step"}:
             raw = float(value or 0)
             setattr(self.plugin, key, max(0.0, min(1.0, raw / 100.0 if raw > 1 else raw)))
@@ -2713,7 +2731,9 @@ class PrivateCompanionPageApi:
     def _allowed_setting_keys() -> set[str]:
         return {
             "bot_name",
+            "plugin_specific_persona_id",
             "target_user_ids",
+            "private_user_aliases",
             "target_platform",
             "environment_perception_timezone",
             "holiday_country",
@@ -2895,6 +2915,10 @@ class PrivateCompanionPageApi:
     def _normalize_setting_value(self, key: str, value: Any) -> Any:
         if key == "target_user_ids":
             return self._normalize_id_list(value)
+        if key == "plugin_specific_persona_id":
+            return str(value or "").strip()[:160]
+        if key == "private_user_aliases":
+            return str(value or "").strip()[:4000]
         if key == "worldbook_config_paths":
             return str(value or "").strip()[:1000]
         if key in {"news_sources", "ai_daily_sources"}:

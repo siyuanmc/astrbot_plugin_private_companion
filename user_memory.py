@@ -1436,7 +1436,7 @@ class UserMemoryMixin:
         return level, preference
 
     async def _refresh_persona_relationship(self, user_id: str, user: dict[str, Any]):
-        persona = self._get_default_persona_prompt()
+        persona = await self._refresh_default_persona_prompt(str(user.get("umo") or user_id))
         proactive_count = _safe_int(user.get("proactive_sent_count"), 0)
         reply_count = _safe_int(user.get("reply_count"), 0)
         inbound_count = _safe_int(user.get("inbound_count"), 0)

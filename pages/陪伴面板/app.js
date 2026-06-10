@@ -287,6 +287,8 @@ const configLabels = {
   user_count: "私聊对象总数",
   require_opt_in: "是否需要私聊确认",
   default_style: "默认语气",
+  plugin_specific_persona_id: "插件指定人格 ID",
+  private_user_aliases: "私聊身份别名归并",
   schedule_persona_prompt: "角色设定补充",
   schedule_worldview_prompt: "世界观/生活背景",
   max_daily_messages: "每日主动上限",
@@ -465,6 +467,8 @@ const configLabels = {
 
 const configDescriptions = {
   default_style: "没有单独学习到用户偏好时，插件用于生成日程、状态和主动行为的基础语气参考。",
+  plugin_specific_persona_id: "填写 AstrBot 人格 ID 后，插件会优先使用该人格作为主回复人格；留空则继承 AstrBot 当前默认人格。不同于角色设定补充，它会影响私聊被动回复和关系判断。",
+  private_user_aliases: "把临时会话 ID、异常 sender_id 或机器人侧误报 ID 归并到主 QQ。每行一个映射，例如：688C2CE7...=100012345。",
   schedule_persona_prompt: "给陪伴插件的日程、状态、主动行为、识图和创作提供角色补充；不会覆盖 AstrBot 主人格。",
   schedule_worldview_prompt: "给陪伴插件判断生活背景和世界规则，适合写所在世界、日常规则、居住/学校/城市环境和与用户的生活关系。",
   humanized_state_intensity: "控制失眠、生病、饥饿、周期等状态出现概率和能量影响强度，范围 0-100。",
@@ -795,6 +799,7 @@ const featureSettingTypes = {
   segmented_proactive_interval_method: { type: "select", options: [["log", "按字数对数"], ["random", "随机"]] },
   atrelay_default_relay_style: { type: "select", options: [["persona", "语气转译"], ["soft", "委婉转述"], ["original", "原话模式"]] },
   worldbook_config_paths: { type: "textarea" },
+  private_user_aliases: { type: "textarea" },
   skill_growth_custom_skills: { type: "textarea" },
   news_sources: { type: "textarea" },
   news_hot_sources: { type: "textarea" },
@@ -2101,7 +2106,7 @@ function renderUsers() {
   $("#userRows").innerHTML = rows.length
     ? rows.map((user) => `
       <tr data-user-id="${escapeHtml(user.user_id)}" class="${user.user_id === state.selectedUserId ? "is-selected" : ""}">
-        <td class="user-cell identity"><strong title="${escapeHtml(user.display_name || user.nickname || user.user_id)}">${escapeHtml(user.display_name || user.nickname || user.user_id)}</strong>${user.is_qq_user ? "" : ` <span class="badge off">非 QQ</span>`}<br><span class="muted mono" title="${escapeHtml(user.user_id)}">${escapeHtml(user.user_id)}</span></td>
+        <td class="user-cell identity"><strong title="${escapeHtml(user.display_name || user.nickname || user.user_id)}">${escapeHtml(user.display_name || user.nickname || user.user_id)}</strong>${user.is_qq_user ? "" : ` <span class="badge off">非 QQ</span>`}${Array.isArray(user.alias_user_ids) && user.alias_user_ids.length ? ` <span class="badge ok" title="${escapeHtml(user.alias_user_ids.join("\\n"))}">已合并 ${escapeHtml(user.alias_user_ids.length)} 个身份</span>` : ""}<br><span class="user-id-line"><span class="muted mono" title="${escapeHtml(user.user_id)}">${escapeHtml(user.user_id)}</span><button type="button" class="copy-id-btn" data-copy-user-id="${escapeHtml(user.user_id)}">复制</button></span></td>
         <td class="user-cell relation"><span class="badge ${user.enabled ? "" : "off"}">${escapeHtml(user.enabled ? "启用" : "停用")}</span> <span class="muted">${escapeHtml(user.relationship_stage || "未分层")}</span><br><span>分数 ${escapeHtml(user.relationship_score)}</span></td>
         <td class="user-cell compact">入站 ${escapeHtml(user.inbound_count)} · 回复 ${escapeHtml(user.reply_count)}<br><span class="muted">记忆 ${escapeHtml(user.memory_items)} 条</span></td>
         <td class="user-cell proactive"><span>今日 ${escapeHtml(user.sent_today)} · 总计 ${escapeHtml(user.proactive_sent_count)}</span><br><span class="muted truncate" title="${escapeHtml(user.next_proactive || "")}">${escapeHtml(user.next_proactive)}</span></td>
@@ -2119,6 +2124,12 @@ function renderUsers() {
         user_id: user.user_id,
         enabled: !user.enabled,
       }), !user.enabled ? "已启用私聊对象" : "已停用私聊对象", button);
+    });
+  });
+  document.querySelectorAll("[data-copy-user-id]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      await copyTextToClipboard(button.dataset.copyUserId || "", "已复制用户 ID");
     });
   });
   document.querySelectorAll("[data-user-id]").forEach((row) => {
@@ -4090,7 +4101,9 @@ function renderConfig() {
 function renderModuleSettings() {
   const settings = state.overview?.settings || {};
   renderModuleSummary(settings);
+  renderCurrentPersonaStatus(settings);
   fillForm("#roleplayProfileForm", settings);
+  fillForm("#privateAliasForm", settings);
   fillForm("#quickModuleForm", settings);
   fillForm("#environmentModuleForm", settings);
   fillForm("#privateModuleForm", settings);
@@ -4106,6 +4119,13 @@ function renderModuleSettings() {
   renderSegmentedPreview();
   renderExternalAbilities();
   renderPresetCards();
+}
+
+function renderCurrentPersonaStatus(settings) {
+  const input = document.getElementById("currentPersonaDisplay");
+  if (!input) return;
+  const personaId = String(settings.plugin_specific_persona_id || "").trim();
+  input.value = personaId ? `插件指定人格 ID：${personaId}` : "继承 AstrBot 当前默认人格";
 }
 
 function renderModuleSummary(settings) {
@@ -6532,19 +6552,34 @@ async function copyTextToClipboard(text, successMessage = "已复制") {
     showToast("没有可复制的内容", "error");
     return;
   }
+  const fallbackCopy = () => {
+    const box = document.createElement("textarea");
+    box.value = value;
+    box.setAttribute("readonly", "readonly");
+    box.style.position = "fixed";
+    box.style.left = "-9999px";
+    box.style.top = "0";
+    document.body.appendChild(box);
+    box.focus();
+    box.select();
+    try {
+      box.setSelectionRange(0, box.value.length);
+    } catch (error) {
+      // Older engines may not support setSelectionRange on textarea in this context.
+    }
+    const ok = document.execCommand("copy");
+    box.remove();
+    return ok;
+  };
   try {
     if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
+      try {
+        await navigator.clipboard.writeText(value);
+      } catch (error) {
+        if (!fallbackCopy()) throw error;
+      }
     } else {
-      const box = document.createElement("textarea");
-      box.value = value;
-      box.setAttribute("readonly", "readonly");
-      box.style.position = "fixed";
-      box.style.left = "-9999px";
-      document.body.appendChild(box);
-      box.select();
-      document.execCommand("copy");
-      box.remove();
+      if (!fallbackCopy()) throw new Error("浏览器拒绝复制");
     }
     showToast(successMessage);
   } catch (error) {
@@ -7060,7 +7095,7 @@ document.addEventListener("change", (event) => {
 
 bindRoleplayModeSwitch();
 
-["roleplayProfileForm", "quickModuleForm", "environmentModuleForm", "privateModuleForm", "groupModuleForm", "worldbookModuleForm", "memoryModuleForm", "longTermModuleForm"].forEach((formId) => {
+["roleplayProfileForm", "privateAliasForm", "quickModuleForm", "environmentModuleForm", "privateModuleForm", "groupModuleForm", "worldbookModuleForm", "memoryModuleForm", "longTermModuleForm"].forEach((formId) => {
   const form = document.getElementById(formId);
   if (!form) return;
   form.addEventListener("input", () => markModuleFormDirty(form));
@@ -7071,6 +7106,9 @@ bindRoleplayModeSwitch();
       settings: collectFormSettings(`#${formId}`),
     }), "已保存模块配置", event.submitter);
     markModuleFormClean(form);
+    if (formId === "privateAliasForm") {
+      await loadAll();
+    }
   });
 });
 bindSegmentedPreview();

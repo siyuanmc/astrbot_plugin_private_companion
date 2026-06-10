@@ -473,11 +473,138 @@ class CoreStoreMixin:
                 self._save_data_sync()
         return state, plan, diary
 
-    def _get_user(self, user_id: str) -> dict[str, Any]:
+    def _parse_private_user_aliases(self, raw: Any) -> dict[str, str]:
+        aliases: dict[str, str] = {}
+        if isinstance(raw, dict):
+            items = raw.items()
+        elif isinstance(raw, list):
+            items = []
+            for item in raw:
+                if isinstance(item, dict):
+                    alias = str(item.get("alias") or item.get("from") or item.get("source") or "").strip()
+                    canonical = str(item.get("canonical") or item.get("to") or item.get("target") or "").strip()
+                    if alias and canonical:
+                        aliases[alias] = canonical
+                    continue
+                text = str(item or "").strip()
+                if text:
+                    items.append((text, ""))
+        else:
+            text = str(raw or "").strip()
+            items = [(line.strip(), "") for line in text.splitlines() if line.strip()]
+        for key, value in items:
+            alias = str(key or "").strip()
+            canonical = str(value or "").strip()
+            if not canonical:
+                for sep in ("=>", "=", ":", "：", "->"):
+                    if sep in alias:
+                        left, right = alias.split(sep, 1)
+                        alias = left.strip()
+                        canonical = right.strip()
+                        break
+            if alias and canonical and alias != canonical:
+                aliases[alias] = canonical
+        return aliases
+
+    def _canonical_private_user_id(self, user_id: str) -> str:
+        current = str(user_id or "").strip()
+        aliases = getattr(self, "private_user_aliases", {}) or {}
+        seen: set[str] = set()
+        while current and current in aliases and current not in seen:
+            seen.add(current)
+            current = str(aliases.get(current) or "").strip()
+        return current or str(user_id or "").strip()
+
+    def _merge_user_record_values(self, target: dict[str, Any], source: dict[str, Any], alias_id: str) -> None:
+        additive_keys = {
+            "inbound_count",
+            "reply_count",
+            "proactive_sent_count",
+            "relationship_score",
+            "sent_today",
+            "ignored_streak",
+            "poke_count",
+        }
+        max_keys = {
+            "last_seen",
+            "last_sent",
+            "last_active_at",
+            "last_user_message_at",
+            "last_memory_refresh_at",
+            "last_episode_refresh_at",
+        }
+        for key, value in source.items():
+            if key == "user_id":
+                continue
+            if key in additive_keys:
+                target[key] = _safe_int(target.get(key), 0) + _safe_int(value, 0)
+            elif key in max_keys or key.endswith("_at") or key.endswith("_ts"):
+                target[key] = max(_safe_float(target.get(key), 0), _safe_float(value, 0))
+            elif isinstance(value, list):
+                existing = target.get(key)
+                if not isinstance(existing, list):
+                    existing = []
+                    target[key] = existing
+                for item in value:
+                    if item not in existing:
+                        existing.append(deepcopy(item))
+            elif isinstance(value, dict):
+                existing = target.get(key)
+                if not isinstance(existing, dict):
+                    existing = {}
+                    target[key] = existing
+                for sub_key, sub_value in value.items():
+                    if sub_key not in existing or existing.get(sub_key) in (None, "", [], {}):
+                        existing[sub_key] = deepcopy(sub_value)
+            elif target.get(key) in (None, "", [], {}):
+                target[key] = deepcopy(value)
+        aliases = target.setdefault("alias_user_ids", [])
+        if not isinstance(aliases, list):
+            aliases = []
+            target["alias_user_ids"] = aliases
+        for alias in [alias_id, *(source.get("alias_user_ids") if isinstance(source.get("alias_user_ids"), list) else [])]:
+            alias_text = str(alias or "").strip()
+            if alias_text and alias_text not in aliases:
+                aliases.append(alias_text)
+
+    def _merge_private_user_alias_records(self) -> bool:
+        aliases = getattr(self, "private_user_aliases", {}) or {}
+        if not aliases:
+            return False
         users = self.data.setdefault("users", {})
+        changed = False
+        for alias_id, canonical_id in list(aliases.items()):
+            alias_id = str(alias_id or "").strip()
+            canonical_id = self._canonical_private_user_id(canonical_id)
+            if not alias_id or not canonical_id or alias_id == canonical_id:
+                continue
+            source = users.get(alias_id)
+            if not isinstance(source, dict):
+                continue
+            target = users.setdefault(canonical_id, dict(_DEFAULT_USER_TEMPLATE))
+            target["user_id"] = canonical_id
+            self._merge_user_record_values(target, source, alias_id)
+            users.pop(alias_id, None)
+            changed = True
+        return changed
+
+    def _get_user(self, user_id: str) -> dict[str, Any]:
+        original_user_id = str(user_id or "").strip()
+        user_id = self._canonical_private_user_id(original_user_id)
+        users = self.data.setdefault("users", {})
+        if original_user_id and original_user_id != user_id and original_user_id in users:
+            target = users.setdefault(user_id, dict(_DEFAULT_USER_TEMPLATE))
+            target["user_id"] = user_id
+            source = users.pop(original_user_id)
+            if isinstance(source, dict):
+                self._merge_user_record_values(target, source, original_user_id)
         created = user_id not in users
         user = users.setdefault(user_id, dict(_DEFAULT_USER_TEMPLATE))
         user["user_id"] = user_id
+        if original_user_id and original_user_id != user_id:
+            aliases = user.setdefault("alias_user_ids", [])
+            if isinstance(aliases, list) and original_user_id not in aliases:
+                aliases.append(original_user_id)
         for key, default_value in _DEFAULT_USER_TEMPLATE.items():
             if key not in user:
                 user[key] = default_value
@@ -504,7 +631,7 @@ class CoreStoreMixin:
         return user
 
     def _is_target_private_user(self, user_id: str, user: dict[str, Any] | None = None) -> bool:
-        user_id = str(user_id or "").strip()
+        user_id = self._canonical_private_user_id(str(user_id or "").strip())
         if isinstance(user, dict) and user.get("manual_enabled"):
             return True
         if not user_id or not user_id.isdigit():
