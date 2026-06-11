@@ -1081,8 +1081,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
         return await self._pc_qzone_view_feed_impl(event, user_id=user_id, pos=pos, like=like, reply=reply)
 
     @filter.llm_tool(name="pc_qzone_publish_feed")
-    async def pc_qzone_publish_feed(self, event: AstrMessageEvent, text: str) -> str:
-        """发布一条 QQ 空间说说。"""
+    async def pc_qzone_publish_feed(self, event: AstrMessageEvent, text: str = "") -> str:
+        """发布一条 QQ 空间说说。必须通过 text 参数传入最终正文。"""
         return await self._pc_qzone_publish_feed_impl(event, text)
 
     @filter.llm_tool(name="pc_get_group_id_by_name")
@@ -1760,6 +1760,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
             "梦境", "做了什么梦", "今日梦境",
             "重置夹层密码", "重设夹层密码", "重新生成夹层密码", "重置书柜密码", "重设书柜密码", "重新生成书柜密码",
             "发说说", "发QQ空间", "发布说说", "空间发布", "发布空间",
+            "测试说说链路", "测试空间发布", "测试QQ空间发布", "测试qzone发布",
             "新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报",
         }
 
@@ -1778,6 +1779,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
             "生成日记", "刷新日记",
             "重置夹层密码", "重设夹层密码", "重新生成夹层密码", "重置书柜密码", "重设书柜密码", "重新生成书柜密码",
             "发说说", "发QQ空间", "发布说说", "空间发布", "发布空间",
+            "测试说说链路", "测试空间发布", "测试QQ空间发布", "测试qzone发布",
             "新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报",
             "日期添加", "添加日期", "重要日期添加",
             "日期删除", "删除日期", "重要日期删除",
@@ -1880,6 +1882,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                 response = "已重新设置书柜夹层密码。"
             elif action in {"发说说", "发QQ空间", "发布说说", "空间发布", "发布空间"}:
                 response = "正在发布 QQ 空间说说。"
+            elif action in {"测试说说链路", "测试空间发布", "测试QQ空间发布", "测试qzone发布"}:
+                response = "正在模拟 QQ 空间发布链路。"
             elif action in {"新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报"}:
                 response = "正在读今天的新闻源。"
             elif action in {"生成日记", "刷新日记"}:
@@ -1944,6 +1948,11 @@ class PrivateCompanionPlugin(CoreStoreMixin, IntegrationStatusMixin, PrivateImag
                 )
             else:
                 await self._reply(event, f"发布失败：{_single_line(result.get('message'), 180)}")
+            event.stop_event()
+            return
+        if action in {"测试说说链路", "测试空间发布", "测试QQ空间发布", "测试qzone发布"}:
+            await self._reply(event, response)
+            await self._reply(event, await self._test_qzone_publish_tool_chain(event))
             event.stop_event()
             return
         if action in {"新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报"}:

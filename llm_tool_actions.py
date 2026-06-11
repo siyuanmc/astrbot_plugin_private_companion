@@ -25,7 +25,7 @@ class LlmToolActionsMixin:
 【QQ 空间动态工具】
 当用户明确要求你查看说说、QQ 空间动态、点赞/评论说说,或要求你发一条说说时,可以使用 Private Companion 的 QQ 空间工具。
 - 查看说说：使用 `pc_qzone_view_feed`。不知道目标 QQ 时默认当前用户。
-- 发布说说：使用 `pc_qzone_publish_feed`。只有用户明确要求发布时才调用；不要把草稿当作已发布。
+- 发布说说：使用 `pc_qzone_publish_feed`。必须把最终要发布的正文放进 `text` 参数,例如 `{"text":"今天想慢一点。"}`；只有用户明确要求发布时才调用；不要把草稿当作已发布。
 - 发布内容必须服从当前人格与世界观,但不要泄露私聊隐私、内部状态数值、关系网资料或插件实现。
 - 工具失败时简短说明失败原因,不要假装已经发布或点赞。
 """.strip()
@@ -65,8 +65,19 @@ class LlmToolActionsMixin:
         except Exception as exc:
             return json.dumps({"status": "error", "message": _single_line(exc, 160)}, ensure_ascii=False)
 
-    async def _pc_qzone_publish_feed_impl(self, event: AstrMessageEvent, text: str) -> str:
-        result = await self._publish_qzone_text(text, event)
+    async def _pc_qzone_publish_feed_impl(self, event: AstrMessageEvent, text: str = "") -> str:
+        content = _single_line(text, 300)
+        if not content:
+            return json.dumps(
+                {
+                    "status": "need_text",
+                    "success": False,
+                    "message": "缺少 text 参数。请把要发布的说说正文作为 text 传入,不要空调用。",
+                    "required_args": {"text": "要发布到 QQ 空间的说说正文"},
+                },
+                ensure_ascii=False,
+            )
+        result = await self._publish_qzone_text(content, event)
         return json.dumps({"status": "success" if result.get("success") else "error", **result}, ensure_ascii=False)
 
     async def _pc_get_group_id_by_name_impl(self, event: AstrMessageEvent, **kwargs) -> str:

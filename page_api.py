@@ -4112,30 +4112,10 @@ class PrivateCompanionPageApi:
                     item.get("page_comments_previous") if isinstance(item.get("page_comments_previous"), list) else [],
                     limit=32,
                 )
-                sampled_pages = [
-                    self._int(page)
-                    for page in (item.get("sampled_pages") if isinstance(item.get("sampled_pages"), list) else [])
-                    if self._int(page) > 0
-                ]
-                sampled_set = set(sampled_pages)
-                for comment_index, comment_item in enumerate(raw_comments):
+                for comment_item in raw_comments:
                     if not isinstance(comment_item, dict):
                         continue
-                    raw_page_no = self._int(comment_item.get("page"))
-                    sample_order = self._int(
-                        comment_item.get("sample_order")
-                        or comment_item.get("sample_index")
-                        or comment_item.get("reference_index")
-                        or comment_item.get("image_index")
-                    )
-                    page_no = raw_page_no
-                    if sampled_pages:
-                        if 1 <= sample_order <= len(sampled_pages):
-                            page_no = sampled_pages[sample_order - 1]
-                        elif raw_page_no not in sampled_set and 1 <= raw_page_no <= len(sampled_pages):
-                            page_no = sampled_pages[raw_page_no - 1]
-                        elif page_no in page_comment_map and comment_index < len(sampled_pages) and sampled_pages[comment_index] not in page_comment_map:
-                            page_no = sampled_pages[comment_index]
+                    page_no = self._int(comment_item.get("page"))
                     comment_text = self._single_line(comment_item.get("comment"), 100)
                     if page_no > 0 and comment_text:
                         page_comments = page_comment_map.setdefault(page_no, [])

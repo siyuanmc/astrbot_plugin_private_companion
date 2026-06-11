@@ -612,6 +612,69 @@ class QzoneMixin:
         except Exception as exc:
             return {"success": False, "message": _single_line(exc, 160)}
 
+    async def _test_qzone_publish_tool_chain(self, event: AstrMessageEvent | None = None) -> str:
+        lines = ["QQ 空间发布链路模拟："]
+        lines.append(f"- 整合开关：{'开启' if self.enable_qzone_integration else '关闭'}")
+        lines.append("- 真实发布：否，本指令只模拟工具链路")
+
+        try:
+            empty_result_raw = await self._pc_qzone_publish_feed_impl(event, "")
+            empty_result = json.loads(empty_result_raw)
+        except Exception as exc:
+            empty_result = {"status": "exception", "message": _single_line(exc, 160)}
+        lines.append(
+            "- 空参数工具调用："
+            + (
+                "通过，返回 need_text"
+                if empty_result.get("status") == "need_text"
+                else f"异常，返回 {empty_result.get('status') or empty_result.get('message') or empty_result}"
+            )
+        )
+
+        daily_state = self.data.get("daily_state", {})
+        current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
+        diary_context = self._recent_diary_context(count=2)
+        prompt = f"""
+请以当前 Bot 人格写一条 QQ 空间说说。
+只输出说说正文,不要解释,不要加标题。
+
+要求：
+- 30 到 120 字。
+- 像自然生活动态,不是公告、不是任务汇报。
+- 可以带一点当前状态、日程、天气或日记余味,但不要暴露插件、模型、内部状态数值。
+- 不要 @ 用户,不要泄露私聊内容,不要写得像营销文。
+
+【当前状态】
+{self._format_state_for_prompt(daily_state if isinstance(daily_state, dict) else {})}
+
+【当前/附近日程】
+{self._format_plan_item_for_prompt(current_item) or "无明确日程"}
+
+【近日私密日记余味】
+{diary_context or "暂无"}
+
+{self._format_worldview_adaptation_prompt()}
+""".strip()
+        try:
+            draft = await self._llm_call(
+                prompt,
+                max_tokens=180,
+                provider_id=self._task_provider(self.mai_style_provider_id, self.llm_provider_id),
+                task="qzone_publish_test",
+            )
+            draft = _single_line(draft, 180)
+        except Exception as exc:
+            draft = ""
+            lines.append(f"- 草稿生成：失败，{_single_line(exc, 160)}")
+        if draft:
+            lines.append("- 草稿生成：成功")
+            lines.append(f"- 将传入工具参数：{{\"text\":\"{draft}\"}}")
+            lines.append(f"- 草稿正文：{draft}")
+        else:
+            lines.append("- 草稿生成：失败或为空")
+        lines.append("结果：模拟完成。若要真实发布,请使用 `陪伴 发说说 <正文>` 或让模型调用带 text 的 `pc_qzone_publish_feed`。")
+        return "\n".join(lines)
+
     async def _test_qzone_integration(self, event: AstrMessageEvent, target_id: str = "") -> str:
         lines = ["QQ 空间测试："]
 
