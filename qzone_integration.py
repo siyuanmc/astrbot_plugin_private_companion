@@ -345,10 +345,13 @@ class QzoneMixin:
         data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout_seconds: float = 20.0,
+        cookie_header: str | None = None,
     ) -> dict[str, Any]:
         import aiohttp
 
-        ctx = self._qzone_context_from_cookies(await self._qzone_get_cookies(event))
+        if cookie_header is None:
+            cookie_header = await self._qzone_get_cookies(event)
+        ctx = self._qzone_context_from_cookies(cookie_header)
         parsed_url = urlparse(url)
         origin = f"{parsed_url.scheme}://{parsed_url.netloc}" if parsed_url.scheme and parsed_url.netloc else "https://user.qzone.qq.com"
         request_headers = {
@@ -414,7 +417,8 @@ class QzoneMixin:
         num: int = 1,
         with_detail: bool = False,
     ) -> list[Any]:
-        ctx = self._qzone_context_from_cookies(await self._qzone_get_cookies(event))
+        cookie_header = await self._qzone_get_cookies(event)
+        ctx = self._qzone_context_from_cookies(cookie_header)
         target = _single_line(target_id, 40)
         if not target:
             target = str(ctx["uin"])
@@ -436,6 +440,7 @@ class QzoneMixin:
                 "need_comment": 1 if with_detail else 0,
                 "need_private_comment": 1 if with_detail else 0,
             },
+            cookie_header=cookie_header,
         )
         code = payload.get("code", 0)
         if code not in {0, "0"}:
@@ -452,7 +457,8 @@ class QzoneMixin:
         text: str = "",
         images: list[str] | None = None,
     ) -> Any:
-        ctx = self._qzone_context_from_cookies(await self._qzone_get_cookies(event))
+        cookie_header = await self._qzone_get_cookies(event)
+        ctx = self._qzone_context_from_cookies(cookie_header)
         content = _single_line(text, 300)
         if not content and not images:
             raise RuntimeError("说说内容为空")
@@ -494,6 +500,7 @@ class QzoneMixin:
                 params={"g_tk": ctx["gtk"]},
                 data=data,
                 headers=headers,
+                cookie_header=cookie_header,
             )
             code = payload.get("code", 0)
             if code in {0, "0"}:
@@ -514,7 +521,8 @@ class QzoneMixin:
         )
 
     async def _qzone_like_post(self, event: AstrMessageEvent | None, post: Any) -> None:
-        ctx = self._qzone_context_from_cookies(await self._qzone_get_cookies(event))
+        cookie_header = await self._qzone_get_cookies(event)
+        ctx = self._qzone_context_from_cookies(cookie_header)
         tid = str(getattr(post, "tid", "") or "")
         uin = str(getattr(post, "uin", "") or "")
         if not tid or not uin:
@@ -538,6 +546,7 @@ class QzoneMixin:
                 "format": "json",
                 "fupdate": 1,
             },
+            cookie_header=cookie_header,
         )
         code = payload.get("code", 0)
         if code not in {0, "0"}:
@@ -569,7 +578,8 @@ class QzoneMixin:
         return _single_line(text, 80)
 
     async def _qzone_comment_post(self, event: AstrMessageEvent | None, post: Any, content: str = "") -> str:
-        ctx = self._qzone_context_from_cookies(await self._qzone_get_cookies(event))
+        cookie_header = await self._qzone_get_cookies(event)
+        ctx = self._qzone_context_from_cookies(cookie_header)
         tid = str(getattr(post, "tid", "") or "")
         uin = str(getattr(post, "uin", "") or "")
         if not tid or not uin:
@@ -596,6 +606,7 @@ class QzoneMixin:
                 "ref": "feeds",
                 "content": comment,
             },
+            cookie_header=cookie_header,
         )
         code = payload.get("code", 0)
         if code not in {0, "0"}:
