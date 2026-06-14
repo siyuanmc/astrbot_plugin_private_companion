@@ -409,7 +409,9 @@ class GroupObservationMixin:
                 score += 2
         if active_speakers >= 4:
             score += 1
-        if score < 3:
+        if active_speakers < 2:
+            return None
+        if score < 6:
             return None
         examples = best_thread.get("recent_examples") if isinstance(best_thread, dict) and isinstance(best_thread.get("recent_examples"), list) else []
         candidate_lines = examples[-6:] if examples else window[-8:]
@@ -571,25 +573,25 @@ class GroupObservationMixin:
                 continue
             member = members.get(target_id) if isinstance(members, dict) else None
             member_last_seen = _safe_float((member or {}).get("last_seen"), 0) if isinstance(member, dict) else 0
-            if member_last_seen <= 0 or now - member_last_seen < 4 * 3600:
+            if member_last_seen <= 0 or now - member_last_seen < 8 * 3600:
                 continue
-            cooldown_key = f"{group_id}:{_today_key()}"
+            cooldown_key = f"group_share:{_today_key()}"
             last_key = str(user.get("last_group_share_key") or "")
             last_at = _safe_float(user.get("last_group_share_at"), 0)
-            if last_key == cooldown_key or now - last_at < 8 * 3600:
+            if last_key == cooldown_key or now - last_at < 18 * 3600:
                 continue
             if _safe_float(user.get("next_proactive_at"), 0) > 0 and str(user.get("planned_proactive_source") or "") == "timer":
                 continue
             kind = _single_line(candidate.get("kind"), 32) or "funny"
             score = _safe_int(candidate.get("score"), 0, 0)
             chance = (
-                min(0.82, 0.42 + score * 0.04)
+                min(0.48, 0.20 + score * 0.025)
                 if kind == "bot_harassment"
-                else min(0.56, 0.18 + score * 0.05)
+                else min(0.26, 0.06 + score * 0.025)
             )
             if random.random() > chance:
                 continue
-            delay_minutes = random.randint(8, 25) if kind == "bot_harassment" else random.randint(18, 55)
+            delay_minutes = random.randint(18, 45) if kind == "bot_harassment" else random.randint(45, 120)
             scheduled = now + delay_minutes * 60
             topic = _single_line(candidate.get("topic"), 60) or "群里的小片段"
             context = {

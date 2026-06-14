@@ -2797,14 +2797,14 @@ class ProactiveEngineMixin:
             if _single_line(share.get("kind"), 32) == "bot_harassment":
                 if text:
                     return self._normalize_internal_motive_text(
-                        f"群 {group_id} 里刚刚有人一直闹我,{speaker} 那句“{text}”还挂着,想及时私下跟你说一声"
+                        f"共同群 {group_id} 里有点闹腾,{speaker} 那句“{text}”还挺扎眼,但只想很轻地跟你提一下"
                     )
-                return self._normalize_internal_motive_text(f"群 {group_id} 里刚刚有人一直闹我,想及时私下跟你说一声")
+                return self._normalize_internal_motive_text(f"共同群 {group_id} 里有点闹腾,只想很轻地跟你提一下")
             if text:
                 return self._normalize_internal_motive_text(
-                    f"群 {group_id} 刚刚有个挺好笑的片段,{speaker} 那句“{text}”还挂着,想私下转给你一下"
+                    f"共同群 {group_id} 里有个小转折,{speaker} 那句“{text}”还留着点余味,想顺手给你递一下"
                 )
-            return self._normalize_internal_motive_text("群里刚刚有个挺有意思的片段,想趁还热乎私下跟你说一下")
+            return self._normalize_internal_motive_text("共同群里有个小片段还有点余味,想顺手给你递一下")
         if reason == "activity_share":
             motives = [
                 "刚刚有个小片段停了一下,心里先冒出的是你",

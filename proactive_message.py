@@ -1588,7 +1588,7 @@ class ProactiveMessageMixin:
         if reason == "evening_greeting":
             return "像晚上终于安静下来以后发来的私聊。先落在眼前的晚上片段上,轻一点,别像群发问候,也别把想念说满。"
         if reason == "group_share":
-            return f"像从共同{terms['group_chat']}里看到一段话题滚起来后,私下给对方补一句‘你错过了刚才那段’。要概括整段话题的走向,再挑一个最有意思的点,别只复述单句。"
+            return f"像从共同{terms['group_chat']}里瞥见一小段对方可能会在意的内容,私下轻轻补一句。只说一个点,别像群聊日报,别逐条转述,也别固定用“群里刚刚”开头。"
         if reason == "bili_video_share":
             return f"像刚看到一个有意思的{terms['video']},忍不住私下递给对方。要短,别写成影评或推荐文案。"
         if reason == "news_share":
@@ -1614,9 +1614,9 @@ class ProactiveMessageMixin:
             return f"只发一条普通{terms['private_chat']}文本,像顺手发给熟人的消息。"
         if "群聊分享线索：" in context:
             return (
-                f"你刚从共同{terms['group_chat']}里看到一段有趣/值得分享的话题,现在想私下轻轻转述给对方。\n"
+                f"你刚从共同{terms['group_chat']}里看到一小段对方可能会在意的内容,现在想私下轻轻提一句。\n"
                 f"{context}\n"
-                "先用一句话概括这段时间窗里大家在围绕什么展开,再带一个代表性笑点或转折。不要只复述某个人的一句话；不要逐条复盘,不要说自己在监控群聊,不要泄露隐私或评价群友关系。"
+                "最多一两句。优先讲“他错过的那个笑点/转折/气氛”,不要完整复盘整段群聊,不要逐条列人名,不要说自己在监控群聊,不要泄露隐私或评价群友关系。线索普通时语气要更轻,像顺手提到,不是正式转述。"
             )
         if "B站视频分享线索：" in context:
             return (
