@@ -1455,7 +1455,12 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
 
     @filter.llm_tool(name="pc_qzone_publish_feed")
     async def pc_qzone_publish_feed(self, event: AstrMessageEvent, text: str = "", **kwargs) -> str:
-        """发布一条 QQ 空间说说。必须通过 text 参数传入最终正文。"""
+        """发布一条 QQ 空间说说。必须通过 text 参数传入最终正文。
+
+        Args:
+            text(string): 要发布到 QQ 空间的说说正文。
+            use_latest_draft(boolean): 可选，是否使用最近生成的生活草稿。
+        """
         return await self._pc_qzone_publish_feed_impl(event, text, **kwargs)
 
     @filter.llm_tool(name="pc_get_group_id_by_name")
