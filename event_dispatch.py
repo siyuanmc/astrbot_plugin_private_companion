@@ -359,6 +359,24 @@ class EventDispatchMixin:
             return False
         return True
 
+    def _segmented_remainder_lock(self, scope: str) -> asyncio.Lock:
+        key = _single_line(scope, 160) or "unknown"
+        locks = getattr(self, "_segmented_reply_remainder_locks", None)
+        if not isinstance(locks, dict):
+            locks = {}
+            self._segmented_reply_remainder_locks = locks
+        lock = locks.get(key)
+        if not isinstance(lock, asyncio.Lock):
+            lock = asyncio.Lock()
+            locks[key] = lock
+        if len(locks) > 500:
+            for stale_key, stale_lock in list(locks.items()):
+                if stale_key != key and isinstance(stale_lock, asyncio.Lock) and not stale_lock.locked():
+                    locks.pop(stale_key, None)
+                    if len(locks) <= 500:
+                        break
+        return lock
+
     def _recall_component_text(self, component: Any) -> str:
         for attr in ("text", "content", "message"):
             value = getattr(component, attr, None)
@@ -1000,6 +1018,13 @@ class EventDispatchMixin:
     def _semantic_buffer_key(self, scope: str, sender_id: str) -> str:
         return f"{scope}:{sender_id}"
 
+    def _semantic_buffer_identity(self, key: str) -> tuple[str, str]:
+        cleaned = str(key or "")
+        if ":" not in cleaned:
+            return cleaned, ""
+        scope, sender_id = cleaned.rsplit(":", 1)
+        return scope, sender_id
+
     def _group_high_intensity_buffer_key(self, group_id: str) -> str:
         return self._semantic_buffer_key(f"group:{group_id}", "__high_intensity__")
 
@@ -1047,6 +1072,8 @@ class EventDispatchMixin:
         now: float | None = None,
         wait_seconds: float | None = None,
         force: bool = False,
+        smart_debounce: dict[str, Any] | None = None,
+        kind: str = "text",
     ) -> bool:
         if not force and not bool(getattr(self, "enable_message_debounce", getattr(self, "enable_semantic_message_debounce", True))):
             return False
@@ -1066,8 +1093,14 @@ class EventDispatchMixin:
             if not isinstance(item, dict) or now - _safe_float(item.get("updated_ts"), item.get("first_ts"), 0) > max(20.0, wait + 8.0):
                 buffers.pop(item_key, None)
         current = buffers.get(key)
+        scope, sender_id = self._semantic_buffer_identity(key)
+        debounce_mode = "smart" if isinstance(smart_debounce, dict) and smart_debounce.get("enabled") else "fixed"
+        buffer_kind = _single_line(kind, 40) or "text"
         if isinstance(current, dict) and now - _safe_float(current.get("updated_ts"), current.get("first_ts"), 0) <= wait + 0.8:
             current["wait_seconds"] = wait
+            current["kind"] = buffer_kind
+            if smart_debounce:
+                current["smart_debounce"] = dict(smart_debounce)
             messages = current.setdefault("messages", [])
             if not isinstance(messages, list):
                 messages = []
@@ -1075,14 +1108,407 @@ class EventDispatchMixin:
             if cleaned not in [_single_line(item.get("text"), 260) for item in messages if isinstance(item, dict)]:
                 messages.append({"ts": now, "text": cleaned, "sender_name": _single_line(sender_name, 40)})
             current["updated_ts"] = now
+            logger.info(
+                "[PrivateCompanion] 消息收口合并补话: kind=%s mode=%s scope=%s sender=%s wait=%.1fs count=%s text=%s",
+                buffer_kind,
+                debounce_mode,
+                scope,
+                sender_id,
+                wait,
+                len(messages),
+                _single_line(cleaned, 80),
+            )
             return True
         buffers[key] = {
             "first_ts": now,
             "updated_ts": now,
             "wait_seconds": wait,
+            "kind": buffer_kind,
             "messages": [{"ts": now, "text": cleaned, "sender_name": _single_line(sender_name, 40)}],
         }
+        if smart_debounce:
+            buffers[key]["smart_debounce"] = dict(smart_debounce)
+        logger.info(
+            "[PrivateCompanion] 消息收口创建缓冲: kind=%s mode=%s scope=%s sender=%s wait=%.1fs text=%s",
+            buffer_kind,
+            debounce_mode,
+            scope,
+            sender_id,
+            wait,
+            _single_line(cleaned, 80),
+        )
         return False
+
+    def _smart_message_debounce_enabled(self) -> bool:
+        return bool(getattr(self, "enable_message_debounce", True)) and bool(getattr(self, "enable_smart_message_debounce", False))
+
+    def _smart_message_debounce_store(self) -> dict[str, Any]:
+        store = self.data.setdefault("smart_message_debounce", {})
+        if not isinstance(store, dict):
+            store = {}
+            self.data["smart_message_debounce"] = store
+        store.setdefault("last_decisions", {})
+        store.setdefault("examples", [])
+        store.setdefault("recent_logs", [])
+        return store
+
+    def _record_smart_message_debounce_log(
+        self,
+        *,
+        scope: str,
+        sender_id: str,
+        text: str = "",
+        decision: str = "",
+        confidence: float = 0.0,
+        reason: str = "",
+        wait_seconds: float = 0.0,
+        outcome: str = "",
+        note: str = "",
+        source: str = "model",
+        raw: str = "",
+        message_count: int = 0,
+        private_chat: bool | None = None,
+    ) -> None:
+        store = self._smart_message_debounce_store()
+        logs = store.setdefault("recent_logs", [])
+        if not isinstance(logs, list):
+            logs = []
+            store["recent_logs"] = logs
+        logs.append(
+            {
+                "ts": _now_ts(),
+                "scope": _single_line(scope, 80),
+                "sender_id": _single_line(sender_id, 40),
+                "text": _single_line(text, 180),
+                "decision": _single_line(decision, 40),
+                "confidence": max(0.0, min(1.0, float(confidence or 0.0))),
+                "reason": _single_line(reason, 120),
+                "wait_seconds": max(0.0, float(wait_seconds or 0.0)),
+                "outcome": _single_line(outcome, 40),
+                "note": _single_line(note, 160),
+                "source": _single_line(source, 40),
+                "raw": _single_line(raw, 180),
+                "message_count": max(0, _safe_int(message_count, 0, 0)),
+                "chat": "private" if private_chat is True else "group" if private_chat is False else "",
+            }
+        )
+        del logs[:-80]
+
+    def _smart_message_debounce_examples(self) -> list[dict[str, Any]]:
+        if not self._smart_message_debounce_enabled():
+            return []
+        limit = max(0, _safe_int(getattr(self, "smart_message_debounce_examples_limit", 8), 8, 0))
+        if limit <= 0:
+            return []
+        store = self._smart_message_debounce_store()
+        examples = store.get("examples") if isinstance(store.get("examples"), list) else []
+        return [item for item in examples[-limit:] if isinstance(item, dict)]
+
+    def _record_smart_message_debounce_example(
+        self,
+        *,
+        kind: str,
+        scope: str,
+        sender_id: str,
+        messages: list[str],
+        previous_decision: str = "",
+        note: str = "",
+    ) -> None:
+        if not self._smart_message_debounce_enabled():
+            return
+        cleaned = [_single_line(item, 160) for item in messages if _single_line(item, 160)]
+        if not cleaned:
+            return
+        store = self._smart_message_debounce_store()
+        examples = store.setdefault("examples", [])
+        if not isinstance(examples, list):
+            examples = []
+            store["examples"] = examples
+        signature = hashlib.sha1("\n".join([kind, scope, sender_id, *cleaned]).encode("utf-8", errors="ignore")).hexdigest()
+        if any(isinstance(item, dict) and item.get("sig") == signature for item in examples[-20:]):
+            return
+        examples.append(
+            {
+                "sig": signature,
+                "ts": _now_ts(),
+                "kind": _single_line(kind, 40),
+                "scope": _single_line(scope, 80),
+                "sender_id": _single_line(sender_id, 40),
+                "messages": cleaned[:4],
+                "previous_decision": _single_line(previous_decision, 40),
+                "note": _single_line(note, 120),
+            }
+        )
+        del examples[:- max(20, _safe_int(getattr(self, "smart_message_debounce_examples_limit", 8), 8, 0) * 4 or 20)]
+        logger.info(
+            "[PrivateCompanion] 智能防抖学习样本已记录: kind=%s scope=%s messages=%s note=%s",
+            kind,
+            scope,
+            len(cleaned),
+            _single_line(note, 80),
+        )
+        self._record_smart_message_debounce_log(
+            scope=scope,
+            sender_id=sender_id,
+            text=" / ".join(cleaned[:3]),
+            decision=previous_decision,
+            outcome="learned",
+            note=note,
+            source=kind,
+            message_count=len(cleaned),
+        )
+
+    def _remember_smart_message_debounce_decision(
+        self,
+        *,
+        scope: str,
+        sender_id: str,
+        text: str,
+        decision: str,
+        confidence: float = 0.0,
+        reason: str = "",
+    ) -> None:
+        if not self._smart_message_debounce_enabled():
+            return
+        store = self._smart_message_debounce_store()
+        last = store.setdefault("last_decisions", {})
+        if not isinstance(last, dict):
+            last = {}
+            store["last_decisions"] = last
+        key = self._semantic_buffer_key(scope, sender_id)
+        last[key] = {
+            "ts": _now_ts(),
+            "scope": _single_line(scope, 80),
+            "sender_id": _single_line(sender_id, 40),
+            "text": _single_line(text, 180),
+            "decision": _single_line(decision, 40),
+            "confidence": max(0.0, min(1.0, float(confidence or 0.0))),
+            "reason": _single_line(reason, 120),
+        }
+        if len(last) > 200:
+            for item_key, _ in sorted(last.items(), key=lambda item: _safe_float(item[1].get("ts"), 0) if isinstance(item[1], dict) else 0)[:40]:
+                last.pop(item_key, None)
+
+    def _maybe_record_smart_message_debounce_followup(
+        self,
+        *,
+        scope: str,
+        sender_id: str,
+        text: str,
+        now: float | None = None,
+    ) -> None:
+        if not self._smart_message_debounce_enabled():
+            return
+        store = self._smart_message_debounce_store()
+        last = store.get("last_decisions") if isinstance(store.get("last_decisions"), dict) else {}
+        key = self._semantic_buffer_key(scope, sender_id)
+        previous = last.get(key) if isinstance(last, dict) else None
+        if not isinstance(previous, dict):
+            return
+        if str(previous.get("decision") or "") != "complete":
+            return
+        now = now or _now_ts()
+        window = max(1.0, _safe_float(getattr(self, "smart_message_debounce_learning_window_seconds", 8.0), 8.0, 1.0))
+        if now - _safe_float(previous.get("ts"), 0) > window:
+            return
+        self._record_smart_message_debounce_example(
+            kind="false_complete",
+            scope=scope,
+            sender_id=sender_id,
+            messages=[str(previous.get("text") or ""), text],
+            previous_decision="complete",
+            note="模型判断已说完后,用户很快继续补充。",
+        )
+
+    def _smart_message_debounce_heuristic_incomplete(self, text: str) -> bool:
+        cleaned = _single_line(text, 260)
+        if not cleaned:
+            return False
+        if re.search(r"(等下|等一下|稍等|我想想|我组织下|先别回|等等|还有|另外|然后|接着|顺便|就是)$", cleaned):
+            return True
+        if re.search(r"[,，、:：;；]$", cleaned):
+            return True
+        return False
+
+    def _parse_smart_message_debounce_decision(self, raw: str) -> tuple[str, float, str]:
+        text = str(raw or "").strip()
+        if not text:
+            return "complete", 0.0, "empty"
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+                decision = str(data.get("decision") or data.get("status") or "").strip().lower()
+                confidence = float(data.get("confidence") or 0)
+                reason = _single_line(data.get("reason"), 120)
+                if decision in {"incomplete", "wait", "continue", "unfinished", "未说完", "等待"}:
+                    return "incomplete", max(0.0, min(1.0, confidence)), reason
+                if decision in {"complete", "done", "reply", "finished", "已说完", "回复"}:
+                    return "complete", max(0.0, min(1.0, confidence)), reason
+            except Exception:
+                pass
+        upper = text.upper()
+        if upper.startswith("INCOMPLETE") or text.startswith(("未说完", "等待", "继续")):
+            return "incomplete", 0.7, text[:80]
+        return "complete", 0.6, text[:80]
+
+    async def _smart_message_debounce_wait_seconds_for_event(
+        self,
+        event: AstrMessageEvent,
+        *,
+        key: str,
+        text: str,
+        sender_id: str,
+        sender_name: str = "",
+        private_chat: bool = True,
+    ) -> float:
+        if not self._smart_message_debounce_enabled():
+            return 0.0
+        cleaned = _single_line(text, 260)
+        if not cleaned:
+            return 0.0
+        wait = max(0.0, min(15.0, _safe_float(getattr(self, "smart_message_debounce_wait_seconds", 3.0), 3.0, 0.0)))
+        if wait <= 0:
+            return 0.0
+        buffers = getattr(self, "_semantic_message_buffers", None)
+        existing = buffers.get(key) if isinstance(buffers, dict) else None
+        if isinstance(existing, dict):
+            self._record_smart_message_debounce_log(
+                scope=key.rsplit(":", 1)[0],
+                sender_id=sender_id,
+                text=cleaned,
+                decision="incomplete",
+                confidence=1.0,
+                reason="已有收口缓冲",
+                wait_seconds=wait,
+                outcome="extend_wait",
+                note="同一用户已有等待中的消息,继续合并补话。",
+                source="buffer",
+                private_chat=private_chat,
+            )
+            logger.info(
+                "[PrivateCompanion] 智能防抖沿用等待缓冲: scope=%s sender=%s wait=%.1fs text=%s",
+                key.rsplit(":", 1)[0],
+                sender_id,
+                wait,
+                _single_line(cleaned, 80),
+            )
+            return wait
+        examples = self._smart_message_debounce_examples()
+        example_lines = []
+        for item in examples[-8:]:
+            messages = item.get("messages") if isinstance(item.get("messages"), list) else []
+            if not messages:
+                continue
+            example_lines.append(
+                f"- {item.get('kind')}: {' / '.join(_single_line(msg, 80) for msg in messages[:3])} => {item.get('note') or ''}"
+            )
+        recent = []
+        try:
+            snapshot = self._semantic_buffer_active_snapshot(key, force=True)
+            recent = snapshot.get("texts", []) if isinstance(snapshot, dict) else []
+        except Exception:
+            recent = []
+        prompt = f"""
+判断用户当前这句话是否明显还没说完，需要 Bot 等一小会儿再回复。
+
+只输出 JSON：{{"decision":"complete|incomplete","confidence":0-1,"reason":"不超过20字"}}
+
+会话类型：{"私聊" if private_chat else "群聊"}
+用户：{_single_line(sender_name, 40) or _single_line(sender_id, 40)}
+当前消息：{cleaned}
+缓冲中的前文：{(" / ".join(recent[-3:]) if recent else "无")}
+
+已学习的误判样本：
+{chr(10).join(example_lines) or "无"}
+
+判断规则：
+- 如果用户像是在起手、列举、转折、说“等下/还有/然后/我想想”、句子停在逗号冒号分号，倾向 incomplete。
+- 如果是完整问题、完整请求、完整情绪表达、问候、贴贴、摸摸、表情或短回复，倾向 complete。
+- 不要因为消息短就等待；只有真的像还会补一句才 incomplete。
+- 宁可少等，也不要让正常对话变慢。
+""".strip()
+        raw = ""
+        model_error = ""
+        try:
+            raw = await self._llm_call(
+                prompt,
+                max_tokens=80,
+                provider_id=getattr(self, "smart_message_debounce_provider_id", "") or None,
+                task="smart_message_debounce",
+            ) or ""
+        except Exception as exc:
+            logger.info("[PrivateCompanion] 智能防抖模型判断失败,使用启发式: %s", _single_line(exc, 120))
+            model_error = _single_line(exc, 120)
+        decision, confidence, reason = self._parse_smart_message_debounce_decision(raw)
+        source = "model" if raw else "heuristic"
+        if not raw and self._smart_message_debounce_heuristic_incomplete(cleaned):
+            decision, confidence, reason = "incomplete", 0.55, "启发式未说完"
+            source = "heuristic"
+        if decision != "incomplete":
+            self._remember_smart_message_debounce_decision(
+                scope=key.rsplit(":", 1)[0],
+                sender_id=sender_id,
+                text=cleaned,
+                decision="complete",
+                confidence=confidence,
+                reason=reason,
+            )
+            self._record_smart_message_debounce_log(
+                scope=key.rsplit(":", 1)[0],
+                sender_id=sender_id,
+                text=cleaned,
+                decision="complete",
+                confidence=confidence,
+                reason=reason,
+                wait_seconds=0.0,
+                outcome="reply_now",
+                note="判定用户已说完,不额外等待。",
+                source=source,
+                raw=raw or model_error,
+                private_chat=private_chat,
+            )
+            logger.info(
+                "[PrivateCompanion] 智能防抖判定放行: scope=%s sender=%s confidence=%.2f reason=%s text=%s",
+                key.rsplit(":", 1)[0],
+                sender_id,
+                confidence,
+                _single_line(reason, 80),
+                _single_line(cleaned, 80),
+            )
+            return 0.0
+        self._remember_smart_message_debounce_decision(
+            scope=key.rsplit(":", 1)[0],
+            sender_id=sender_id,
+            text=cleaned,
+            decision="incomplete",
+            confidence=confidence,
+            reason=reason,
+        )
+        self._record_smart_message_debounce_log(
+            scope=key.rsplit(":", 1)[0],
+            sender_id=sender_id,
+            text=cleaned,
+            decision="incomplete",
+            confidence=confidence,
+            reason=reason,
+            wait_seconds=wait,
+            outcome="wait",
+            note="判定用户可能没说完,进入收口等待。",
+            source=source,
+            raw=raw or model_error,
+            private_chat=private_chat,
+        )
+        logger.info(
+            "[PrivateCompanion] 智能防抖判定等待补话: scope=%s sender=%s wait=%.1fs confidence=%.2f reason=%s text=%s",
+            key.rsplit(":", 1)[0],
+            sender_id,
+            wait,
+            confidence,
+            _single_line(reason, 80),
+            _single_line(cleaned, 80),
+        )
+        return wait
 
     def _group_active_conversation(self, group: dict[str, Any]) -> dict[str, Any]:
         active = group.setdefault("active_bot_conversation", {})

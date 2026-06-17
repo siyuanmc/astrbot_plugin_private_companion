@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>陪伴面板</title>
-  <link rel="stylesheet" href="./app.css?v=20260616-proactive-audit1" />
+  <link rel="stylesheet" href="./app.css?v=20260617-feature-summary" />
 </head>
 <body>
   <main class="shell">
@@ -29,6 +29,7 @@
         <button class="tab" data-tab="proactive">主动</button>
         <button class="tab" data-tab="bookshelf">书柜</button>
         <button class="tab" data-tab="tokens">Token</button>
+        <button class="tab" data-tab="troubleshooting">排障</button>
         <button class="tab" data-tab="modules">模块配置</button>
         <button class="tab" data-tab="config">配置</button>
         <button class="tab" data-tab="models">模型</button>
@@ -623,6 +624,57 @@ QQ空间 = 公开札记
         </div>
       </section>
 
+      <section class="panel" id="panel-troubleshooting">
+        <div class="subpage troubleshooting-page">
+          <div class="section-head">
+            <div>
+              <h2>排障中心</h2>
+              <span class="muted">集中查看最近异常、主动链路、模型调用、数据库并发和常见问题检查</span>
+            </div>
+            <div class="actions compact">
+              <button id="refreshTroubleshootingBtn" type="button">重新检查</button>
+            </div>
+          </div>
+          <div id="troubleshootingSummary" class="troubleshooting-summary"></div>
+          <article class="troubleshooting-chain-panel">
+            <div>
+              <h2>链路测试</h2>
+              <span class="muted">点按钮后会实际调用对应后端，确认能否生成真实文件</span>
+            </div>
+            <div id="troubleshootingChainTests" class="troubleshooting-chain-tests"></div>
+          </article>
+          <article class="troubleshooting-debounce-panel">
+            <div>
+              <h2>消息防抖追踪</h2>
+              <span class="muted">查看智能文本收口最近为什么等待、为什么放行、是否学到误判</span>
+            </div>
+            <div id="troubleshootingDebounceTrace" class="troubleshooting-debounce-trace"></div>
+          </article>
+          <div class="troubleshooting-toolbar">
+            <div class="troubleshooting-filter" role="group" aria-label="异常筛选">
+              <button type="button" data-troubleshooting-filter="all" class="is-active">全部</button>
+              <button type="button" data-troubleshooting-filter="error">错误</button>
+              <button type="button" data-troubleshooting-filter="warn">警告</button>
+              <button type="button" data-troubleshooting-filter="info">信息</button>
+            </div>
+          </div>
+          <div class="troubleshooting-grid">
+            <article class="wide">
+              <h2>常见问题检查</h2>
+              <div id="troubleshootingChecks" class="troubleshooting-checks"></div>
+            </article>
+            <article>
+              <h2>最近异常</h2>
+              <div id="troubleshootingEvents" class="troubleshooting-events"></div>
+            </article>
+            <article>
+              <h2>SQLite 并发</h2>
+              <div id="troubleshootingSqlite" class="troubleshooting-sqlite"></div>
+            </article>
+          </div>
+        </div>
+      </section>
+
       <section class="panel" id="panel-modules">
         <div class="section-head">
           <h2>模块化配置</h2>
@@ -696,12 +748,19 @@ QQ空间 = 公开札记
               <label>空闲门槛分钟 <input name="idle_minutes" type="number" min="0" /></label>
               <label>最小主动间隔分钟 <input name="min_interval_minutes" type="number" min="0" /></label>
               <label>后台检查间隔秒 <input name="check_interval_seconds" type="number" min="30" /></label>
-              <label>重复消息防抖秒数 <input name="inbound_message_debounce_seconds" type="number" min="0" max="30" step="0.5" /></label>
-              <label class="toggle-row"><input name="enable_semantic_message_debounce" type="checkbox" /> <span>启用语义收口等待</span></label>
-              <label>语义收口等待秒数 <input name="semantic_message_debounce_seconds" type="number" min="0" max="15" step="0.1" /></label>
+              <label>重复上报去重秒数 <input name="inbound_message_debounce_seconds" type="number" min="0" max="30" step="0.5" /></label>
+              <label class="toggle-row"><input name="enable_message_debounce" type="checkbox" /> <span>启用消息收口防抖</span></label>
+              <label>文本补话等待秒数 <input name="text_message_debounce_seconds" type="number" min="0" max="15" step="0.1" /></label>
+              <label>图片补话等待秒数 <input name="image_message_debounce_seconds" type="number" min="0" max="15" step="0.1" /></label>
+              <label>转发补话等待秒数 <input name="forward_message_debounce_seconds" type="number" min="0" max="15" step="0.1" /></label>
               <label class="toggle-row"><input name="enable_unanswered_screen_peek_followup" type="checkbox" /> <span>主动后沉默时可窥屏</span></label>
               <label>沉默多久后窥屏 <input name="unanswered_screen_peek_after_minutes" type="number" min="10" max="240" /></label>
               <label>沉默窥屏冷却分钟 <input name="unanswered_screen_peek_cooldown_minutes" type="number" min="30" max="1440" /></label>
+              <div class="module-subgroup wide-field image-cache-entry">
+                <h3>图片/表情包缓存</h3>
+                <p class="section-desc">管理已缓存的图片视觉摘要，修正误识别表情包或删除旧缓存后可让下次重新识图。</p>
+                <button type="button" data-jump-tab="image-cache">管理图片缓存</button>
+              </div>
               <div class="module-subgroup wide-field">
                 <h3>主动分段</h3>
                 <label class="toggle-row"><input name="enable_segmented_proactive_reply" type="checkbox" /> <span>启用主动分段发送</span></label>
@@ -918,6 +977,32 @@ QQ空间 = 公开札记
         </div>
       </section>
 
+      <section class="panel" id="panel-image-cache">
+        <div class="subpage image-cache-page">
+          <div class="section-head">
+            <div>
+              <h2>图片/表情包缓存</h2>
+              <span class="muted">编辑重复图片视觉摘要，删除后下次遇到同图会重新识别</span>
+            </div>
+            <div class="actions compact">
+              <button type="button" data-jump-tab="modules">返回模块配置</button>
+              <button id="refreshImageCacheBtn" type="button">刷新缓存</button>
+            </div>
+          </div>
+          <div id="imageCacheSummary" class="image-cache-summary"></div>
+          <div class="image-cache-toolbar">
+            <input id="imageCacheFilter" type="search" placeholder="筛选摘要 / hash / provider / 类型" />
+            <select id="imageCacheScope" aria-label="缓存范围">
+              <option value="all">全部范围</option>
+            </select>
+          </div>
+          <div class="image-cache-layout">
+            <div id="imageCacheList" class="image-cache-list"></div>
+            <div id="imageCacheDetail" class="image-cache-detail"></div>
+          </div>
+        </div>
+      </section>
+
       <section class="panel" id="panel-config">
         <div class="config-grid">
           <article class="config-card">
@@ -1009,6 +1094,6 @@ QQ空间 = 公开札记
     </section>
   </main>
 
-  <script src="./app.js?v=20260616-tts-diagnostics1"></script>
+  <script src="./app.js?v=20260617-feature-summary"></script>
 </body>
 </html>

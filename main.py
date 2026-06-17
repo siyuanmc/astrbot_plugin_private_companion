@@ -301,7 +301,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "3.8.2",
+    "3.9.0",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, TtsEnhancementMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -470,11 +470,18 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             self._cfg_bool(c, "enable_semantic_message_debounce", True),
         )
         self.enable_semantic_message_debounce = self.enable_message_debounce
+        self.enable_smart_message_debounce = self._cfg_bool(c, "enable_smart_message_debounce", False)
+        self.smart_message_debounce_provider_id = self._cfg_str(c, "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID", "")
+        self.smart_message_debounce_wait_seconds = self._cfg_float(c, "smart_message_debounce_wait_seconds", 3.0, 0.0)
+        self.smart_message_debounce_learning_window_seconds = self._cfg_float(c, "smart_message_debounce_learning_window_seconds", 8.0, 1.0)
+        self.smart_message_debounce_examples_limit = self._cfg_int(c, "smart_message_debounce_examples_limit", 8, 0, 30)
         legacy_semantic_debounce_seconds = self._cfg_float(c, "semantic_message_debounce_seconds", 8.0, 0.0)
-        self.text_message_debounce_seconds = self._cfg_float(c, "text_message_debounce_seconds", 0.0, 0.0)
-        self.image_message_debounce_seconds = self._cfg_float(c, "image_message_debounce_seconds", legacy_semantic_debounce_seconds, 0.0)
+        text_debounce_raw = c.get("text_message_debounce_seconds", None)
+        text_debounce_default = legacy_semantic_debounce_seconds if text_debounce_raw in (None, "") else 0.0
+        self.text_message_debounce_seconds = self._cfg_float(c, "text_message_debounce_seconds", text_debounce_default, 0.0)
+        self.image_message_debounce_seconds = self._cfg_float(c, "image_message_debounce_seconds", 8.0, 0.0)
         self.forward_message_debounce_seconds = self._cfg_float(c, "forward_message_debounce_seconds", 0.0, 0.0)
-        self.semantic_message_debounce_seconds = legacy_semantic_debounce_seconds
+        self.semantic_message_debounce_seconds = self.text_message_debounce_seconds
         self.private_image_vision_wait_seconds = self._cfg_float(c, "private_image_vision_wait_seconds", 30.0, 0.0)
         self.enable_private_image_self_recognition = self._cfg_bool(c, "enable_private_image_self_recognition", True)
         self.enable_private_image_vision_cache = self._cfg_bool(c, "enable_private_image_vision_cache", True)
@@ -974,6 +981,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self._data_save_dirty = False
         self._framework_captured_send_cache: dict[str, list[Any]] = {}
         self._framework_session_locks: dict[str, asyncio.Lock] = {}
+        self._segmented_reply_remainder_locks: dict[str, asyncio.Lock] = {}
         self._last_input_status_at: dict[str, float] = {}
         self._passive_input_status_tasks: dict[str, asyncio.Task] = {}
         self._recent_inbound_activity_by_scope: dict[str, dict[str, Any]] = {}
@@ -2075,7 +2083,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 600,
             )
         combined_text = ""
-        if not lightweight_passive or buffered_images:
+        private_buffer_key = self._semantic_buffer_key(f"private:{user_id}", user_id)
+        private_buffer_active = bool(self._semantic_buffer_active_snapshot(private_buffer_key, force=True))
+        if not lightweight_passive or buffered_images or private_buffer_active:
             combined_text = await self._consume_semantic_message_buffer_for_event(event, private_chat=True)
         if combined_text:
             injection_parts.append(
@@ -2908,6 +2918,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             fast_target_user
             and text
             and not forward_only_prompt
+            and not bool(getattr(self, "enable_smart_message_debounce", False))
+            and self._message_debounce_seconds("text") <= 0
             and self._is_lightweight_private_passive_inbound(text)
             and not self._is_private_image_only_message(event, text)
         ):
@@ -2951,6 +2963,13 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             if self._is_duplicate_inbound_message(event, scope=f"private:{user_id}", sender_id=user_id, text=text):
                 self._schedule_data_save()
                 return
+            if is_target_user and text and not forward_only_prompt:
+                self._maybe_record_smart_message_debounce_followup(
+                    scope=f"private:{user_id}",
+                    sender_id=user_id,
+                    text=text,
+                    now=received_ts,
+                )
             if is_target_user and forward_only_prompt:
                 key = self._semantic_buffer_key(f"private:{user_id}", user_id)
                 if self._note_semantic_message_buffer(
@@ -2958,6 +2977,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     text,
                     now=received_ts,
                     wait_seconds=self._message_debounce_seconds("forward"),
+                    kind="forward",
                 ):
                     self._schedule_data_save()
                     event.stop_event()
@@ -2979,6 +2999,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     "用户刚刚先单独发送了一张图片,可能马上会补充说明。",
                     now=received_ts,
                     wait_seconds=self._message_debounce_seconds("image"),
+                    kind="image",
                 )
                 buffers = getattr(self, "_semantic_message_buffers", None)
                 if isinstance(buffers, dict) and isinstance(buffers.get(key), dict):
@@ -3046,10 +3067,36 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     if cleaned_text and cleaned_text not in [_single_line(item.get("text"), 260) for item in messages if isinstance(item, dict)]:
                         messages.append({"ts": _now_ts(), "text": cleaned_text, "sender_name": ""})
                     existing_buffer["updated_ts"] = _now_ts()
-                elif self._note_semantic_message_buffer(key, text, wait_seconds=self._message_debounce_seconds("text")):
-                    self._schedule_data_save()
-                    event.stop_event()
-                    return
+                    logger.info(
+                        "[PrivateCompanion] 消息收口合并补话: kind=image mode=fixed scope=private:%s sender=%s wait=%.1fs count=%s text=%s",
+                        user_id,
+                        user_id,
+                        self._message_debounce_seconds("image"),
+                        len(messages),
+                        _single_line(cleaned_text, 80),
+                    )
+                else:
+                    smart_wait = await self._smart_message_debounce_wait_seconds_for_event(
+                        event,
+                        key=key,
+                        text=text,
+                        sender_id=user_id,
+                        sender_name=sender_display_name,
+                        private_chat=True,
+                    )
+                    wait_seconds = smart_wait if smart_wait > 0 else self._message_debounce_seconds("text")
+                    if self._note_semantic_message_buffer(
+                        key,
+                        text,
+                        wait_seconds=wait_seconds,
+                        smart_debounce={"enabled": smart_wait > 0, "decision": "incomplete" if smart_wait > 0 else "fixed"},
+                        kind="text",
+                    ):
+                        self._schedule_data_save()
+                        event.stop_event()
+                        return
+                    if smart_wait > 0:
+                        self._schedule_data_save()
             user["umo"] = event.unified_msg_origin
             self._note_private_display_name_observation(user, user_id, sender_display_name, now=received_ts)
             if not is_target_user:
@@ -3415,6 +3462,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     sender_name=sender_name,
                     wait_seconds=self._group_high_intensity_merge_wait_seconds(),
                     force=True,
+                    kind="group_high_intensity",
                 ):
                     self._update_group_observation(
                         group,
@@ -3436,13 +3484,33 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     )
                     event.stop_event()
                     return
+            group_smart_wait = 0.0
+            group_buffer_key = self._semantic_buffer_key(f"group:{group_id}", sender_id)
+            if talking_to_bot and not high_intensity_state.get("active"):
+                self._maybe_record_smart_message_debounce_followup(
+                    scope=f"group:{group_id}",
+                    sender_id=sender_id,
+                    text=text,
+                    now=_now_ts(),
+                )
+                group_smart_wait = await self._smart_message_debounce_wait_seconds_for_event(
+                    event,
+                    key=group_buffer_key,
+                    text=text,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    private_chat=False,
+                )
             if (
                 talking_to_bot
                 and not high_intensity_state.get("active")
                 and self._note_semantic_message_buffer(
-                    self._semantic_buffer_key(f"group:{group_id}", sender_id),
+                    group_buffer_key,
                     text,
                     sender_name=sender_name,
+                    wait_seconds=group_smart_wait if group_smart_wait > 0 else None,
+                    smart_debounce={"enabled": group_smart_wait > 0, "decision": "incomplete" if group_smart_wait > 0 else "fixed"},
+                    kind="group_text",
                 )
             ):
                 self._save_data_sync()

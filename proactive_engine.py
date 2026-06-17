@@ -671,8 +671,12 @@ class ProactiveEngineMixin:
             return False, "近期主动主题过于相似"
         if self._planned_event_exceeds_daypart_cap(user, planned_reason, next_at):
             self._clear_pending_proactive_plan(user)
-            delay = (7.5, 10.5) if self._proactive_daypart_bucket_for_timestamp(next_at) == "late_night" else (2.5, 5.0)
+            delay = self._friend_proactive_spread_delay_hours(user, now=now)
+            if delay is None:
+                delay = (7.5, 10.5) if self._proactive_daypart_bucket_for_timestamp(next_at) == "late_night" else (2.5, 5.0)
             self._schedule_next_proactive(user, now=now, delay_hours=delay)
+            if self._private_user_role(user) == "friend":
+                return False, "朋友主动已按日内节奏延后"
             return False, "当前时段主动已足够,已避开扎堆"
         return True, "ok"
 
@@ -708,6 +712,15 @@ class ProactiveEngineMixin:
             self.data["proactive_audit_log"] = raw
         return raw
 
+    def _proactive_visible_text_preview(self, text: str, *, limit: int = 180) -> str:
+        cleaner = getattr(self, "_visible_text_without_tts_reading", None)
+        if callable(cleaner):
+            try:
+                return _single_line(cleaner(text, limit=limit), limit)
+            except Exception:
+                pass
+        return _single_line(_strip_internal_message_blocks(text), limit)
+
     def _append_proactive_audit(
         self,
         user_id: str,
@@ -736,7 +749,7 @@ class ProactiveEngineMixin:
             "scheduled_ts": _safe_float(user.get("next_proactive_at"), 0),
             "candidate_id": _single_line(user.get("planned_candidate_id"), 40),
             "umo": _single_line(user.get("umo"), 180),
-            "text_preview": _single_line(_strip_internal_message_blocks(text), 180) if text else "",
+            "text_preview": self._proactive_visible_text_preview(text) if text else "",
         }
         log = self._proactive_audit_log()
         log.append(item)
@@ -765,7 +778,7 @@ class ProactiveEngineMixin:
             if note:
                 item["note"] = _single_line(note, 180)
             if text:
-                item["text_preview"] = _single_line(_strip_internal_message_blocks(text), 180)
+                item["text_preview"] = self._proactive_visible_text_preview(text)
             if image_path:
                 item["image_path"] = _single_line(image_path, 260)
             if extra_count is not None:
@@ -1432,6 +1445,8 @@ class ProactiveEngineMixin:
                 continue
             reason = str(event.get("reason") or "check_in")
             event_ts = self._timestamp_from_story_event(event, reason)
+            if self._friend_proactive_scheduled_too_early(user, event_ts):
+                continue
             if event_ts > now or (event_ts > 0 and now - event_ts <= self.max_proactive_plan_lag_minutes * 60):
                 candidates.append((event_ts, event))
         if not candidates:
@@ -1779,6 +1794,10 @@ class ProactiveEngineMixin:
             start, end = self._parse_window_minutes(window)
             if start is None or end is None:
                 continue
+            if self._private_user_role(user) == "friend":
+                bucket = self._proactive_daypart_bucket_for_minute(start)
+                if _safe_int(self._today_proactive_daypart_counts(user).get(bucket), 0, 0) >= 1:
+                    continue
             if minute >= end:
                 continue
             start_dt = datetime.combine(today, datetime.min.time(), tzinfo=now_dt.tzinfo) + timedelta(minutes=start)
@@ -1793,6 +1812,8 @@ class ProactiveEngineMixin:
                 scheduled = random.uniform(earliest.timestamp(), max(earliest.timestamp() + 60, tighten_end))
             else:
                 scheduled = random.uniform(earliest.timestamp(), end_dt.timestamp())
+            if self._friend_proactive_scheduled_too_early(user, scheduled):
+                continue
             candidates.append(
                 (
                     scheduled,
@@ -1838,12 +1859,18 @@ class ProactiveEngineMixin:
         shortlist = future_events[:6]
         weighted: list[tuple[dict[str, Any], float]] = []
         daypart_counts = self._today_proactive_daypart_counts(user or {})
+        friend_user = isinstance(user, dict) and self._private_user_role(user) == "friend"
         for index, (_, event) in enumerate(shortlist):
+            event_ts = self._timestamp_from_story_event(event, str(event.get("reason") or "check_in"))
+            if friend_user and user is not None and self._friend_proactive_scheduled_too_early(user, event_ts):
+                continue
             priority_tuple = self._event_priority(event)
             priority_score = float(-priority_tuple[0])
             weight = 1.0 + priority_score * 0.08 + max(0.0, 0.45 - index * 0.06)
             bucket = self._proactive_daypart_bucket_for_event(event)
             sent_in_bucket = _safe_int(daypart_counts.get(bucket), 0, 0) if bucket else 0
+            if friend_user and bucket and sent_in_bucket >= 1:
+                continue
             if bucket == "late_night" and sent_in_bucket >= 1 and not self._is_sticky_greeting_event(event):
                 continue
             if bucket and sent_in_bucket >= 2 and not self._is_sticky_greeting_event(event):
@@ -1899,11 +1926,15 @@ class ProactiveEngineMixin:
     def _planned_event_exceeds_daypart_cap(self, user: dict[str, Any], reason: str, scheduled_at: float) -> bool:
         if reason in {"insomnia_night", "important_date_share"}:
             return False
+        if self._friend_proactive_scheduled_too_early(user, scheduled_at):
+            return True
         bucket = self._proactive_daypart_bucket_for_timestamp(scheduled_at)
         if not bucket:
             return False
         counts = self._today_proactive_daypart_counts(user)
         sent_in_bucket = _safe_int(counts.get(bucket), 0, 0)
+        if self._private_user_role(user) == "friend":
+            return sent_in_bucket >= 1
         if bucket == "late_night":
             return sent_in_bucket >= 1
         return sent_in_bucket >= 2
@@ -3401,6 +3432,7 @@ class ProactiveEngineMixin:
         if "photo_text" in planned_action and self._contains_inline_image_tag(text):
             image_path = ""
             extra_components = []
+        text = self._visible_text_without_tts_reading(text, limit=1000)
         text = self._normalize_proactive_sentence_flow(text)
         if not text:
             return reason, "", "", [], action_summary, effective_action

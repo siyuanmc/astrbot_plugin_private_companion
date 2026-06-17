@@ -6639,7 +6639,8 @@ class DailyStateMixin:
                 simulation_active = self._simulation_active(current)
                 self._reset_daily_counter_if_needed(current)
                 current["last_sent"] = _now_ts()
-                current["last_companion_message"] = _single_line(_strip_internal_message_blocks(text), 500)
+                visible_text = self._visible_text_without_tts_reading(text, limit=500)
+                current["last_companion_message"] = _single_line(visible_text, 500)
                 current["last_proactive_reason"] = reason
                 current["last_proactive_action"] = effective_action_for_send or planned_action_for_send or "message"
                 current["last_proactive_behavior_summary"] = action_summary
@@ -6656,7 +6657,7 @@ class DailyStateMixin:
                     current["last_food_prompt_at"] = current["last_sent"]
                 self._remember_proactive_topic(
                     current,
-                    text=text,
+                    text=visible_text or text,
                     topic=current.get("planned_proactive_topic"),
                     motive=planned_motive_for_send,
                 )
@@ -6665,7 +6666,7 @@ class DailyStateMixin:
                     audit_id,
                     status="sent",
                     note="已真实发送",
-                    text=text,
+                    text=visible_text or text,
                     image_path=image_path,
                     extra_count=len(extra_components),
                     action=current["last_proactive_action"],
@@ -6813,7 +6814,9 @@ class DailyStateMixin:
                         current["planned_followup_kind"] = ""
                         current["planned_proactive_quota_exempt"] = False
                         self._clear_planned_proactive_trigger(current)
-                        self._schedule_next_proactive(current, now=_now_ts())
+                        schedule_now = _now_ts()
+                        next_delay = self._friend_proactive_spread_delay_hours(current, now=schedule_now)
+                        self._schedule_next_proactive(current, now=schedule_now, delay_hours=next_delay)
                 self._save_data_sync()
                 current_snapshot = dict(current)
             asyncio.create_task(self._refresh_persona_relationship(user_id, current_snapshot))

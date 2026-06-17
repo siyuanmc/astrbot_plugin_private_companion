@@ -1693,6 +1693,7 @@ class ProactiveMessageMixin:
             )
         cleaned = self._apply_proactive_style_variation(cleaned, user)
         cleaned = self._collapse_multi_candidate_proactive_text(cleaned, user=user, name=name)
+        cleaned = self._visible_text_without_tts_reading(cleaned, limit=1000)
         if self._should_drop_vague_generic_proactive(user, reason=reason, action=action, action_context=action_context, text=cleaned):
             return ""
         return self._normalize_proactive_sentence_flow(cleaned)
@@ -3032,10 +3033,44 @@ class ProactiveMessageMixin:
         return ""
 
     def _strip_tts_markup(self, text: str) -> str:
-        stripped = re.sub(r"</?t{2,}s\b[^>]*>", "", str(text or ""), flags=re.IGNORECASE)
+        stripped = self._visible_text_without_tts_reading(text)
         stripped = stripped.replace("\r", "\n")
         lines = [line.strip() for line in stripped.splitlines() if line.strip()]
         return _single_line(" ".join(lines), 120)
+
+    def _visible_text_without_tts_reading(self, text: str, *, limit: int = 1000) -> str:
+        source = str(text or "").strip()
+        if not source:
+            return ""
+        normalizer = getattr(self, "_normalize_tts_tags", None)
+        if callable(normalizer) and re.search(r"</?t{2,}s\b", source, flags=re.IGNORECASE):
+            try:
+                source = str(normalizer(source) or source).strip()
+            except Exception:
+                pass
+        if re.search(r"<tts\b[^>]*>.*?</tts>", source, flags=re.IGNORECASE | re.DOTALL):
+            outside = re.sub(r"<tts\b[^>]*>.*?</tts>", "", source, flags=re.IGNORECASE | re.DOTALL)
+            outside = re.sub(r"</?t{2,}s\b[^>]*>", "", outside, flags=re.IGNORECASE).strip()
+            if re.search(r"[\u4e00-\u9fff]", outside):
+                return _single_line(_strip_internal_message_blocks(outside), limit)
+            source = re.sub(r"</?t{2,}s\b[^>]*>", "", source, flags=re.IGNORECASE).strip()
+        has_kana = bool(re.search(r"[\u3040-\u30ff]", source))
+        has_cjk = bool(re.search(r"[\u4e00-\u9fff]", source))
+        if has_kana and has_cjk and getattr(self, "tts_voice_language", "ja") != "zh":
+            units = re.findall(r".*?[。！？!?…~～]+|.+$", source, flags=re.DOTALL)
+            kept: list[str] = []
+            dropped = False
+            for unit in units:
+                cleaned = str(unit or "").strip()
+                if not cleaned:
+                    continue
+                if re.search(r"[\u3040-\u30ff]", cleaned):
+                    dropped = True
+                    continue
+                kept.append(cleaned)
+            if dropped and kept and any(re.search(r"[\u4e00-\u9fff]", item) for item in kept):
+                return _single_line(_strip_internal_message_blocks("".join(kept)), limit)
+        return _single_line(_strip_internal_message_blocks(source), limit)
 
     async def _run_photo_text_action(self, user: dict[str, Any], name: str, reason: str) -> str:
         if not self.enable_photo_text_action:
@@ -4190,7 +4225,7 @@ class ProactiveMessageMixin:
         extra_components: list[Any] | None = None,
         action_summary: str = "",
     ) -> str:
-        message_text = str(text or "").strip()
+        message_text = self._visible_text_without_tts_reading(text, limit=1000)
         attachment_notes: list[str] = []
         if image_path:
             attachment_notes.append("随消息发送了一张图片")

@@ -7,6 +7,7 @@ const state = {
   users: [],
   groups: [],
   diagnostics: [],
+  troubleshooting: null,
   availableProviders: [],
   tokenStats: null,
   bookshelfUnlocked: null,
@@ -24,9 +25,22 @@ const state = {
   providerMode: "all",
   providerDraft: {},
   proactiveCandidateFilter: "all",
+  imageCacheItems: [],
+  imageCacheTotal: 0,
+  imageCacheScopes: [],
+  imageCacheFilter: "",
+  imageCacheScope: "all",
+  imageCacheLoaded: false,
+  selectedImageCacheKey: "",
+  troubleshootingFilter: "all",
   tokenView: "today",
   tokenDate: "",
 };
+
+const hiddenCompatibilityConfigKeys = new Set([
+  "enable_semantic_message_debounce",
+  "semantic_message_debounce_seconds",
+]);
 
 const providerLabels = {
   LLM_PROVIDER_ID: "主模型",
@@ -101,6 +115,7 @@ function unavailablePluginIntegrationOwner(key) {
 }
 
 function visibleConfigKey(key) {
+  if (hiddenCompatibilityConfigKeys.has(key)) return false;
   if (unavailablePluginIntegrationOwner(key)) return false;
   return isPrivateReadingAvailable() || !privateReadingConfigKeys.has(key);
 }
@@ -280,7 +295,8 @@ const featureMeta = {
   inject_passive_states: ["被动状态注入", "普通聊天前把当前拟人状态注入提示词，让被动回复也受状态影响。"],
   enable_cycle_state: ["生理周期模拟", "允许符合人格的人类角色出现周期前、周期中和恢复期状态。"],
   enable_skill_growth_simulation: ["技能成长", "技能等级与能力边界。"],
-  enable_message_debounce: ["消息收口防抖", "按文本、图片、转发消息分别等待用户补充，把连续补话合并为同一轮。"],
+  enable_message_debounce: ["消息收口防抖", "把文本、图片、转发后的补充说明合并进同一轮；旧版语义收口等待已并入文本补话等待。"],
+  enable_smart_message_debounce: ["智能文本收口", "用小模型判断文本消息是否还没说完，只在疑似没说完时等待。"],
   enable_recall_enhancement: ["撤回增强", "感知撤回事件，支持发送前取消回复、短期防撤回转述和违禁词自动撤回。"],
   enable_recall_cancel_reply: ["撤回取消回复", "撤回增强的子能力：触发/唤醒消息在 Bot 发出回复前被撤回时，静默取消本次回复和后续分段。"],
   enable_recall_message_cache: ["撤回消息缓存", "撤回增强的子能力：短期缓存消息摘要，撤回后可在过期前转述。"],
@@ -458,6 +474,7 @@ const embeddedFeatureParentByKey = {
   enable_recall_transcribe_command: "enable_recall_enhancement",
   enable_forbidden_word_recall: "enable_recall_enhancement",
   enable_semantic_message_debounce: "enable_message_debounce",
+  enable_smart_message_debounce: "enable_message_debounce",
   enable_private_image_gif_enhancement: "enable_private_image_self_recognition",
   enable_holiday_perception: "enable_environment_perception",
   enable_platform_perception: "enable_environment_perception",
@@ -543,8 +560,13 @@ const configLabels = {
   main_user_mention_voice_keywords: "@主用户语音关键词",
   main_user_mention_voice_probability: "@主用户关键词触发概率(%)",
   main_user_mention_voice_prompt: "@主用户关键词提示词",
-  inbound_message_debounce_seconds: "重复消息防抖秒数",
+  inbound_message_debounce_seconds: "重复上报去重秒数",
   enable_message_debounce: "消息收口防抖",
+  enable_smart_message_debounce: "智能文本收口",
+  SMART_MESSAGE_DEBOUNCE_PROVIDER_ID: "智能收口小模型",
+  smart_message_debounce_wait_seconds: "智能等待秒数",
+  smart_message_debounce_learning_window_seconds: "误判学习窗口秒数",
+  smart_message_debounce_examples_limit: "学习样本提示数量",
   enable_recall_enhancement: "撤回增强",
   enable_recall_cancel_reply: "撤回取消回复",
   enable_recall_message_cache: "撤回消息缓存",
@@ -555,11 +577,11 @@ const configLabels = {
   recall_forbidden_words: "撤回违禁词表",
   recall_forbidden_scope: "违禁词撤回范围",
   recall_forbidden_word_case_sensitive: "违禁词大小写敏感",
-  text_message_debounce_seconds: "文本收口秒数",
-  image_message_debounce_seconds: "图片收口秒数",
-  forward_message_debounce_seconds: "转发收口秒数",
-  enable_semantic_message_debounce: "旧版语义收口等待",
-  semantic_message_debounce_seconds: "旧版语义收口等待秒数",
+  text_message_debounce_seconds: "文本补话等待秒数",
+  image_message_debounce_seconds: "图片补话等待秒数",
+  forward_message_debounce_seconds: "转发补话等待秒数",
+  enable_semantic_message_debounce: "旧版收口兼容开关",
+  semantic_message_debounce_seconds: "旧版文本等待秒数",
   enable_proactive_quote_trigger_message: "引用触发消息",
   private_image_vision_wait_seconds: "单图等待识图秒数",
   enable_private_image_gif_enhancement: "GIF 动图强化",
@@ -788,8 +810,13 @@ const configDescriptions = {
   daily_token_limit: "插件内部 LLM 任务的每日硬限额，达到后跳过非豁免后台调用。0 表示不限。",
   enable_daily_token_soft_limit: "作为达到限额就停止插件/停止后台链路的替代方案。开启后，达到软限额时暂缓新闻、网页探索、创作、群整理、自检和主动生图等低优先级后台任务，优先保留用户当下触发的回复。",
   daily_token_soft_limit: "今日插件内部 LLM 消耗达到该值后进入软降载。0 表示关闭软限额，只保留每日硬限额。",
-  inbound_message_debounce_seconds: "拦截平台或适配器短时间重复上报的同一条用户消息；不是等待用户补话的收口窗口。",
-  enable_message_debounce: "独立消息收口总开关。开启后可分别配置文本、图片、转发消息的等待补充时间。",
+  inbound_message_debounce_seconds: "只用于去掉平台或适配器短时间重复上报的同一条消息；不是等待用户补话的时间。",
+  enable_message_debounce: "消息收口总开关。开启后，文本、图片、合并转发会按各自等待秒数给用户留补充说明的时间。",
+  enable_smart_message_debounce: "开启后，普通文本先由小模型判断是否还没说完；只有疑似没说完时才等待，完整问候、短互动和完整问题会直接放行。默认关闭。",
+  SMART_MESSAGE_DEBOUNCE_PROVIDER_ID: "用于判断“用户是否说完”的轻量文本 Provider。留空时跟随插件主模型；建议选便宜、响应快的小模型。",
+  smart_message_debounce_wait_seconds: "模型判断用户还没说完时，等待补充的秒数。正常完整发言不会额外等待。",
+  smart_message_debounce_learning_window_seconds: "如果模型刚判断已说完，但用户在该窗口内继续补话，就记录为误判样本。",
+  smart_message_debounce_examples_limit: "每次判断时带给小模型的近期误判样本数量。0 表示不注入历史样本。",
   enable_recall_enhancement: "撤回相关能力总开关。包括撤回触发消息时取消回复、短期缓存撤回消息用于转述、违禁词自动撤回。",
   enable_recall_cancel_reply: "开启后，如果 QQ/OneBot 通知某条触发或唤醒消息已撤回，而 Bot 的回复还没真正发出，就静默取消这次回复和剩余分段。",
   enable_recall_message_cache: "开启后短期缓存普通消息的文本摘要；收到撤回事件后可在缓存过期前通过命令转述。缓存只保存在内存中。",
@@ -800,17 +827,17 @@ const configDescriptions = {
   recall_forbidden_words: "命中任一词就触发违禁词撤回。建议一行一个词；为空时不会执行自动撤回。",
   recall_forbidden_scope: "bot_only 只检查 Bot 自己消息；group_only 检查群聊消息；bot_and_group 同时检查 Bot 自己消息和群聊消息。",
   recall_forbidden_word_case_sensitive: "关闭时英文大小写不区分；开启时按原样匹配。",
-  text_message_debounce_seconds: "普通文本消息的补话等待时间。设为 0 时，短句会立即进入主链。",
+  text_message_debounce_seconds: "普通文本后的补话等待时间。旧版“语义收口等待秒数”会作为该项的兼容默认值；设为 0 时文本不固定等待。",
   image_message_debounce_seconds: "只发图片、截图或表情包后的补话等待时间，适合保留几秒给用户先图后文。",
   forward_message_debounce_seconds: "只发合并转发/聊天记录后的补话等待时间。设为 0 表示转发不额外等待。",
-  enable_semantic_message_debounce: "旧版兼容项。新配置请使用“消息收口防抖”。",
-  semantic_message_debounce_seconds: "旧版兼容项。新配置请使用文本/图片/转发收口秒数。",
+  enable_semantic_message_debounce: "旧版兼容项，已并入消息收口防抖，不再单独配置。",
+  semantic_message_debounce_seconds: "旧版兼容项，读取时会迁移为文本补话等待秒数。",
   enable_proactive_quote_trigger_message: "开启后，群聊被 @、引用、唤醒或连续对话保持时，Bot 的普通回复会引用当前触发消息；群聊主动插话会引用触发消息；模型预约的私聊主动若能追溯到同一私聊消息，也会引用。复读跟读/打断不会引用。",
   private_image_vision_wait_seconds: "私聊单图确认没有继续补充后，最多等待视觉转述多久。不是图片收口时间；视觉提前完成会立刻进入主链。",
   enable_private_image_gif_enhancement: "图片转述增强的可选子功能。开启后动态 GIF 会抽取代表帧，让视觉模型理解动作、表情变化和文字变化；关闭后按普通 GIF/图片路径处理。",
   private_image_gif_max_frames: "动态 GIF 进入视觉转述时最多抽取多少个代表帧。帧数越多越能理解动作变化，但会增加识图耗时和视觉输入量。",
   private_image_self_recognition_hint: "只补充当前角色自己的外观、头像、名字、表情包特征或聊天截图昵称，让视觉转述更容易判断图里是不是当前角色。不要写用户资料。",
-  enable_private_image_vision_cache: "开启后，同一张图片或表情包会按内容哈希复用上次视觉摘要，避免重复调用识图模型；不会缓存最终聊天回复。",
+  enable_private_image_vision_cache: "开启后，同一张图片或表情包会按内容哈希复用上次视觉摘要，避免重复调用识图模型；会保留压缩预览图用于管理，不保留原始大图，也不会缓存最终聊天回复。",
   private_image_vision_cache_max_items: "最多保留多少条图片视觉摘要缓存。达到上限后会清理最久未命中的旧缓存，0 表示不限制。",
   segmented_proactive_threshold: "纯文本短于或等于该字数时才考虑分段；太长的内容保持一整条，避免读起来散。",
   segmented_proactive_scope: "插件主动只影响插件主动消息；全部 LLM 回复会额外拆普通模型纯文本回复，首段随主链立即发送，剩余片段后台按间隔补发。图片、语音、AT 或工具转述等复杂消息不会拆；创作分享会自动保持整段。",
@@ -847,7 +874,7 @@ const configDescriptions = {
   group_wakeup_cooldown_seconds: "判断唤醒和兴趣唤醒的冷却时间，防止群聊里连续关键词刷屏。",
   group_wakeup_generated_keyword_limit: "自动从人格兴趣、技能、群话题和黑话中抽取多少个兴趣关键词参与判断。",
   group_wakeup_topic_interest_max_boost: "兴趣词如果同时出现在当前句、近几句或活跃话题线里，最多额外提高多少百分比的兴趣唤醒概率。",
-  group_wakeup_debounce_pending_penalty: "同一群友正在语义收口等待时，兴趣唤醒概率降低多少百分比，避免等补充时又抢话。",
+  group_wakeup_debounce_pending_penalty: "同一群友正在补话等待时，兴趣唤醒概率降低多少百分比，避免等补充时又抢话。",
   group_wakeup_fatigue_limit: "短时间多次唤醒累计到多少点后，Bot 会更保守、更省力。强唤醒词仍然能叫到它。",
   group_wakeup_fatigue_decay_minutes: "每隔多少分钟自然恢复 1 点唤醒疲劳。数值越大，越会保留“刚被频繁叫到”的感觉。",
   group_wakeup_log_limit: "每个群最多保留多少条唤醒命中、冷却拦截和兴趣未触发记录。",
@@ -964,14 +991,13 @@ const featureSettingGroups = {
   inject_passive_states: ["humanized_state_intensity"],
   enable_cycle_state: ["humanized_state_intensity"],
   enable_skill_growth_simulation: ["skill_growth_rate", "skill_growth_custom_skills", "enable_skill_growth_schedule_influence", "skill_growth_schedule_influence_strength"],
-  enable_message_debounce: ["inbound_message_debounce_seconds", "text_message_debounce_seconds", "image_message_debounce_seconds", "forward_message_debounce_seconds", "enable_semantic_message_debounce", "semantic_message_debounce_seconds"],
+  enable_message_debounce: ["inbound_message_debounce_seconds", "text_message_debounce_seconds", "image_message_debounce_seconds", "forward_message_debounce_seconds", "enable_smart_message_debounce", "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID", "smart_message_debounce_wait_seconds", "smart_message_debounce_learning_window_seconds", "smart_message_debounce_examples_limit"],
   enable_recall_enhancement: ["enable_recall_cancel_reply", "enable_recall_message_cache", "enable_recall_transcribe_command", "recall_message_cache_ttl_seconds", "recall_message_cache_max_items", "enable_forbidden_word_recall", "recall_forbidden_words", "recall_forbidden_scope", "recall_forbidden_word_case_sensitive"],
   enable_recall_cancel_reply: ["recall_message_cache_ttl_seconds"],
   enable_recall_message_cache: ["enable_recall_transcribe_command", "recall_message_cache_ttl_seconds", "recall_message_cache_max_items"],
   enable_forbidden_word_recall: ["recall_forbidden_words", "recall_forbidden_scope", "recall_forbidden_word_case_sensitive"],
   enable_private_image_self_recognition: ["private_image_vision_wait_seconds", "enable_private_image_gif_enhancement", "private_image_gif_max_frames", "enable_private_image_vision_cache", "private_image_vision_cache_max_items", "private_image_self_recognition_hint"],
   enable_private_image_gif_enhancement: ["private_image_gif_max_frames"],
-  enable_semantic_message_debounce: ["inbound_message_debounce_seconds", "semantic_message_debounce_seconds"],
   enable_environment_perception: ["environment_perception_timezone", "holiday_country", "enable_holiday_perception", "enable_platform_perception", "enable_model_perception", "enable_lunar_perception", "enable_solar_term_perception", "enable_almanac_perception"],
   enable_holiday_perception: ["holiday_country"],
   enable_platform_perception: [],
@@ -1026,14 +1052,19 @@ const featureSettingGroups = {
 const featureSettingSections = {
   enable_message_debounce: [
     {
-      title: "重复去重",
-      note: "拦截平台或适配器短时间重复上报的同一条用户消息。",
+      title: "重复上报去重",
+      note: "只处理平台重复上报同一条消息，不影响用户补话等待。",
       keys: ["inbound_message_debounce_seconds"],
     },
     {
-      title: "收口时间",
-      note: "分别控制普通文本、单图和合并转发等待用户补充说明的时间。",
+      title: "补话等待",
+      note: "分别控制文本、图片和合并转发后等待用户继续补充的时间；旧版语义等待已并入文本。",
       keys: ["text_message_debounce_seconds", "image_message_debounce_seconds", "forward_message_debounce_seconds"],
+    },
+    {
+      title: "智能文本收口",
+      note: "用轻量模型判断文本是否真的没说完；开启后文本完整时不再固定等待。",
+      keys: ["enable_smart_message_debounce", "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID", "smart_message_debounce_wait_seconds", "smart_message_debounce_learning_window_seconds", "smart_message_debounce_examples_limit"],
     },
   ],
   enable_recall_enhancement: [
@@ -1242,6 +1273,7 @@ const featureSettingTypes = {
   tts_generation_mode: { type: "select", options: [["hybrid", "hybrid"], ["direct", "direct"], ["convert", "convert"]] },
   tts_voice_language: { type: "select", options: [["ja", "日语"], ["zh", "中文"], ["en", "英语"]] },
   tts_conversion_provider_id: { type: "provider" },
+  SMART_MESSAGE_DEBOUNCE_PROVIDER_ID: { type: "provider" },
   segmented_proactive_chat_scope: { type: "select", options: [["all", "全部"], ["private", "仅私聊"], ["group", "仅群聊"]] },
   photo_generation_backend: { type: "select", options: [["auto", "auto"], ["comfyui", "ComfyUI"], ["external", "在线图片 API"]] },
   photo_generation_style: { type: "select", options: [["真实", "真实"], ["二次元", "二次元"], ["其他", "其他"]] },
@@ -1507,6 +1539,33 @@ function postJson(path, body) {
   return fetchJson(path, { method: "POST", body: JSON.stringify(body) });
 }
 
+async function loadImageCache() {
+  const params = new URLSearchParams();
+  params.set("limit", "300");
+  if (state.imageCacheFilter) params.set("q", state.imageCacheFilter);
+  if (state.imageCacheScope && state.imageCacheScope !== "all") params.set("scope", state.imageCacheScope);
+  const data = await fetchJson(`/image_cache/list?${params.toString()}`);
+  state.imageCacheItems = Array.isArray(data.items) ? data.items : [];
+  state.imageCacheTotal = Number(data.total || 0);
+  state.imageCacheScopes = Array.isArray(data.scopes) ? data.scopes : [];
+  state.imageCacheLoaded = true;
+  if (state.selectedImageCacheKey && !state.imageCacheItems.some((item) => item.key === state.selectedImageCacheKey)) {
+    state.selectedImageCacheKey = "";
+  }
+  if (!state.selectedImageCacheKey && state.imageCacheItems[0]) {
+    state.selectedImageCacheKey = state.imageCacheItems[0].key;
+  }
+  renderImageCache();
+  return data;
+}
+
+async function loadTroubleshooting() {
+  const data = await fetchJson("/troubleshooting");
+  state.troubleshooting = data || null;
+  renderTroubleshooting();
+  return data;
+}
+
 async function loadAll() {
   $("#subtitle").textContent = "读取运行态中...";
   try {
@@ -1543,6 +1602,8 @@ function renderAll() {
   renderMemory();
   renderProactiveCandidates();
   renderBookshelf();
+  renderImageCache();
+  renderTroubleshooting();
   renderTokens();
   renderModuleSettings();
   renderConfig();
@@ -1653,6 +1714,8 @@ function renderDashboardPulse() {
     ["group", "群聊观测", `${overview.group?.enabled_group_count || 0}/${overview.group?.group_count || 0} 个群`],
     ["worldbook", "关系网", `${overview.worldbook?.enabled_member_count || 0}/${overview.worldbook?.member_count || 0} 个节点`],
     ["tokens", "Token", `${formatCompactNumber(state.tokenStats?.totals?.total_tokens || 0)} · ${formatCompactNumber(state.tokenStats?.totals?.calls || 0)} 次`],
+    ["troubleshooting", "排障中心", `${(state.diagnostics || []).filter((item) => ["warn", "error"].includes(item.level)).length} 个诊断项`],
+    ["image-cache", "图片缓存", `${overview.cache?.private_image_vision?.items || 0}/${overview.cache?.private_image_vision?.max_items || "不限"} 条`],
     ["modules", "模块配置", moduleShortcutNote(overview)],
     ["models", "模型分流", providerShortcutNote(overview.providers || {})],
     ["config", "名单与开关", `${overview.group?.access_mode || "whitelist"} · 白 ${overview.group?.whitelist?.length || 0} / 黑 ${overview.group?.blacklist?.length || 0}`],
@@ -1922,6 +1985,9 @@ function renderUxReviewPanel() {
   const imageCache = cache.private_image_vision || {};
   const featureKeys = Object.keys(features).filter(visibleConfigKey);
   const enabledFeatureCount = featureKeys.filter((key) => features[key]).length;
+  const activeFeatureGroupCount = featureGroups.filter((group) =>
+    group.keys.some((key) => visibleConfigKey(key) && features[key])
+  ).length;
   const targetUsers = Array.isArray(settings.target_user_ids)
     ? settings.target_user_ids.filter(Boolean)
     : String(settings.target_user_ids || "").split(/[\s,，]+/).filter(Boolean);
@@ -1968,13 +2034,13 @@ function renderUxReviewPanel() {
       text: imageEnhanceEnabled
         ? `缓存 ${imageCache.items || 0}/${imageCache.max_items || "不限"} 条；${settings.enable_private_image_vision_cache ? "重复图会复用视觉摘要" : "缓存关闭，重复表情包会重复调用"}`
         : "图片转述增强关闭",
-      tab: "modules",
+      tab: "image-cache",
     },
     {
-      level: featureKeys.length && enabledFeatureCount > Math.ceil(featureKeys.length * 0.78) ? "warn" : "ok",
-      title: "功能开关密度",
+      level: featureKeys.length ? "ok" : "info",
+      title: "功能开关已分组",
       text: featureKeys.length
-        ? `${enabledFeatureCount}/${featureKeys.length} 个功能开启；开启太满时更需要看关联参数`
+        ? `${enabledFeatureCount}/${featureKeys.length} 个功能开启，已归入 ${activeFeatureGroupCount}/${featureGroups.length} 个分类；具体参数进详情页查看`
         : "等待功能开关数据",
       tab: "config",
     },
@@ -2004,6 +2070,424 @@ function labeledRoleplayValuePresent(text, label) {
   const pattern = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*[：:]\\s*([^\\n]+)`, "u");
   const match = source.match(pattern);
   return Boolean(match && String(match[1] || "").trim());
+}
+
+function renderTroubleshooting() {
+  const summaryEl = $("#troubleshootingSummary");
+  const checksEl = $("#troubleshootingChecks");
+  const eventsEl = $("#troubleshootingEvents");
+  const sqliteEl = $("#troubleshootingSqlite");
+  const chainEl = $("#troubleshootingChainTests");
+  const debounceEl = $("#troubleshootingDebounceTrace");
+  if (!summaryEl || !checksEl || !eventsEl || !sqliteEl || !chainEl || !debounceEl) return;
+  const data = state.troubleshooting || {};
+  const summary = data.summary || {};
+  const counts = summary.counts || {};
+  const level = summary.level || "info";
+  const selected = state.troubleshootingFilter || "all";
+  const checks = Array.isArray(data.checks) ? data.checks : [];
+  const events = Array.isArray(data.recent_events) ? data.recent_events : [];
+  const filteredChecks = selected === "all" ? checks : checks.filter((item) => item.level === selected);
+  const filteredEvents = selected === "all" ? events : events.filter((item) => item.level === selected);
+  const reasonItems = troubleshootingReasonItems(filteredChecks, filteredEvents, selected);
+  summaryEl.innerHTML = `
+    <section class="troubleshooting-head-card ${escapeHtml(level)}">
+      <div>
+        <span>${escapeHtml(summary.generated_at || "等待检查")}</span>
+        <b>${escapeHtml(summary.headline || "尚未加载排障信息")}</b>
+        <small>${escapeHtml(troubleshootingSummaryText(counts))}</small>
+      </div>
+      <button type="button" data-troubleshooting-refresh>重新检查</button>
+    </section>
+    ${["error", "warn", "info", "ok"].map((name) => `
+      <button type="button" class="troubleshooting-count ${escapeHtml(name)} ${selected === name ? "is-active" : ""}" data-troubleshooting-filter="${escapeHtml(name)}">
+        <b>${escapeHtml(counts[name] || 0)}</b>
+        <span>${escapeHtml(troubleshootingLevelLabel(name))}</span>
+      </button>
+    `).join("")}
+    <section class="troubleshooting-reasons">
+      <header>
+        <b>${escapeHtml(selected === "all" ? "待处理原因" : `${troubleshootingLevelLabel(selected)}原因`)}</b>
+        <span>${escapeHtml(selected === "all" ? "只展示需要处理的错误和警告；普通信息可点信息查看" : "筛选同时作用于常见问题检查和最近异常")}</span>
+      </header>
+      ${reasonItems.length ? reasonItems.map((item) => `
+        <button type="button" class="${escapeHtml(item.level || "info")}" ${item.jump ? `data-jump-tab="${escapeHtml(item.jump)}"` : ""}>
+          <b>${escapeHtml(item.title || "-")}</b>
+          <span>${escapeHtml(item.text || "")}</span>
+        </button>
+      `).join("") : `<div class="empty small">${escapeHtml(selected === "all" ? "暂无需要处理的原因" : "这个筛选下暂无原因")}</div>`}
+    </section>
+  `;
+  document.querySelectorAll("[data-troubleshooting-filter]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.troubleshootingFilter === selected);
+  });
+  checksEl.innerHTML = filteredChecks.length
+    ? filteredChecks.map((item) => troubleshootingCheckMarkup(item)).join("")
+    : `<div class="empty small">暂无${escapeHtml(selected === "all" ? "" : troubleshootingLevelLabel(selected))}常见问题检查项</div>`;
+  eventsEl.innerHTML = filteredEvents.length
+    ? filteredEvents.map((item) => troubleshootingEventMarkup(item)).join("")
+    : `<div class="empty small">暂无${escapeHtml(selected === "all" ? "" : troubleshootingLevelLabel(selected))}最近异常记录</div>`;
+  const sqlite = data.sqlite || {};
+  const sqliteItems = Array.isArray(sqlite.items) ? sqlite.items : [];
+  sqliteEl.innerHTML = sqliteItems.length
+    ? sqliteItems.map((item) => `
+      <section class="troubleshooting-sqlite-row ${escapeHtml(item.level || "info")}">
+        <b>${escapeHtml(item.name || "database")}</b>
+        <span>${escapeHtml(item.text || "-")}</span>
+        <small>${escapeHtml(item.path || "")}</small>
+      </section>
+    `).join("")
+    : `<div class="empty small">没有检测到候选 SQLite 数据库文件</div>`;
+  chainEl.innerHTML = troubleshootingChainTestMarkup(data.chain_tests || {});
+  debounceEl.innerHTML = troubleshootingDebounceTraceMarkup(data.message_debounce || {});
+}
+
+function troubleshootingReasonItems(checks, events, selected) {
+  const importantLevels = selected === "all" ? new Set(["error", "warn"]) : new Set([selected]);
+  const rows = [];
+  for (const item of checks || []) {
+    if (!importantLevels.has(item.level || "info")) continue;
+    rows.push({
+      level: item.level || "info",
+      title: item.title || "-",
+      text: item.action || item.text || "",
+      jump: item.jump || "",
+    });
+  }
+  for (const item of events || []) {
+    if (!importantLevels.has(item.level || "info")) continue;
+    rows.push({
+      level: item.level || "info",
+      title: item.title || "-",
+      text: item.detail || item.action || "",
+      jump: item.jump || "",
+    });
+  }
+  const rank = { error: 0, warn: 1, info: 2, ok: 3 };
+  rows.sort((a, b) => (rank[a.level] ?? 9) - (rank[b.level] ?? 9));
+  return rows.slice(0, 6);
+}
+
+function troubleshootingSummaryText(counts) {
+  if (!counts) return "等待数据";
+  const error = Number(counts.error || 0);
+  const warn = Number(counts.warn || 0);
+  const info = Number(counts.info || 0);
+  const ok = Number(counts.ok || 0);
+  return `错误 ${error} · 警告 ${warn} · 信息 ${info} · 正常 ${ok}`;
+}
+
+function troubleshootingLevelLabel(level) {
+  return {
+    error: "错误",
+    warn: "警告",
+    info: "信息",
+    ok: "正常",
+  }[level] || level || "未知";
+}
+
+function formatBytes(value) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) return "0 B";
+  if (size < 1024) return `${Math.round(size)} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function troubleshootingCheckMarkup(item) {
+  const level = item.level || "info";
+  return `
+    <section class="troubleshooting-check ${escapeHtml(level)}">
+      <div class="troubleshooting-check-icon">${escapeHtml(level === "ok" ? "✓" : level === "error" ? "!" : level === "warn" ? "!" : "i")}</div>
+      <div>
+        <b>${escapeHtml(item.title || "-")}</b>
+        <p>${escapeHtml(item.text || "")}</p>
+        ${item.action ? `<small>${escapeHtml(item.action)}</small>` : ""}
+      </div>
+      ${item.jump ? `<button type="button" data-jump-tab="${escapeHtml(item.jump)}">查看</button>` : ""}
+    </section>
+  `;
+}
+
+function troubleshootingEventMarkup(item) {
+  return `
+    <section class="troubleshooting-event ${escapeHtml(item.level || "info")}">
+      <header>
+        <span>${escapeHtml(item.source || "事件")}</span>
+        <small>${escapeHtml(item.time || "")}</small>
+      </header>
+      <b>${escapeHtml(item.title || "-")}</b>
+      ${item.detail ? `<p>${escapeHtml(item.detail)}</p>` : ""}
+      <footer>
+        ${item.action ? `<span>${escapeHtml(item.action)}</span>` : ""}
+        ${item.jump ? `<button type="button" data-jump-tab="${escapeHtml(item.jump)}">查看</button>` : ""}
+      </footer>
+    </section>
+  `;
+}
+
+function troubleshootingChainTestMarkup(results) {
+  const tests = [
+    {
+      type: "image_generation",
+      title: "图片生成",
+      text: "实际调用图片生成后端并检查返回文件",
+      button: "测试图片生成",
+    },
+    {
+      type: "tts_generation",
+      title: "TTS 生成",
+      text: "实际调用当前会话 TTS provider 并检查音频文件",
+      button: "测试 TTS 生成",
+    },
+  ];
+  return tests.map((test) => {
+    const result = results?.[test.type] || {};
+    const ok = Boolean(result.ok);
+    const hasResult = Boolean(result.ran_at || result.ran_at_text || result.error || result.detail);
+    const status = hasResult ? (ok ? "ok" : "error") : "info";
+    const meta = [
+      result.backend || result.provider || "",
+      result.elapsed_ms ? `${result.elapsed_ms}ms` : "",
+      result.file_size ? `${formatBytes(result.file_size)}` : "",
+      result.ran_at_text || "",
+    ].filter(Boolean).join(" · ");
+    return `
+      <section class="troubleshooting-chain-test ${escapeHtml(status)}">
+        <div>
+          <b>${escapeHtml(test.title)}</b>
+          <p>${escapeHtml(hasResult ? (result.detail || result.error || test.text) : test.text)}</p>
+          ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
+          ${result.path ? `<small class="path">${escapeHtml(result.path)}</small>` : ""}
+        </div>
+        <button type="button" data-troubleshooting-test="${escapeHtml(test.type)}">${escapeHtml(test.button)}</button>
+      </section>
+    `;
+  }).join("");
+}
+
+function troubleshootingDebounceTraceMarkup(data) {
+  const logs = Array.isArray(data.recent_logs) ? data.recent_logs : [];
+  const examples = Array.isArray(data.examples) ? data.examples : [];
+  const status = data.smart_enabled
+    ? `智能收口开启 · 等待 ${Number(data.smart_wait || 0).toFixed(1)}s · 学习窗口 ${Number(data.learning_window || 0).toFixed(1)}s`
+    : data.enabled
+      ? "消息收口开启，智能文本收口未开启"
+      : "消息收口未开启";
+  const provider = data.provider_id || "跟随默认模型";
+  const logMarkup = logs.length ? logs.slice(0, 8).map((item) => {
+    const tone = item.outcome === "wait" || item.outcome === "extend_wait"
+      ? "warn"
+      : item.outcome === "reply_now"
+        ? "ok"
+        : item.outcome === "learned" || item.outcome === "timeout_single"
+          ? "info"
+          : "";
+    const confidence = Number(item.confidence || 0);
+    const meta = [
+      debounceOutcomeLabel(item.outcome),
+      item.source || "",
+      confidence ? `置信 ${(confidence * 100).toFixed(0)}%` : "",
+      item.wait_seconds ? `等待 ${Number(item.wait_seconds).toFixed(1)}s` : "",
+      item.message_count ? `${item.message_count} 条` : "",
+      item.time || "",
+    ].filter(Boolean).join(" · ");
+    return `
+      <section class="debounce-log ${escapeHtml(tone)}">
+        <header>
+          <b>${escapeHtml(debounceDecisionLabel(item.decision))}</b>
+          <span>${escapeHtml(item.scope || item.chat || "-")}</span>
+        </header>
+        <p>${escapeHtml(item.text || item.note || "-")}</p>
+        <small>${escapeHtml(meta)}</small>
+        ${item.reason ? `<small>原因：${escapeHtml(item.reason)}</small>` : ""}
+        ${item.raw ? `<small>原始返回：${escapeHtml(item.raw)}</small>` : ""}
+      </section>
+    `;
+  }).join("") : `<div class="empty small">暂无智能防抖决策记录</div>`;
+  const exampleMarkup = examples.length ? `
+    <details class="debounce-examples">
+      <summary>误判学习样本 ${escapeHtml(examples.length)}</summary>
+      ${examples.slice(0, 6).map((item) => `
+        <section>
+          <b>${escapeHtml(item.kind || "-")}</b>
+          <span>${escapeHtml(item.note || "")}</span>
+          <small>${escapeHtml((item.messages || []).join(" / "))}</small>
+        </section>
+      `).join("")}
+    </details>
+  ` : "";
+  return `
+    <div class="debounce-status">
+      <span>${escapeHtml(status)}</span>
+      <span>模型：${escapeHtml(provider)}</span>
+    </div>
+    <div class="debounce-log-list">${logMarkup}</div>
+    ${exampleMarkup}
+  `;
+}
+
+function debounceDecisionLabel(decision) {
+  return {
+    complete: "放行",
+    incomplete: "等待",
+    fixed: "固定等待",
+  }[decision] || decision || "记录";
+}
+
+function debounceOutcomeLabel(outcome) {
+  return {
+    reply_now: "立即回复",
+    wait: "进入等待",
+    extend_wait: "延长等待",
+    merged_followup: "等到补话",
+    timeout_single: "误等样本",
+    learned: "学习样本",
+  }[outcome] || outcome || "";
+}
+
+function imageCacheScopeLabel(scope) {
+  const value = String(scope || "private_image");
+  const labels = {
+    private_image: "私聊图片",
+    private_image_query: "私聊追问",
+    forward_image: "合并图片",
+    screen_peek: "识屏",
+  };
+  return labels[value] || value;
+}
+
+function renderImageCache() {
+  const summaryEl = $("#imageCacheSummary");
+  const listEl = $("#imageCacheList");
+  const detailEl = $("#imageCacheDetail");
+  if (!summaryEl || !listEl || !detailEl) return;
+  const overviewCache = state.overview?.cache?.private_image_vision || {};
+  const items = state.imageCacheItems || [];
+  const selected = items.find((item) => item.key === state.selectedImageCacheKey) || null;
+  const hasActiveCacheQuery = Boolean(state.imageCacheLoaded || state.imageCacheFilter || (state.imageCacheScope && state.imageCacheScope !== "all") || state.imageCacheTotal || items.length);
+  const totalDisplay = hasActiveCacheQuery ? state.imageCacheTotal : (overviewCache.items || 0);
+  summaryEl.innerHTML = `
+    <div class="image-cache-stat">
+      <b>${escapeHtml(String(totalDisplay))}</b>
+      <span>缓存条目</span>
+    </div>
+    <div class="image-cache-stat">
+      <b>${escapeHtml(overviewCache.max_items ? `${overviewCache.max_items}` : "不限")}</b>
+      <span>上限</span>
+    </div>
+    <div class="image-cache-stat ${overviewCache.enabled ? "ok" : "warn"}">
+      <b>${escapeHtml(overviewCache.enabled ? "开启" : "关闭")}</b>
+      <span>重复图片缓存</span>
+    </div>
+    <div class="image-cache-stat">
+      <b>${escapeHtml(String(items.reduce((sum, item) => sum + Number(item.hits || 0), 0)))}</b>
+      <span>当前列表命中</span>
+    </div>
+  `;
+  const scopeSelect = $("#imageCacheScope");
+  if (scopeSelect) {
+    const current = state.imageCacheScope || "all";
+    scopeSelect.innerHTML = [
+      `<option value="all">全部范围</option>`,
+      ...state.imageCacheScopes.map((scope) => `<option value="${escapeHtml(scope)}">${escapeHtml(imageCacheScopeLabel(scope))}</option>`),
+    ].join("");
+    scopeSelect.value = current;
+  }
+  const filterInput = $("#imageCacheFilter");
+  if (filterInput && filterInput.value !== state.imageCacheFilter) {
+    filterInput.value = state.imageCacheFilter || "";
+  }
+  listEl.innerHTML = items.length
+    ? items.map((item) => imageCacheListItemMarkup(item)).join("")
+    : `<div class="empty image-cache-empty"><b>暂无缓存条目</b><span>收到图片或表情包并完成视觉转述后会出现在这里。</span></div>`;
+  detailEl.innerHTML = selected ? imageCacheDetailMarkup(selected) : `
+    <div class="empty image-cache-empty">
+      <b>选择一条缓存</b>
+      <span>左侧点击图片/表情包缓存后，可以编辑摘要或删除。</span>
+    </div>
+  `;
+}
+
+function imageCacheListItemMarkup(item) {
+  const selected = item.key === state.selectedImageCacheKey;
+  const title = item.image_type || imageCacheScopeLabel(item.scope);
+  const preview = item.visible || item.intent || item.text || "无摘要";
+  const ownership = item.ownership ? `<span>${escapeHtml(item.ownership)}</span>` : "";
+  const thumb = item.preview_url
+    ? `<span class="image-cache-thumb has-image"><img src="${escapeHtml(item.preview_url)}" alt="${escapeHtml(title)}" loading="lazy" /></span>`
+    : `<span class="image-cache-thumb">${escapeHtml((item.image_type || "图").slice(0, 2))}</span>`;
+  return `
+    <button type="button" class="image-cache-row ${selected ? "is-active" : ""}" data-image-cache-key="${escapeHtml(item.key)}">
+      ${thumb}
+      <span class="image-cache-row-main">
+        <b>${escapeHtml(title)}</b>
+        <small>${escapeHtml(preview)}</small>
+        <i>${escapeHtml(imageCacheScopeLabel(item.scope))} · 命中 ${escapeHtml(item.hits || 0)} · ${escapeHtml(item.last_hit || item.created || "未知时间")}</i>
+      </span>
+      ${ownership}
+    </button>
+  `;
+}
+
+function imageCacheDetailMarkup(item) {
+  const aliases = Array.isArray(item.image_aliases) ? item.image_aliases : [];
+  const keys = Array.isArray(item.image_keys) ? item.image_keys : [];
+  const previewMeta = item.preview_url
+    ? [
+        item.preview_width && item.preview_height ? `${item.preview_width}x${item.preview_height}` : "",
+        item.preview_size ? formatBytes(item.preview_size) : "",
+      ].filter(Boolean).join(" · ")
+    : "";
+  return `
+    <form class="image-cache-editor" data-image-cache-editor="${escapeHtml(item.key)}">
+      <header>
+        <div>
+          <span class="module-badge">${escapeHtml(imageCacheScopeLabel(item.scope))}</span>
+          <h3>${escapeHtml(item.image_type || "图片缓存")}</h3>
+          <p>${escapeHtml(item.intent || item.visible || "可编辑这张图片/表情包的视觉摘要。")}</p>
+        </div>
+        <button type="button" class="danger" data-image-cache-delete="${escapeHtml(item.key)}">删除缓存</button>
+      </header>
+      ${item.preview_url ? `
+        <figure class="image-cache-preview">
+          <img src="${escapeHtml(item.preview_url)}" alt="${escapeHtml(item.image_type || "图片缓存预览")}" />
+          ${previewMeta ? `<figcaption>${escapeHtml(previewMeta)} · 压缩预览</figcaption>` : `<figcaption>压缩预览</figcaption>`}
+        </figure>
+      ` : ""}
+      <div class="image-cache-meta">
+        <div><dt>Provider</dt><dd>${escapeHtml(item.provider_id || "未记录")}</dd></div>
+        <div><dt>创建</dt><dd>${escapeHtml(item.created || "-")}</dd></div>
+        <div><dt>最近命中</dt><dd>${escapeHtml(item.last_hit || "未命中")}</dd></div>
+        <div><dt>编辑</dt><dd>${escapeHtml(item.edited || "未编辑")}</dd></div>
+        <div><dt>图片数</dt><dd>${escapeHtml(item.image_count || keys.length || 1)}</dd></div>
+        <div><dt>Prompt</dt><dd>${escapeHtml(item.prompt_sig || "-")}</dd></div>
+      </div>
+      <label>缓存范围
+        <select name="scope">
+          ${["private_image", "private_image_query", "forward_image", "screen_peek"].map((scope) => `
+            <option value="${escapeHtml(scope)}" ${item.scope === scope ? "selected" : ""}>${escapeHtml(imageCacheScopeLabel(scope))}</option>
+          `).join("")}
+        </select>
+      </label>
+      <label>Provider ID
+        <input name="provider_id" value="${escapeHtml(item.provider_id || "")}" />
+      </label>
+      <label class="wide-field">视觉摘要
+        <textarea name="text" rows="10">${escapeHtml(item.text || "")}</textarea>
+      </label>
+      <details class="image-cache-keys wide-field">
+        <summary>缓存键和别名</summary>
+        <code>${escapeHtml(item.key)}</code>
+        ${keys.length ? `<p>${keys.map((key) => `<span>${escapeHtml(key)}</span>`).join("")}</p>` : ""}
+        ${aliases.length ? `<p>${aliases.map((alias) => `<span>${escapeHtml(alias)}</span>`).join("")}</p>` : ""}
+      </details>
+      <div class="actions">
+        <button type="button" data-copy-text="${escapeHtml(item.text || "")}">复制摘要</button>
+        <button type="submit">保存缓存</button>
+      </div>
+    </form>
+  `;
 }
 
 function renderRelationshipChart() {
@@ -6933,10 +7417,16 @@ const featureDetailGuides = {
     disabled: "技能页不再增长，日程不受技能等级约束。",
   },
   enable_message_debounce: {
-    summary: "把消息收口从图片增强里拆出来，分别控制文本、图片和合并转发的补话等待时间。",
+    summary: "分别控制文本、图片和合并转发的补话等待；旧版语义收口等待已并入文本等待。",
     trigger: "私聊或群聊消息进入回复链前。",
-    enabled: "不同消息类型按各自秒数等待补充说明；设为 0 的类型会直接进入主链。",
-    disabled: "不做语义收口等待，只保留重复消息去重。",
+    enabled: "不同消息类型按各自秒数等待补充说明；智能文本收口开启后，文本只在小模型判断“用户还没说完”时短等。",
+    disabled: "不等待用户补话，只保留重复上报去重。",
+  },
+  enable_smart_message_debounce: {
+    summary: "用小模型判断用户这句话是否还没说完，并把误判样本带给下次判断。",
+    trigger: "目标私聊文本、群聊中明确对 Bot 说话的文本进入回复链前。",
+    enabled: "疑似起手、转折、列举或停在半句话时会短等补充；完整问句、请求、贴贴和问候会直接回复。",
+    disabled: "文本按固定补话等待秒数处理，不额外调用小模型判断。",
   },
   enable_recall_enhancement: {
     summary: "把 QQ/OneBot 撤回事件纳入插件上下文，提供发送前取消回复、短期撤回消息转述和违禁词自动撤回。",
@@ -6949,12 +7439,6 @@ const featureDetailGuides = {
     trigger: "私聊图片进入视觉转述链路、引用图片被解析、合并转发含图片或动态 GIF 需要抽帧时。",
     enabled: "视觉摘要会结合当前角色名字、人设和自定义线索，并尽量区分“当前角色/用户/无关图片/无法判断”。",
     disabled: "不再额外做插件侧图片转述增强和角色自我识别；图片收口等待仍由“消息收口防抖”控制。",
-  },
-  enable_semantic_message_debounce: {
-    summary: "旧版兼容开关。新配置请使用“消息收口防抖”。",
-    trigger: "读取旧配置时。",
-    enabled: "作为新总开关的默认值参与兼容。",
-    disabled: "作为新总开关的默认值参与兼容。",
   },
   enable_environment_perception: {
     summary: "提供当前时间、日期、平台、聊天类型和消息媒介，让日程与回复不脱离现实语境。",
@@ -8196,6 +8680,14 @@ async function runAction(action, successMessage = "", control = null) {
 function switchTab(tabName) {
   document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("is-active", item.dataset.tab === tabName));
   document.querySelectorAll(".panel").forEach((item) => item.classList.toggle("is-active", item.id === `panel-${tabName}`));
+  if (tabName === "image-cache") {
+    renderImageCache();
+    loadImageCache().catch((error) => showToast(`图片缓存加载失败：${error.message}`, "error"));
+  }
+  if (tabName === "troubleshooting") {
+    renderTroubleshooting();
+    loadTroubleshooting().catch((error) => showToast(`排障信息加载失败：${error.message}`, "error"));
+  }
 }
 
 document.querySelectorAll(".tab").forEach((button) => {
@@ -8208,6 +8700,77 @@ document.addEventListener("click", (event) => {
   const target = event.target instanceof Element ? event.target.closest("[data-jump-tab]") : null;
   if (!target) return;
   switchTab(target.dataset.jumpTab);
+});
+
+document.addEventListener("click", async (event) => {
+  const element = event.target instanceof Element ? event.target : null;
+  const troubleshootingFilter = element?.closest("[data-troubleshooting-filter]");
+  if (troubleshootingFilter) {
+    state.troubleshootingFilter = troubleshootingFilter.dataset.troubleshootingFilter || "all";
+    renderTroubleshooting();
+    return;
+  }
+  const troubleshootingRefresh = element?.closest("[data-troubleshooting-refresh]");
+  if (troubleshootingRefresh) {
+    setActionBusy(troubleshootingRefresh, true);
+    try {
+      await loadTroubleshooting();
+      showToast("排障信息已刷新");
+    } catch (error) {
+      showToast(`刷新失败：${error.message}`, "error");
+    } finally {
+      setActionBusy(troubleshootingRefresh, false);
+    }
+    return;
+  }
+  const troubleshootingTest = element?.closest("[data-troubleshooting-test]");
+  if (troubleshootingTest) {
+    const testType = troubleshootingTest.dataset.troubleshootingTest || "";
+    setActionBusy(troubleshootingTest, true);
+    try {
+      const result = await postJson("/troubleshooting/test", { type: testType });
+      state.troubleshooting = state.troubleshooting || {};
+      state.troubleshooting.chain_tests = {
+        ...(state.troubleshooting.chain_tests || {}),
+        [testType]: result,
+      };
+      renderTroubleshooting();
+      showToast(result.ok ? "链路测试通过" : `链路测试失败：${result.error || "未返回有效结果"}`, result.ok ? "success" : "error");
+    } catch (error) {
+      showToast(`链路测试失败：${error.message}`, "error");
+    } finally {
+      setActionBusy(troubleshootingTest, false);
+    }
+    return;
+  }
+  const copyButton = element?.closest("[data-copy-text]");
+  if (copyButton) {
+    void copyTextToClipboard(copyButton.dataset.copyText || "", "已复制摘要");
+    return;
+  }
+  const row = element?.closest("[data-image-cache-key]");
+  if (row) {
+    state.selectedImageCacheKey = row.dataset.imageCacheKey || "";
+    renderImageCache();
+    return;
+  }
+  const deleteButton = element?.closest("[data-image-cache-delete]");
+  if (deleteButton) {
+    const key = deleteButton.dataset.imageCacheDelete || "";
+    if (!key) return;
+    if (!requireSecondClick(deleteButton, `image-cache:${key}`, "再次点击会删除这条图片缓存")) return;
+    setActionBusy(deleteButton, true);
+    try {
+      await postJson("/image_cache/delete", { key });
+      state.selectedImageCacheKey = "";
+      await loadImageCache();
+      showToast("图片缓存已删除");
+    } catch (error) {
+      showToast(`删除失败：${error.message}`, "error");
+    } finally {
+      setActionBusy(deleteButton, false);
+    }
+  }
 });
 
 document.addEventListener("click", (event) => {
@@ -8438,6 +9001,31 @@ document.addEventListener("submit", (event) => {
   void updateSelectedBookshelfTags(form);
 });
 
+document.addEventListener("submit", async (event) => {
+  const form = event.target instanceof HTMLFormElement ? event.target : null;
+  if (!form || !form.matches("[data-image-cache-editor]")) return;
+  event.preventDefault();
+  const key = form.dataset.imageCacheEditor || "";
+  const submit = form.querySelector('button[type="submit"]');
+  const formData = new FormData(form);
+  setActionBusy(submit, true);
+  try {
+    const updated = await postJson("/image_cache/update", {
+      key,
+      text: formData.get("text"),
+      scope: formData.get("scope"),
+      provider_id: formData.get("provider_id"),
+    });
+    state.selectedImageCacheKey = updated?.key || key;
+    await loadImageCache();
+    showToast("图片缓存已保存");
+  } catch (error) {
+    showToast(`保存失败：${error.message}`, "error");
+  } finally {
+    setActionBusy(submit, false);
+  }
+});
+
 document.addEventListener("change", (event) => {
   const target = event.target instanceof HTMLSelectElement ? event.target : null;
   if (!target || !target.matches("[data-diary-date]")) return;
@@ -8446,6 +9034,23 @@ document.addEventListener("change", (event) => {
 });
 
 $("#refreshBtn").addEventListener("click", loadAll);
+$("#refreshImageCacheBtn")?.addEventListener("click", () => {
+  loadImageCache().catch((error) => showToast(`刷新失败：${error.message}`, "error"));
+});
+$("#refreshTroubleshootingBtn")?.addEventListener("click", () => {
+  loadTroubleshooting().then(() => showToast("排障信息已刷新")).catch((error) => showToast(`刷新失败：${error.message}`, "error"));
+});
+$("#imageCacheFilter")?.addEventListener("input", (event) => {
+  state.imageCacheFilter = event.target.value || "";
+  window.clearTimeout(state._imageCacheFilterTimer);
+  state._imageCacheFilterTimer = window.setTimeout(() => {
+    loadImageCache().catch((error) => showToast(`筛选失败：${error.message}`, "error"));
+  }, 220);
+});
+$("#imageCacheScope")?.addEventListener("change", (event) => {
+  state.imageCacheScope = event.target.value || "all";
+  loadImageCache().catch((error) => showToast(`筛选失败：${error.message}`, "error"));
+});
 $("#bookshelfUnlockForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const password = $("#bookshelfPassword").value.trim();

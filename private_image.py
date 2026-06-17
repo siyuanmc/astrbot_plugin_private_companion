@@ -455,6 +455,66 @@ class PrivateImageMixin:
             logger.debug("[PrivateCompanion] 私聊图片视觉指纹生成失败: %s", exc)
         return []
 
+    def _private_image_cache_preview_dir(self) -> Path:
+        return Path(self.data_dir) / "private_image_cache_previews"
+
+    def _remove_private_image_cache_preview_file(self, preview_path: str) -> None:
+        if not preview_path:
+            return
+        try:
+            path = Path(preview_path).resolve()
+            base = self._private_image_cache_preview_dir().resolve()
+            if path.is_file() and path.is_relative_to(base):
+                path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _private_image_cache_preview_from_sources(
+        self,
+        cache_key: str,
+        sources: list[str],
+    ) -> dict[str, Any]:
+        clean_key = re.sub(r"[^0-9A-Za-z_.-]+", "_", str(cache_key or ""))[:80]
+        if not clean_key:
+            return {}
+        try:
+            from PIL import Image as PILImage, ImageOps
+        except Exception:
+            return {}
+        for source in [str(item).strip() for item in (sources or []) if str(item or "").strip()][:6]:
+            raw = self._private_image_source_bytes_for_cache_alias(source)
+            if not raw:
+                continue
+            try:
+                with PILImage.open(io.BytesIO(raw)) as image:
+                    image.seek(0)
+                    image = ImageOps.exif_transpose(image)
+                    if image.mode not in {"RGB", "L"}:
+                        image = image.convert("RGBA")
+                        background = PILImage.new("RGBA", image.size, (255, 255, 255, 255))
+                        background.alpha_composite(image)
+                        image = background.convert("RGB")
+                    else:
+                        image = image.convert("RGB")
+                    image.thumbnail((320, 320))
+                    target_dir = self._private_image_cache_preview_dir()
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    target = target_dir / f"{clean_key}.jpg"
+                    image.save(target, format="JPEG", quality=72, optimize=True, progressive=True)
+                    try:
+                        file_size = target.stat().st_size
+                    except Exception:
+                        file_size = 0
+                    return {
+                        "preview_path": str(target),
+                        "preview_width": int(image.width),
+                        "preview_height": int(image.height),
+                        "preview_size": int(file_size),
+                    }
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] 图片缓存预览生成失败: %s", exc)
+        return {}
+
     def _private_image_cache_aliases_for_sources(self, sources: list[str]) -> list[str]:
         aliases: list[str] = []
         for source in [str(item).strip() for item in (sources or []) if str(item or "").strip()][:4]:
@@ -595,6 +655,7 @@ class PrivateImageMixin:
         image_count: int = 0,
         prompt: str = "",
         scope: str = "private_image",
+        preview: dict[str, Any] | None = None,
     ) -> None:
         if not bool(getattr(self, "enable_private_image_vision_cache", True)):
             return
@@ -628,9 +689,15 @@ class PrivateImageMixin:
             stale_prompt_variant = same_provider_variant and old_prompt_sig != prompt_sig
             duplicate_provider_variant = same_reusable_image and old_provider and old_provider != clean_provider and _safe_int(old_item.get("hits"), 0, 0) == 0
             if stale_prompt_variant or duplicate_provider_variant:
+                if isinstance(old_item, dict):
+                    self._remove_private_image_cache_preview_file(_single_line(old_item.get("preview_path"), 260))
                 cache.pop(old_key, None)
                 removed_variants += 1
-        cache[cache_key] = {
+        existing_preview_path = ""
+        existing_item = cache.get(cache_key)
+        if isinstance(existing_item, dict):
+            existing_preview_path = _single_line(existing_item.get("preview_path"), 260)
+        item = {
             "text": cleaned,
             "provider_id": clean_provider,
             "image_keys": clean_image_keys,
@@ -642,6 +709,27 @@ class PrivateImageMixin:
             "last_hit_ts": 0,
             "hits": 0,
         }
+        if isinstance(preview, dict) and preview.get("preview_path"):
+            item.update(
+                {
+                    "preview_path": _single_line(preview.get("preview_path"), 260),
+                    "preview_width": _safe_int(preview.get("preview_width"), 0, 0),
+                    "preview_height": _safe_int(preview.get("preview_height"), 0, 0),
+                    "preview_size": _safe_int(preview.get("preview_size"), 0, 0),
+                }
+            )
+            if existing_preview_path and existing_preview_path != item["preview_path"]:
+                self._remove_private_image_cache_preview_file(existing_preview_path)
+        elif isinstance(existing_item, dict) and existing_preview_path:
+            item.update(
+                {
+                    "preview_path": existing_preview_path,
+                    "preview_width": _safe_int(existing_item.get("preview_width"), 0, 0),
+                    "preview_height": _safe_int(existing_item.get("preview_height"), 0, 0),
+                    "preview_size": _safe_int(existing_item.get("preview_size"), 0, 0),
+                }
+            )
+        cache[cache_key] = item
         if removed_variants:
             self._record_cache_metric(f"image_vision:{scope}", hit=True, detail=f"dedupe:{removed_variants}")
         max_items = int(getattr(self, "private_image_vision_cache_max_items", 300) or 0)
@@ -656,7 +744,9 @@ class PrivateImageMixin:
             )
             evicted = 0
             for key, _ in stale[: max(1, len(cache) - max_items)]:
-                cache.pop(key, None)
+                removed = cache.pop(key, None)
+                if isinstance(removed, dict):
+                    self._remove_private_image_cache_preview_file(_single_line(removed.get("preview_path"), 260))
                 evicted += 1
             if evicted:
                 self._record_cache_metric(f"image_vision:{scope}", hit=False, detail=f"evict:{evicted}")
@@ -1449,6 +1539,7 @@ class PrivateImageMixin:
                     image_count=image_count,
                     prompt=prompt,
                     scope=scope,
+                    preview=self._private_image_cache_preview_from_sources(cache_key, [*original_sources, *sources]),
                 )
                 return cleaned_text
             except Exception as exc:
@@ -1470,14 +1561,14 @@ class PrivateImageMixin:
     def _message_debounce_seconds(self, kind: str = "text") -> float:
         if not bool(getattr(self, "enable_message_debounce", getattr(self, "enable_semantic_message_debounce", True))):
             return 0.0
-        legacy = _safe_float(getattr(self, "semantic_message_debounce_seconds", 0.0), 0.0, 0.0)
+        text_wait = _safe_float(getattr(self, "text_message_debounce_seconds", 0.0), 0.0, 0.0)
         if kind == "image":
-            return max(0.0, _safe_float(getattr(self, "image_message_debounce_seconds", legacy), legacy, 0.0))
+            return max(0.0, _safe_float(getattr(self, "image_message_debounce_seconds", 8.0), 8.0, 0.0))
         if kind == "forward":
             return max(0.0, _safe_float(getattr(self, "forward_message_debounce_seconds", 0.0), 0.0, 0.0))
         if kind == "group":
-            return max(0.0, legacy)
-        return max(0.0, _safe_float(getattr(self, "text_message_debounce_seconds", 0.0), 0.0, 0.0))
+            return max(0.0, text_wait)
+        return max(0.0, text_wait)
 
     async def _consume_semantic_message_buffer_for_event(self, event: AstrMessageEvent, *, private_chat: bool) -> str:
         try:
@@ -1514,9 +1605,26 @@ class PrivateImageMixin:
         buffer = buffers.get(key)
         if not isinstance(buffer, dict):
             return ""
-        wait = max(0.0, _safe_float(buffer.get("wait_seconds"), getattr(self, "semantic_message_debounce_seconds", 0.0), 0.0))
+        wait = max(0.0, _safe_float(buffer.get("wait_seconds"), getattr(self, "text_message_debounce_seconds", 0.0), 0.0))
         if wait <= 0:
             return ""
+        identity = getattr(self, "_semantic_buffer_identity", None)
+        if callable(identity):
+            log_scope, log_sender = identity(key)
+        else:
+            log_scope, log_sender = (key.rsplit(":", 1) + [""])[:2] if ":" in key else (key, "")
+        if not log_sender:
+            log_sender = sender_id
+        buffer_kind = _single_line(buffer.get("kind"), 40) or ("group_high_intensity" if force_consume else "text")
+        initial_messages = buffer.get("messages") if isinstance(buffer.get("messages"), list) else []
+        logger.info(
+            "[PrivateCompanion] 消息收口等待开始: kind=%s scope=%s sender=%s wait=%.1fs count=%s",
+            buffer_kind,
+            log_scope,
+            log_sender,
+            wait,
+            len(initial_messages),
+        )
         deadline_guard = _now_ts() + max(wait + 2.0, min(30.0, wait * 3.0 + 2.0))
         while True:
             buffer = buffers.get(key)
@@ -1535,6 +1643,61 @@ class PrivateImageMixin:
         if not isinstance(buffer, dict):
             return ""
         messages = buffer.get("messages") if isinstance(buffer.get("messages"), list) else []
+        smart_meta = buffer.get("smart_debounce") if isinstance(buffer.get("smart_debounce"), dict) else {}
+        if smart_meta.get("enabled"):
+            learned_messages = [
+                _single_line(item.get("text"), 180)
+                for item in messages
+                if isinstance(item, dict) and _single_line(item.get("text"), 180)
+            ]
+            if len(learned_messages) <= 1:
+                scope = self._event_scope_key(event)
+                self._record_smart_message_debounce_example(
+                    kind="false_incomplete",
+                    scope=scope,
+                    sender_id=sender_id,
+                    messages=learned_messages,
+                    previous_decision="incomplete",
+                    note="模型判断未说完并等待,但用户没有继续补充。",
+                )
+                recorder = getattr(self, "_record_smart_message_debounce_log", None)
+                if callable(recorder):
+                    recorder(
+                        scope=scope,
+                        sender_id=sender_id,
+                        text=" / ".join(learned_messages[:3]),
+                        decision="incomplete",
+                        outcome="timeout_single",
+                        note="等待结束但没有等到补话,本次会作为误等样本。",
+                        source="buffer",
+                        message_count=len(learned_messages),
+                    )
+                logger.info(
+                    "[PrivateCompanion] 智能防抖等待结束未等到补话: scope=%s sender=%s messages=%s",
+                    scope,
+                    sender_id,
+                    len(learned_messages),
+                )
+            else:
+                scope = self._event_scope_key(event)
+                recorder = getattr(self, "_record_smart_message_debounce_log", None)
+                if callable(recorder):
+                    recorder(
+                        scope=scope,
+                        sender_id=sender_id,
+                        text=" / ".join(learned_messages[:3]),
+                        decision="incomplete",
+                        outcome="merged_followup",
+                        note="等待期间收到补话,已合并为同一轮。",
+                        source="buffer",
+                        message_count=len(learned_messages),
+                    )
+                logger.info(
+                    "[PrivateCompanion] 智能防抖等待命中补话: scope=%s sender=%s messages=%s",
+                    scope,
+                    sender_id,
+                    len(learned_messages),
+                )
         lines = []
         for item in messages[:8]:
             if not isinstance(item, dict):
@@ -1547,8 +1710,24 @@ class PrivateImageMixin:
                 else:
                     lines.append(text)
         if len(lines) <= 1:
+            logger.info(
+                "[PrivateCompanion] 消息收口等待结束: kind=%s scope=%s sender=%s count=%s result=single",
+                buffer_kind,
+                log_scope,
+                log_sender,
+                len(lines),
+            )
             return ""
-        return "\n".join(f"{idx + 1}. {line}" for idx, line in enumerate(lines))
+        merged = "\n".join(f"{idx + 1}. {line}" for idx, line in enumerate(lines))
+        logger.info(
+            "[PrivateCompanion] 消息收口等待结束: kind=%s scope=%s sender=%s count=%s result=merged preview=%s",
+            buffer_kind,
+            log_scope,
+            log_sender,
+            len(lines),
+            _single_line(merged, 120),
+        )
+        return merged
 
     def _take_buffered_private_images_for_event(self, event: AstrMessageEvent) -> list[str]:
         context = self._take_buffered_private_image_context_for_event(event)
@@ -1642,12 +1821,14 @@ class PrivateImageMixin:
             await self._send_private_image_reply_chain(event, outbound_chains[0])
             return
         logger.info("[PrivateCompanion] 私聊单图回复按手动链路分段发送: segments=%s", len(outbound_chains))
+        remainder_started_at = _now_ts()
         await self._send_private_image_reply_chain(event, outbound_chains[0])
         asyncio.create_task(
             self._send_private_image_reply_remainder_chains(
                 event,
                 outbound_chains[1:],
                 previous_text=self._private_image_chain_text(outbound_chains[0]),
+                started_at=remainder_started_at,
             )
         )
 
@@ -1722,36 +1903,63 @@ class PrivateImageMixin:
         chains: list[list[Any]],
         *,
         previous_text: str = "",
+        started_at: float | None = None,
     ) -> None:
         prev = previous_text
         total = len([item for item in chains if item])
         sent_index = 0
-        for chain in chains:
-            if not chain:
-                continue
-            sent_index += 1
+        scope_getter = getattr(self, "_event_scope_key", None)
+        scope = ""
+        if callable(scope_getter):
             try:
-                wait_for = prev or self._private_image_chain_text(chain)
-                delay = await self._calc_segmented_proactive_interval(wait_for)
-                if delay > 0:
-                    await asyncio.sleep(delay)
-                await self._send_private_image_reply_chain(event, chain)
-                logger.info(
-                    "[PrivateCompanion] 私聊单图剩余片段已发送: index=%s/%s preview=%s",
-                    sent_index,
-                    total,
-                    self._private_image_chain_text(chain) or chain[0].__class__.__name__,
-                )
-                prev = self._private_image_chain_text(chain) or prev
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning(
-                    "[PrivateCompanion] 私聊单图剩余片段发送失败: error=%s",
-                    _single_line(exc, 160),
-                    exc_info=True,
-                )
-                return
+                scope = _single_line(scope_getter(event), 160)
+            except Exception:
+                scope = ""
+        if not scope:
+            scope = _single_line(getattr(event, "unified_msg_origin", ""), 160) or "unknown"
+        lock_getter = getattr(self, "_segmented_remainder_lock", None)
+        lock = lock_getter(scope) if callable(lock_getter) else asyncio.Lock()
+        started_at = _safe_float(started_at, _now_ts(), 0.0) or _now_ts()
+        async with lock:
+            for chain in chains:
+                if not chain:
+                    continue
+                sent_index += 1
+                try:
+                    wait_for = prev or self._private_image_chain_text(chain)
+                    delay = await self._calc_segmented_proactive_interval(wait_for)
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    activity_checker = getattr(self, "_scope_has_new_inbound_activity", None)
+                    if callable(activity_checker):
+                        try:
+                            if activity_checker(scope, started_at, ignore_self=True):
+                                logger.info(
+                                    "[PrivateCompanion] 会话已有新消息，停止发送私聊单图剩余片段: scope=%s sent=%s/%s",
+                                    scope,
+                                    max(0, sent_index - 1),
+                                    total,
+                                )
+                                return
+                        except Exception:
+                            pass
+                    await self._send_private_image_reply_chain(event, chain)
+                    logger.info(
+                        "[PrivateCompanion] 私聊单图剩余片段已发送: index=%s/%s preview=%s",
+                        sent_index,
+                        total,
+                        self._private_image_chain_text(chain) or chain[0].__class__.__name__,
+                    )
+                    prev = self._private_image_chain_text(chain) or prev
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning(
+                        "[PrivateCompanion] 私聊单图剩余片段发送失败: error=%s",
+                        _single_line(exc, 160),
+                        exc_info=True,
+                    )
+                    return
 
     def _take_buffered_private_image_context_for_event(self, event: AstrMessageEvent) -> dict[str, Any]:
         try:

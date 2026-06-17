@@ -543,6 +543,10 @@ class ProactiveMixin:
         now: float | None = None,
     ) -> tuple[float, float]:
         now_dt = self._environment_fromtimestamp(now or _now_ts())
+        if self._private_user_role(user) == "friend":
+            spread_delay = self._friend_proactive_spread_delay_hours(user, now=now_dt.timestamp())
+            if spread_delay is not None:
+                return spread_delay
         sent_today = _safe_int(user.get("sent_today"), 0)
         remaining_target = max(1, math.ceil(max(0.0, self._soft_daily_target(user) - sent_today)))
         counts = self._today_proactive_daypart_counts(user)
@@ -569,6 +573,75 @@ class ProactiveMixin:
         if remaining_target >= 2:
             return (0.5, 1.6)
         return (0.9, 2.4)
+
+    def _friend_proactive_spread_delay_hours(
+        self,
+        user: dict[str, Any],
+        *,
+        now: float | None = None,
+    ) -> tuple[float, float] | None:
+        if self._private_user_role(user) != "friend":
+            return None
+        now_dt = self._environment_fromtimestamp(now or _now_ts())
+        sent_today = _safe_int(user.get("sent_today"), 0)
+        daily_limit = self._effective_user_daily_limit(user)
+        if daily_limit <= 1 or sent_today <= 0:
+            return None
+        minute = now_dt.hour * 60 + now_dt.minute
+        if sent_today <= 1:
+            if minute < 14 * 60:
+                return self._delay_hours_until_local_window(now_dt, 14 * 60, 17 * 60)
+            if minute < 18 * 60:
+                return self._delay_hours_until_local_window(now_dt, 19 * 60, 21 * 60 + 20)
+            return (6.0, 11.0)
+        if sent_today <= 2 and daily_limit >= 3:
+            if minute < 18 * 60 + 30:
+                return self._delay_hours_until_local_window(now_dt, 18 * 60 + 40, 21 * 60 + 20)
+            return (8.0, 14.0)
+        return (10.0, 18.0)
+
+    def _delay_hours_until_local_window(
+        self,
+        now_dt: datetime,
+        start_minute: int,
+        end_minute: int,
+    ) -> tuple[float, float]:
+        base = datetime.combine(now_dt.date(), datetime.min.time(), tzinfo=now_dt.tzinfo)
+        start_dt = base + timedelta(minutes=start_minute)
+        end_dt = base + timedelta(minutes=end_minute)
+        if end_dt <= start_dt:
+            end_dt += timedelta(days=1)
+        if end_dt <= now_dt + timedelta(minutes=20):
+            start_dt += timedelta(days=1)
+            end_dt += timedelta(days=1)
+        start_dt = max(start_dt, now_dt + timedelta(hours=3))
+        if end_dt <= start_dt:
+            end_dt = start_dt + timedelta(minutes=90)
+        min_hours = max(0.25, (start_dt - now_dt).total_seconds() / 3600)
+        max_hours = max(min_hours + 0.5, (end_dt - now_dt).total_seconds() / 3600)
+        return (min_hours, max_hours)
+
+    def _friend_proactive_scheduled_too_early(
+        self,
+        user: dict[str, Any],
+        scheduled_at: float,
+    ) -> bool:
+        if self._private_user_role(user) != "friend" or scheduled_at <= 0:
+            return False
+        daily_limit = self._effective_user_daily_limit(user)
+        sent_today = _safe_int(user.get("sent_today"), 0)
+        if daily_limit <= 1 or sent_today <= 0:
+            return False
+        now_dt = self._environment_now()
+        scheduled_dt = self._environment_fromtimestamp(scheduled_at)
+        if scheduled_dt.date() != now_dt.date():
+            return False
+        minute = scheduled_dt.hour * 60 + scheduled_dt.minute
+        if sent_today >= 2 and daily_limit >= 3:
+            return minute < 18 * 60 + 30
+        if sent_today >= 1:
+            return minute < 14 * 60
+        return False
 
     def _schedule_next_proactive(
         self,

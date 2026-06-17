@@ -430,13 +430,63 @@
   "enable_message_debounce": {
     "description": "启用消息收口防抖",
     "type": "bool",
-    "hint": "独立的消息收口总开关。开启后可分别设置文本、图片、转发消息的等待补充时间；关闭后不再等待用户补话。",
+    "hint": "消息收口总开关。开启后可分别设置文本、图片、转发消息的补话等待时间；旧版语义收口等待会作为文本补话等待的兼容默认值。",
     "default": true
   },
-  "text_message_debounce_seconds": {
-    "description": "文本消息收口秒数",
+  "enable_smart_message_debounce": {
+    "description": "启用智能文本收口",
+    "type": "bool",
+    "hint": "默认关闭。开启后会用轻量文本模型判断用户是否还没说完；只有疑似没说完时才短等补话，完整文本不再固定等待，并记录误判样本供下次判断参考。",
+    "default": false,
+    "condition": "enable_message_debounce"
+  },
+  "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID": {
+    "description": "智能收口小模型 Provider ID",
+    "type": "string",
+    "hint": "用于判断用户是否说完的轻量文本模型。留空时跟随插件主模型；建议选择便宜、响应快的小模型。",
+    "default": "",
+    "condition": "enable_smart_message_debounce"
+  },
+  "smart_message_debounce_wait_seconds": {
+    "description": "智能收口等待秒数",
     "type": "float",
-    "hint": "用户发普通文本后等待补充的秒数。设为 0 可让普通短句立即进入主链，不等待语义收口。",
+    "hint": "小模型判断用户还没说完时等待补充的秒数。完整发言不会额外等待。",
+    "slider": {
+      "min": 0,
+      "max": 15,
+      "step": 0.1
+    },
+    "default": 3,
+    "condition": "enable_smart_message_debounce"
+  },
+  "smart_message_debounce_learning_window_seconds": {
+    "description": "智能收口误判学习窗口",
+    "type": "float",
+    "hint": "如果刚判断已说完，但用户在该窗口内又补话，会记录为误判样本。",
+    "slider": {
+      "min": 1,
+      "max": 30,
+      "step": 1
+    },
+    "default": 8,
+    "condition": "enable_smart_message_debounce"
+  },
+  "smart_message_debounce_examples_limit": {
+    "description": "智能收口样本提示数量",
+    "type": "int",
+    "hint": "每次判断时带给小模型的近期误判样本数量。0 表示不注入历史样本。",
+    "slider": {
+      "min": 0,
+      "max": 30,
+      "step": 1
+    },
+    "default": 8,
+    "condition": "enable_smart_message_debounce"
+  },
+  "text_message_debounce_seconds": {
+    "description": "文本补话等待秒数",
+    "type": "float",
+    "hint": "用户发普通文本后等待补充的秒数。旧版“语义收口等待秒数”会迁移到这里；设为 0 表示文本不固定等待。",
     "slider": {
       "min": 0,
       "max": 8,
@@ -446,7 +496,7 @@
     "condition": "enable_message_debounce"
   },
   "image_message_debounce_seconds": {
-    "description": "图片消息收口秒数",
+    "description": "图片补话等待秒数",
     "type": "float",
     "hint": "用户只发图片、截图或表情包后等待补充说明的秒数。适合保留几秒，方便先图后文合并为同一轮。",
     "slider": {
@@ -458,7 +508,7 @@
     "condition": "enable_message_debounce"
   },
   "forward_message_debounce_seconds": {
-    "description": "转发消息收口秒数",
+    "description": "转发补话等待秒数",
     "type": "float",
     "hint": "用户只发合并转发/聊天记录后等待补充说明的秒数。设为 0 表示转发消息不额外等待。",
     "slider": {
@@ -472,14 +522,14 @@
   "enable_semantic_message_debounce": {
     "description": "旧版语义收口开关",
     "type": "bool",
-    "hint": "兼容旧配置。新配置请使用“启用消息收口防抖”。",
+    "hint": "兼容旧配置。运行时会并入“消息收口防抖”，不再作为独立功能配置。",
     "default": true,
     "invisible": true
   },
   "semantic_message_debounce_seconds": {
     "description": "旧版语义收口等待秒数",
     "type": "float",
-    "hint": "兼容旧配置。新配置请分别使用文本、图片、转发消息收口秒数。",
+    "hint": "兼容旧配置。运行时会作为“文本补话等待秒数”的默认值。",
     "default": 8,
     "invisible": true
   },
@@ -530,7 +580,7 @@
   "enable_private_image_vision_cache": {
     "description": "启用重复图片转述缓存",
     "type": "bool",
-    "hint": "开启后，同一张图片/表情包会按内容哈希复用上次视觉转述摘要，避免重复调用识图模型。只缓存图片摘要，不缓存最终聊天回复。",
+    "hint": "开启后，同一张图片/表情包会按内容哈希复用上次视觉转述摘要，避免重复调用识图模型。会保留压缩预览图用于缓存管理，不保留原始大图，也不缓存最终聊天回复。",
     "default": true,
     "condition": "enable_private_image_self_recognition"
   },
@@ -1919,7 +1969,7 @@
   "group_wakeup_debounce_pending_penalty": {
     "description": "收口等待兴趣降权",
     "type": "int",
-    "hint": "同一群友正在语义收口等待时，兴趣唤醒概率降低多少百分比，避免 Bot 等用户补充时又因兴趣词额外抢话。",
+    "hint": "同一群友正在补话等待时，兴趣唤醒概率降低多少百分比，避免 Bot 等用户补充时又因兴趣词额外抢话。",
     "slider": {
       "min": 0,
       "max": 100,

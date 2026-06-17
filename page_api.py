@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import time
 import re
 import shutil
@@ -8,6 +9,7 @@ import base64
 import hashlib
 import mimetypes
 import secrets
+import sqlite3
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -40,8 +42,14 @@ class PrivateCompanionPageApi:
             ("/group/update", self.update_group, ["POST"], "Private Companion Page update group"),
             ("/settings/update", self.update_settings, ["POST"], "Private Companion Page update settings"),
             ("/diagnostics", self.get_diagnostics, ["GET"], "Private Companion Page diagnostics"),
+            ("/troubleshooting", self.get_troubleshooting, ["GET"], "Private Companion Page troubleshooting"),
+            ("/troubleshooting/test", self.run_troubleshooting_test, ["POST"], "Private Companion Page troubleshooting test"),
             ("/token/stats", self.get_token_stats, ["GET"], "Private Companion Page token stats"),
             ("/token/reset", self.reset_token_stats, ["POST"], "Private Companion Page reset token stats"),
+            ("/image_cache/list", self.list_image_cache, ["GET"], "Private Companion Page image cache list"),
+            ("/image_cache/preview", self.get_image_cache_preview, ["GET"], "Private Companion Page image cache preview"),
+            ("/image_cache/update", self.update_image_cache_item, ["POST"], "Private Companion Page update image cache item"),
+            ("/image_cache/delete", self.delete_image_cache_item, ["POST"], "Private Companion Page delete image cache item"),
             ("/bookshelf/unlock", self.unlock_bookshelf, ["POST"], "Private Companion Page unlock bookshelf"),
             ("/bookshelf/image", self.get_bookshelf_image, ["GET"], "Private Companion Page bookshelf image"),
             ("/bookshelf/image_data", self.get_bookshelf_image_data, ["GET"], "Private Companion Page bookshelf image data"),
@@ -175,6 +183,206 @@ class PrivateCompanionPageApi:
                 "age": weather_age,
             },
         }
+
+    async def list_image_cache(self) -> dict[str, Any]:
+        try:
+            scope_filter = self._single_line(request.args.get("scope"), 40)
+            keyword = self._single_line(request.args.get("q"), 120).lower()
+            limit = self._query_int("limit", 80, 1, 300)
+            offset = self._query_int("offset", 0, 0, 100000)
+            async with self.plugin._data_lock:
+                data = deepcopy(self.plugin.data)
+            cache = data.get("private_image_vision_cache") if isinstance(data.get("private_image_vision_cache"), dict) else {}
+            rows: list[dict[str, Any]] = []
+            scopes: set[str] = set()
+            for key, raw in cache.items():
+                if not isinstance(raw, dict):
+                    continue
+                item = self._image_cache_item_summary(str(key), raw)
+                scope = item.get("scope") or "private_image"
+                scopes.add(str(scope))
+                if scope_filter and scope_filter != "all" and scope != scope_filter:
+                    continue
+                if keyword:
+                    haystack = " ".join(
+                        str(item.get(name) or "")
+                        for name in (
+                            "key",
+                            "text",
+                            "provider_id",
+                            "scope",
+                            "image_keys_text",
+                            "image_aliases_text",
+                            "image_type",
+                            "ownership",
+                            "intent",
+                        )
+                    ).lower()
+                    if keyword not in haystack:
+                        continue
+                rows.append(item)
+            rows.sort(
+                key=lambda item: (
+                    self._float(item.get("last_hit_ts"))
+                    or self._float(item.get("created_ts")),
+                    self._float(item.get("created_ts")),
+                ),
+                reverse=True,
+            )
+            total = len(rows)
+            return self._ok(
+                {
+                    "items": rows[offset : offset + limit],
+                    "total": total,
+                    "offset": offset,
+                    "limit": limit,
+                    "scopes": sorted(scopes),
+                    "enabled": bool(getattr(self.plugin, "enable_private_image_vision_cache", False)),
+                    "max_items": int(getattr(self.plugin, "private_image_vision_cache_max_items", 0) or 0),
+                }
+            )
+        except Exception as exc:
+            logger.error(f"[PrivateCompanionPage] 获取图片缓存失败: {exc}", exc_info=True)
+            return self._error(str(exc))
+
+    async def update_image_cache_item(self) -> dict[str, Any]:
+        payload = await request.get_json(silent=True) or {}
+        key = self._single_line(payload.get("key"), 120)
+        if not key:
+            return self._error("缺少缓存 key")
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return self._error("视觉摘要不能为空")
+        try:
+            async with self.plugin._data_lock:
+                cache = self.plugin.data.get("private_image_vision_cache")
+                if not isinstance(cache, dict) or not isinstance(cache.get(key), dict):
+                    return self._error("缓存条目不存在")
+                item = cache[key]
+                scope = self._single_line(item.get("scope"), 40) or "private_image"
+                item["text"] = self._single_line(text, 900 if scope == "forward_image" else 600)
+                if "provider_id" in payload:
+                    item["provider_id"] = self._single_line(payload.get("provider_id"), 160)
+                if "scope" in payload:
+                    next_scope = self._single_line(payload.get("scope"), 40)
+                    if next_scope:
+                        item["scope"] = next_scope
+                item["edited_ts"] = time.time()
+                self.plugin._save_data_sync()
+                updated = deepcopy(item)
+            return self._ok(self._image_cache_item_summary(key, updated))
+        except Exception as exc:
+            logger.error(f"[PrivateCompanionPage] 更新图片缓存失败: {exc}", exc_info=True)
+            return self._error(str(exc))
+
+    async def get_image_cache_preview(self) -> Any:
+        key = self._single_line(request.args.get("key"), 120)
+        if not key:
+            return self._error("缺少缓存 key")
+        try:
+            async with self.plugin._data_lock:
+                cache = deepcopy(self.plugin.data.get("private_image_vision_cache") or {})
+            item = cache.get(key) if isinstance(cache, dict) else None
+            if not isinstance(item, dict):
+                return self._error("缓存条目不存在")
+            preview_path = self._single_line(item.get("preview_path"), 260)
+            if not preview_path:
+                return self._error("该缓存没有预览图")
+            path = Path(preview_path).resolve()
+            base = (Path(getattr(self.plugin, "data_dir", "")) / "private_image_cache_previews").resolve()
+            if not path.is_file() or not path.is_relative_to(base):
+                return self._error("预览图不存在")
+            response = await send_file(path)
+            response.headers["Cache-Control"] = "private, max-age=3600"
+            return response
+        except Exception as exc:
+            logger.error(f"[PrivateCompanionPage] 获取图片缓存预览失败: {exc}", exc_info=True)
+            return self._error(str(exc))
+
+    async def delete_image_cache_item(self) -> dict[str, Any]:
+        payload = await request.get_json(silent=True) or {}
+        key = self._single_line(payload.get("key"), 120)
+        if not key:
+            return self._error("缺少缓存 key")
+        try:
+            preview_path = ""
+            async with self.plugin._data_lock:
+                cache = self.plugin.data.get("private_image_vision_cache")
+                if not isinstance(cache, dict) or key not in cache:
+                    return self._error("缓存条目不存在")
+                removed = cache.pop(key, None)
+                if isinstance(removed, dict):
+                    preview_path = self._single_line(removed.get("preview_path"), 260)
+                self.plugin._save_data_sync()
+                remaining = len(cache)
+            self._remove_image_cache_preview_file(preview_path)
+            return self._ok({"key": key, "remaining": remaining})
+        except Exception as exc:
+            logger.error(f"[PrivateCompanionPage] 删除图片缓存失败: {exc}", exc_info=True)
+            return self._error(str(exc))
+
+    def _remove_image_cache_preview_file(self, preview_path: str) -> None:
+        if not preview_path:
+            return
+        try:
+            path = Path(preview_path).resolve()
+            base = (Path(getattr(self.plugin, "data_dir", "")) / "private_image_cache_previews").resolve()
+            if path.is_file() and path.is_relative_to(base):
+                path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _image_cache_item_summary(self, key: str, raw: dict[str, Any]) -> dict[str, Any]:
+        text = str(raw.get("text") or "").strip()
+        image_keys = [str(value).strip() for value in raw.get("image_keys", []) if str(value or "").strip()]
+        image_aliases = [str(value).strip() for value in raw.get("image_aliases", []) if str(value or "").strip()]
+        scope = self._single_line(raw.get("scope"), 40) or "private_image"
+        created_ts = self._float(raw.get("created_ts"))
+        last_hit_ts = self._float(raw.get("last_hit_ts"))
+        edited_ts = self._float(raw.get("edited_ts"))
+        preview_path = self._single_line(raw.get("preview_path"), 260)
+        preview_exists = False
+        if preview_path:
+            try:
+                preview_exists = Path(preview_path).is_file()
+            except Exception:
+                preview_exists = False
+        return {
+            "key": self._single_line(key, 120),
+            "text": self._single_line(text, 900 if scope == "forward_image" else 600),
+            "provider_id": self._single_line(raw.get("provider_id"), 160),
+            "scope": scope,
+            "prompt_sig": self._single_line(raw.get("prompt_sig"), 32),
+            "image_keys": image_keys[:8],
+            "image_aliases": image_aliases[:12],
+            "image_keys_text": " ".join(image_keys[:8]),
+            "image_aliases_text": " ".join(image_aliases[:12]),
+            "image_count": _safe_int(raw.get("image_count"), len(image_keys), 0),
+            "preview_url": f"{PAGE_API_PREFIX}/image_cache/preview?key={quote(key, safe='')}" if preview_exists else "",
+            "preview_size": _safe_int(raw.get("preview_size"), 0, 0),
+            "preview_width": _safe_int(raw.get("preview_width"), 0, 0),
+            "preview_height": _safe_int(raw.get("preview_height"), 0, 0),
+            "hits": _safe_int(raw.get("hits"), 0, 0),
+            "created_ts": created_ts,
+            "last_hit_ts": last_hit_ts,
+            "edited_ts": edited_ts,
+            "created": self.plugin._format_timestamp_elapsed(created_ts),
+            "last_hit": self.plugin._format_timestamp_elapsed(last_hit_ts),
+            "edited": self.plugin._format_timestamp_elapsed(edited_ts),
+            "image_type": self._extract_labeled_text(text, "图片类型", 40),
+            "visible": self._extract_labeled_text(text, "可见内容", 180),
+            "intent": self._extract_labeled_text(text, "图像表达意图", 180),
+            "ownership": self._extract_labeled_text(text, "图像归属判断", 80),
+        }
+
+    @staticmethod
+    def _extract_labeled_text(text: str, label: str, limit: int) -> str:
+        source = str(text or "")
+        pattern = rf"{re.escape(label)}\s*[：:]\s*(.+?)(?=(?:\s+[^\s：:]{{2,20}}\s*[：:])|$)"
+        match = re.search(pattern, source)
+        if not match:
+            return ""
+        return PrivateCompanionPageApi._single_line(match.group(1), limit)
 
     def _auto_import_worldbook_if_needed_locked(self) -> None:
         if not bool(getattr(self.plugin, "worldbook_auto_import", False)):
@@ -470,6 +678,502 @@ class PrivateCompanionPageApi:
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 获取诊断失败: {exc}", exc_info=True)
             return self._error(str(exc))
+
+    async def get_troubleshooting(self) -> dict[str, Any]:
+        try:
+            async with self.plugin._data_lock:
+                data = deepcopy(self.plugin.data)
+            users = data.get("users") if isinstance(data.get("users"), dict) else {}
+            groups = data.get("groups") if isinstance(data.get("groups"), dict) else {}
+            diagnostics = self._build_diagnostics(users, groups)
+            proactive_tasks = self._proactive_task_summary(data)
+            proactive_candidates = self._proactive_candidate_summary(data)
+            token_stats = self._token_stats_payload(data.get("token_usage", {}))
+            cache = self._cache_summary(data)
+            tts = self._tts_runtime_summary(users)
+            sqlite_status = await self._sqlite_wal_status_summary()
+            recent_events = self._troubleshooting_recent_events(
+                diagnostics=diagnostics,
+                proactive_tasks=proactive_tasks,
+                proactive_candidates=proactive_candidates,
+                token_stats=token_stats,
+            )
+            checks = self._troubleshooting_checks(
+                data=data,
+                users=users,
+                diagnostics=diagnostics,
+                proactive_tasks=proactive_tasks,
+                proactive_candidates=proactive_candidates,
+                token_stats=token_stats,
+                cache=cache,
+                tts=tts,
+                sqlite_status=sqlite_status,
+            )
+            counts = {
+                "error": sum(1 for item in recent_events if item.get("level") == "error") + sum(1 for item in checks if item.get("level") == "error"),
+                "warn": sum(1 for item in recent_events if item.get("level") == "warn") + sum(1 for item in checks if item.get("level") == "warn"),
+                "info": sum(1 for item in recent_events if item.get("level") == "info") + sum(1 for item in checks if item.get("level") == "info"),
+                "ok": sum(1 for item in checks if item.get("level") == "ok"),
+            }
+            headline_level = "error" if counts["error"] else ("warn" if counts["warn"] else "ok")
+            headline = "发现需要处理的异常" if headline_level == "error" else ("有可关注项" if headline_level == "warn" else "运行状态正常")
+            return self._ok(
+                {
+                    "summary": {
+                        "level": headline_level,
+                        "headline": headline,
+                        "counts": counts,
+                        "generated_at": self.plugin._format_timestamp_elapsed(time.time()),
+                    },
+                    "recent_events": recent_events[:80],
+                    "checks": checks,
+                    "diagnostics": diagnostics,
+                    "sqlite": sqlite_status,
+                    "chain_tests": self._troubleshooting_test_results(data),
+                    "message_debounce": self._message_debounce_summary(data),
+                    "proactive_runtime": proactive_tasks.get("runtime", {}),
+                    "token_budget": token_stats.get("budget", {}),
+                    "cache": cache,
+                }
+            )
+        except Exception as exc:
+            logger.error(f"[PrivateCompanionPage] 获取排障信息失败: {exc}", exc_info=True)
+            return self._error(str(exc))
+
+    async def run_troubleshooting_test(self) -> dict[str, Any]:
+        payload = await request.get_json(silent=True) or {}
+        test_type = self._single_line(payload.get("type"), 40)
+        start = time.time()
+        try:
+            if test_type == "image_generation":
+                result = await self._run_image_generation_chain_test(payload)
+            elif test_type == "tts_generation":
+                result = await self._run_tts_generation_chain_test(payload)
+            else:
+                return self._error("未知排障测试类型")
+        except Exception as exc:
+            logger.warning("[PrivateCompanionPage] 排障链路测试失败: %s", self._single_line(exc, 160), exc_info=True)
+            result = {
+                "type": test_type,
+                "ok": False,
+                "title": self._troubleshooting_test_title(test_type),
+                "error": str(exc),
+            }
+        result["type"] = test_type
+        result["elapsed_ms"] = self._int(result.get("elapsed_ms")) or int((time.time() - start) * 1000)
+        result["ran_at"] = time.time()
+        result["ran_at_text"] = self.plugin._format_timestamp_elapsed(result["ran_at"])
+        await self._remember_troubleshooting_test_result(test_type, result)
+        return self._ok(result)
+
+    async def _run_image_generation_chain_test(self, payload: dict[str, Any]) -> dict[str, Any]:
+        generator = getattr(self.plugin, "_generate_photo_image", None)
+        if not callable(generator):
+            return {
+                "ok": False,
+                "title": "图片生成链路测试",
+                "error": "插件缺少图片生成入口 _generate_photo_image",
+            }
+        prompt_text = self._single_line(payload.get("prompt"), 600) or (
+            "排障测试图，一枚小小的绿色对勾贴纸放在白色桌面上，旁边有柔和台灯光，"
+            "画面干净清晰，真实摄影风格，不包含人物、不包含文字水印"
+        )
+        workflow_kind = self._single_line(payload.get("workflow_kind"), 20) or "text2img"
+        started = time.time()
+        timeout = max(45, self._int(getattr(self.plugin, "comfyui_photo_wait_seconds", 90)) + 30)
+        backend_name, image_path, note = await asyncio.wait_for(
+            generator(
+                workflow_kind=workflow_kind,
+                prompt_text=prompt_text,
+                session_key="private_companion_troubleshooting",
+            ),
+            timeout=timeout,
+        )
+        elapsed_ms = int((time.time() - started) * 1000)
+        exists = False
+        file_size = 0
+        if image_path:
+            try:
+                image_file = Path(str(image_path))
+                exists = image_file.exists()
+                file_size = image_file.stat().st_size if exists else 0
+            except Exception:
+                exists = False
+        return {
+            "ok": bool(image_path and exists),
+            "title": "图片生成链路测试",
+            "backend": self._single_line(backend_name, 80),
+            "path": self._single_line(image_path, 260),
+            "file_size": file_size,
+            "detail": self._single_line(note, 220) or ("已生成图片" if image_path else "未返回图片路径"),
+            "prompt": self._single_line(prompt_text, 220),
+            "elapsed_ms": elapsed_ms,
+            "error": "" if image_path and exists else (self._single_line(note, 220) or "图片生成未返回有效文件"),
+        }
+
+    async def _run_tts_generation_chain_test(self, payload: dict[str, Any]) -> dict[str, Any]:
+        context = getattr(self.plugin, "context", None)
+        if context is None:
+            return {
+                "ok": False,
+                "title": "TTS 生成链路测试",
+                "error": "AstrBot context 不可用",
+            }
+        async with self.plugin._data_lock:
+            users = deepcopy(self.plugin.data.get("users") if isinstance(self.plugin.data.get("users"), dict) else {})
+        umo = self._single_line(payload.get("umo"), 180) or self._preferred_tts_test_umo(users)
+        config: dict[str, Any] = {}
+        getter = getattr(context, "get_config", None)
+        if callable(getter):
+            try:
+                config = getter(umo) if umo else getter()
+                if not isinstance(config, dict):
+                    config = {}
+            except Exception:
+                config = {}
+        provider_getter = getattr(context, "get_using_tts_provider", None)
+        tts_provider = None
+        if callable(provider_getter):
+            try:
+                tts_provider = provider_getter(umo) if umo else provider_getter()
+            except Exception:
+                tts_provider = None
+        if tts_provider is None:
+            return {
+                "ok": False,
+                "title": "TTS 生成链路测试",
+                "umo": umo,
+                "error": "当前会话没有可用 TTS provider",
+            }
+        provider_settings = dict((config or {}).get("provider_tts_settings", {}) or {})
+        spoken = self._single_line(payload.get("text"), 240) or "这是一条排障测试语音，用来确认 TTS 生成链路可以跑通。"
+        record_builder = getattr(self.plugin, "_tts_record_component", None)
+        started = time.time()
+        if callable(record_builder):
+            component = await record_builder(
+                spoken,
+                tts_provider,
+                provider_settings,
+                config,
+                source_text=spoken,
+            )
+            refs_getter = getattr(self.plugin, "_tts_record_refs", None)
+            refs = refs_getter(component) if callable(refs_getter) and component is not None else []
+        else:
+            audio_path = await tts_provider.get_audio(spoken)
+            component = None
+            refs = [str(audio_path)] if audio_path else []
+        elapsed_ms = int((time.time() - started) * 1000)
+        audio_ref = self._single_line(refs[0] if refs else "", 260)
+        exists = False
+        file_size = 0
+        if audio_ref and not re.match(r"^https?://", audio_ref, flags=re.IGNORECASE):
+            try:
+                audio_file = Path(audio_ref)
+                exists = audio_file.exists()
+                file_size = audio_file.stat().st_size if exists else 0
+            except Exception:
+                exists = False
+        else:
+            exists = bool(audio_ref)
+        provider_id = self._provider_id(tts_provider)
+        provider_label = self._provider_name(tts_provider, provider_id) if provider_id else getattr(tts_provider, "__class__", type(tts_provider)).__name__
+        return {
+            "ok": bool(audio_ref and exists),
+            "title": "TTS 生成链路测试",
+            "umo": umo,
+            "provider": self._single_line(provider_label, 100),
+            "path": audio_ref,
+            "file_size": file_size,
+            "detail": "已生成语音组件" if component is not None else "已调用 TTS provider 生成音频",
+            "text": spoken,
+            "elapsed_ms": elapsed_ms,
+            "error": "" if audio_ref and exists else "TTS provider 未返回有效音频文件",
+        }
+
+    def _preferred_tts_test_umo(self, users: dict[str, Any]) -> str:
+        fallback = ""
+        for user_id, item in users.items():
+            if not isinstance(item, dict) or not item.get("enabled", True) or not item.get("umo"):
+                continue
+            umo = self._single_line(item.get("umo"), 180)
+            if not fallback:
+                fallback = umo
+            if self.plugin._private_user_role(item, str(item.get("user_id") or user_id)) == "owner":
+                return umo
+        return fallback
+
+    async def _remember_troubleshooting_test_result(self, test_type: str, result: dict[str, Any]) -> None:
+        if not test_type:
+            return
+        try:
+            async with self.plugin._data_lock:
+                raw = self.plugin.data.setdefault("troubleshooting_test_results", {})
+                if not isinstance(raw, dict):
+                    raw = {}
+                    self.plugin.data["troubleshooting_test_results"] = raw
+                raw[test_type] = self._sanitize_troubleshooting_test_result(result)
+                self.plugin._save_data_sync()
+        except Exception as exc:
+            logger.warning("[PrivateCompanionPage] 保存排障测试结果失败: %s", self._single_line(exc, 120))
+
+    def _troubleshooting_test_results(self, data: dict[str, Any]) -> dict[str, Any]:
+        raw = data.get("troubleshooting_test_results")
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            key: self._sanitize_troubleshooting_test_result(value)
+            for key, value in raw.items()
+            if isinstance(value, dict)
+        }
+
+    def _sanitize_troubleshooting_test_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": self._single_line(result.get("type"), 40),
+            "ok": bool(result.get("ok")),
+            "title": self._single_line(result.get("title"), 60),
+            "backend": self._single_line(result.get("backend"), 80),
+            "provider": self._single_line(result.get("provider"), 100),
+            "umo": self._single_line(result.get("umo"), 180),
+            "path": self._single_line(result.get("path"), 260),
+            "file_size": self._int(result.get("file_size")),
+            "detail": self._single_line(result.get("detail"), 220),
+            "error": self._single_line(result.get("error"), 220),
+            "elapsed_ms": self._int(result.get("elapsed_ms")),
+            "ran_at": self._float(result.get("ran_at")),
+            "ran_at_text": self._single_line(result.get("ran_at_text"), 40),
+        }
+
+    @staticmethod
+    def _troubleshooting_test_title(test_type: str) -> str:
+        return {
+            "image_generation": "图片生成链路测试",
+            "tts_generation": "TTS 生成链路测试",
+        }.get(test_type, "排障链路测试")
+
+    def _troubleshooting_recent_events(
+        self,
+        *,
+        diagnostics: list[dict[str, Any]],
+        proactive_tasks: dict[str, Any],
+        proactive_candidates: dict[str, Any],
+        token_stats: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+
+        def add(level: str, source: str, title: str, detail: str = "", *, ts: float = 0, action: str = "", jump: str = "") -> None:
+            events.append(
+                {
+                    "level": level,
+                    "source": source,
+                    "title": self._single_line(title, 90),
+                    "detail": self._single_line(detail, 220),
+                    "action": self._single_line(action, 160),
+                    "jump": self._single_line(jump, 40),
+                    "ts": self._float(ts),
+                    "time": self.plugin._format_timestamp_elapsed(ts) if ts else "",
+                }
+            )
+
+        for item in diagnostics:
+            level = self._single_line(item.get("level"), 12)
+            if level not in {"error", "warn"}:
+                continue
+            add(level, "配置诊断", item.get("title", ""), item.get("text", ""), action=item.get("action", ""), jump="troubleshooting")
+
+        for item in proactive_tasks.get("audit_items", [])[:40]:
+            status = self._single_line(item.get("status"), 24)
+            if status not in {"failed", "dropped", "deferred", "cancelled"}:
+                continue
+            level = "error" if status == "failed" else ("warn" if status in {"dropped", "deferred"} else "info")
+            title = item.get("topic") or item.get("reason") or item.get("note") or "主动执行异常"
+            detail = "；".join(
+                part
+                for part in [
+                    f"用户 {item.get('user_label') or item.get('user_id') or '-'}",
+                    f"动作 {item.get('action') or 'message'}",
+                    item.get("note") or "",
+                    item.get("text_preview") or "",
+                ]
+                if part
+            )
+            add(level, "主动审计", title, detail, ts=self._float(item.get("updated_ts") or item.get("created_ts")), jump="proactive")
+
+        for item in proactive_candidates.get("items", [])[:40]:
+            if self._single_line(item.get("status"), 24) != "blocked":
+                continue
+            note = self._single_line(item.get("note"), 180)
+            title = item.get("topic") or item.get("reason") or "主动候选被拦截"
+            normal_blocked_notes = {
+                "已有更早主动候选",
+                "近期主题过于相似",
+                "已有用户预约/定时主动",
+                "用户明确休息中",
+                "当前时段主动已足够,已避开扎堆",
+                "朋友主动已按日内节奏延后",
+            }
+            is_normal_filter = note in normal_blocked_notes
+            detail = "；".join(
+                part
+                for part in [
+                    f"用户 {item.get('user_label') or item.get('user_id') or '-'}",
+                    f"动作 {item.get('action') or 'message'}",
+                    f"调度过滤：{note}" if is_normal_filter and note else note,
+                ]
+                if part
+            )
+            level = "info" if is_normal_filter else "warn"
+            add(level, "主动候选", title, detail, ts=self._float(item.get("last_seen_ts") or item.get("created_ts")), jump="proactive")
+
+        for item in token_stats.get("recent", [])[:50]:
+            if bool(item.get("success", True)):
+                continue
+            title = f"{self._single_line(item.get('task'), 40) or 'LLM 调用'} 失败"
+            detail = "；".join(
+                part
+                for part in [
+                    f"Provider {item.get('provider') or '-'}",
+                    item.get("error") or "无错误详情",
+                ]
+                if part
+            )
+            add("error", "模型调用", title, detail, ts=self._float(item.get("ts")), jump="tokens")
+
+        events.sort(key=lambda item: self._float(item.get("ts")), reverse=True)
+        return events
+
+    def _troubleshooting_checks(
+        self,
+        *,
+        data: dict[str, Any],
+        users: dict[str, Any],
+        diagnostics: list[dict[str, Any]],
+        proactive_tasks: dict[str, Any],
+        proactive_candidates: dict[str, Any],
+        token_stats: dict[str, Any],
+        cache: dict[str, Any],
+        tts: dict[str, Any],
+        sqlite_status: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        checks: list[dict[str, Any]] = []
+
+        def add(level: str, title: str, text: str, action: str = "", jump: str = "") -> None:
+            checks.append(
+                {
+                    "level": level,
+                    "title": self._single_line(title, 90),
+                    "text": self._single_line(text, 240),
+                    "action": self._single_line(action, 180),
+                    "jump": self._single_line(jump, 40),
+                }
+            )
+
+        enabled_users = [item for item in users.values() if isinstance(item, dict) and item.get("enabled", True)]
+        runtime = proactive_tasks.get("runtime", {})
+        daily_limit = self._int(getattr(self.plugin, "max_daily_messages", 0))
+        budget = token_stats.get("budget", {})
+        if not enabled_users:
+            add("warn", "主动消息没有私聊对象", "当前没有启用的私聊对象，主动消息不会有目标。", "到私聊页新增或启用对象", "private")
+        elif daily_limit <= 0:
+            add("warn", "私聊主动总额度为 0", "每日主动上限为 0 时，主动消息不会发送。", "到模块配置调高每日主动上限", "modules")
+        elif not runtime.get("healthy"):
+            add("warn", "主动循环心跳不新鲜", runtime.get("last_tick_error") or "最近没有检测到主动循环心跳。", "查看主动页的循环状态", "proactive")
+        else:
+            add("ok", "主动循环可运行", f"启用对象 {len(enabled_users)} 个，最近心跳 {runtime.get('last_tick_started') or '-'}。", "", "proactive")
+
+        if budget.get("exceeded"):
+            add("error", "今日 Token 硬限额已耗尽", f"今日已用 {budget.get('used')}，硬限额 {budget.get('limit')}。", "调高每日 Token 限额或等待明日重置", "tokens")
+        elif budget.get("soft_active"):
+            add("warn", "Token 软限额正在暂缓后台任务", f"今日已用 {budget.get('used')}，软限额 {budget.get('soft_limit')}；主动生图、新闻、创作等低优先级任务会延后。", "到 Token 页或模块配置检查限额", "tokens")
+        else:
+            add("ok", "Token 预算未阻塞", f"今日已用 {budget.get('used', 0)}；软限额剩余 {budget.get('soft_remaining') if budget.get('soft_remaining') is not None else '不限'}。", "", "tokens")
+
+        photo_enabled = bool(getattr(self.plugin, "enable_photo_text_action", False))
+        photo_available = bool(getattr(self.plugin, "_photo_text_available", lambda *args, **kwargs: False)())
+        photo_blocked = [
+            item for item in proactive_candidates.get("items", [])
+            if "photo_text" in str(item.get("action") or "") and str(item.get("status") or "") == "blocked"
+        ]
+        if not photo_enabled:
+            add("warn", "主动带图功能未开启", "enable_photo_text_action 关闭时不会生成主动图片。", "到功能开关打开主动拍照/生图", "config")
+        elif not photo_available:
+            add("warn", "主动带图后端或额度不可用", "生图后端不可用、每日生图额度用完，或当前对象不允许 photo_text。", "检查生图后端、每日生图上限和用户关系角色", "modules")
+        elif photo_blocked:
+            add("warn", "近期带图候选被拦截", self._single_line(photo_blocked[0].get("note"), 160) or "最近 photo_text 候选没有进入发送。", "到主动页筛选 photo_text", "proactive")
+        else:
+            add("ok", "主动带图链路可尝试", "开关和可用性检查通过；是否出现取决于主动动机、天气/日程和候选权重。", "", "proactive")
+
+        if bool(tts.get("enhancement_enabled")):
+            if bool(tts.get("provider_available")):
+                add("ok", "TTS provider 可用", f"模式 {tts.get('mode')}，语种 {tts.get('language')}，provider {tts.get('provider_label') or '-'}。", "", "modules")
+            else:
+                add("warn", "TTS 强化开启但合成 provider 不可用", "插件能处理 TTS 标签，但真实语音合成需要 AstrBot 当前会话启用 TTS provider。", "到 AstrBot 会话 TTS 配置启用 provider", "modules")
+        else:
+            add("info", "TTS 强化未开启", "模型不应被要求生成 TTS 标签；如仍出现标签，发送前会清理。", "", "modules")
+
+        sqlite_bad = [item for item in sqlite_status.get("items", []) if item.get("level") in {"warn", "error"}]
+        if sqlite_bad:
+            add("warn", "SQLite 并发状态需要关注", sqlite_bad[0].get("text") or "有数据库未处于 WAL 或检查失败。", "重启插件后查看是否仍有 database is locked", "troubleshooting")
+        else:
+            add("ok", "SQLite WAL 检查通过", f"已检查 {len(sqlite_status.get('items', []))} 个数据库文件。", "", "troubleshooting")
+
+        token_errors = [item for item in token_stats.get("recent", []) if not bool(item.get("success", True))]
+        if token_errors:
+            first = token_errors[0]
+            add("error", "最近存在模型调用失败", first.get("error") or f"{first.get('task') or '任务'} 调用失败。", "到 Token 页查看失败任务和 provider", "tokens")
+        else:
+            add("ok", "近期模型调用无失败记录", "Token 最近调用列表里没有失败项。", "", "tokens")
+
+        image_cache = cache.get("private_image_vision", {})
+        if image_cache.get("enabled"):
+            add("ok", "图片视觉缓存已开启", f"当前缓存 {image_cache.get('items', 0)}/{image_cache.get('max_items') or '不限'} 条。", "", "image-cache")
+        else:
+            add("info", "图片视觉缓存未开启", "重复表情包会重复调用视觉模型，但不影响首次识图。", "到模块配置开启重复图片缓存", "modules")
+
+        diag_warns = [item for item in diagnostics if item.get("level") in {"warn", "error"}]
+        if diag_warns:
+            add("warn", "配置诊断仍有待处理项", f"{len(diag_warns)} 项需要关注：{diag_warns[0].get('title') or '-'}。", diag_warns[0].get("action") or "查看下方最近异常", "troubleshooting")
+        else:
+            add("ok", "配置诊断无警告", "现有诊断项没有 warn/error。", "", "dashboard")
+        return checks
+
+    async def _sqlite_wal_status_summary(self) -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+        paths_getter = getattr(self.plugin, "_sqlite_wal_candidate_paths", None)
+        paths = paths_getter() if callable(paths_getter) else []
+
+        def inspect(path: Path) -> dict[str, Any]:
+            try:
+                conn = sqlite3.connect(str(path), timeout=2.0)
+                try:
+                    mode_row = conn.execute("PRAGMA journal_mode").fetchone()
+                    timeout_row = conn.execute("PRAGMA busy_timeout").fetchone()
+                    mode = str(mode_row[0] if mode_row else "").lower()
+                    timeout_ms = self._int(timeout_row[0] if timeout_row else 0)
+                finally:
+                    conn.close()
+                level = "ok" if mode == "wal" and timeout_ms >= 1000 else "warn"
+                text = f"journal_mode={mode or '-'}，busy_timeout={timeout_ms}ms"
+                return {"path": str(path), "name": path.name, "level": level, "text": text, "journal_mode": mode, "busy_timeout_ms": timeout_ms}
+            except Exception as exc:
+                return {"path": str(path), "name": path.name, "level": "error", "text": self._single_line(exc, 180)}
+
+        for path in paths[:12]:
+            items.append(await self._to_thread_sqlite_inspect(inspect, path))
+        return {
+            "items": items,
+            "ok": sum(1 for item in items if item.get("level") == "ok"),
+            "warn": sum(1 for item in items if item.get("level") == "warn"),
+            "error": sum(1 for item in items if item.get("level") == "error"),
+        }
+
+    async def _to_thread_sqlite_inspect(self, func: Any, path: Path) -> dict[str, Any]:
+        try:
+            import asyncio
+
+            return await asyncio.to_thread(func, path)
+        except Exception:
+            return func(path)
 
     async def get_token_stats(self) -> dict[str, Any]:
         try:
@@ -1742,7 +2446,20 @@ class PrivateCompanionPageApi:
 
     @classmethod
     def _display_message_text(cls, value: Any, limit: int = 500) -> str:
-        return cls._single_line(_strip_internal_message_blocks(value), limit)
+        source = str(value or "").strip()
+        if re.search(r"<t{2,}s\b[^>]*>.*?</t{2,}s>", source, flags=re.IGNORECASE | re.DOTALL):
+            outside = re.sub(r"<t{2,}s\b[^>]*>.*?</t{2,}s>", "", source, flags=re.IGNORECASE | re.DOTALL)
+            outside = re.sub(r"</?t{2,}s\b[^>]*>", "", outside, flags=re.IGNORECASE).strip()
+            if re.search(r"[\u4e00-\u9fff]", outside):
+                source = outside
+            else:
+                source = re.sub(r"</?t{2,}s\b[^>]*>", "", source, flags=re.IGNORECASE)
+        if re.search(r"[\u3040-\u30ff]", source) and re.search(r"[\u4e00-\u9fff]", source):
+            units = re.findall(r".*?[。！？!?…~～]+|.+$", source, flags=re.DOTALL)
+            kept = [unit.strip() for unit in units if unit.strip() and not re.search(r"[\u3040-\u30ff]", unit)]
+            if kept and any(re.search(r"[\u4e00-\u9fff]", item) for item in kept):
+                source = "".join(kept)
+        return cls._single_line(_strip_internal_message_blocks(source), limit)
 
     def _group_wakeup_runtime(self, group: dict[str, Any]) -> dict[str, Any]:
         fatigue = group.get("group_wakeup_fatigue") if isinstance(group.get("group_wakeup_fatigue"), dict) else {}
@@ -2055,6 +2772,7 @@ class PrivateCompanionPageApi:
             "enable_cycle_state",
             "enable_skill_growth_simulation",
             "enable_message_debounce",
+            "enable_smart_message_debounce",
             "enable_recall_enhancement",
             "enable_recall_cancel_reply",
             "enable_recall_message_cache",
@@ -2323,6 +3041,11 @@ class PrivateCompanionPageApi:
             "max_daily_messages",
             "inbound_message_debounce_seconds",
             "enable_message_debounce",
+            "enable_smart_message_debounce",
+            "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID",
+            "smart_message_debounce_wait_seconds",
+            "smart_message_debounce_learning_window_seconds",
+            "smart_message_debounce_examples_limit",
             "enable_recall_enhancement",
             "enable_recall_cancel_reply",
             "enable_recall_message_cache",
@@ -2770,6 +3493,62 @@ class PrivateCompanionPageApi:
             "provider_label": self._single_line(provider_label, 80) or "未知 provider",
         }
 
+    def _message_debounce_summary(self, data: dict[str, Any]) -> dict[str, Any]:
+        raw = data.get("smart_message_debounce")
+        if not isinstance(raw, dict):
+            raw = {}
+        logs_raw = raw.get("recent_logs") if isinstance(raw.get("recent_logs"), list) else []
+        examples_raw = raw.get("examples") if isinstance(raw.get("examples"), list) else []
+        logs: list[dict[str, Any]] = []
+        for item in logs_raw[-30:][::-1]:
+            if not isinstance(item, dict):
+                continue
+            logs.append(
+                {
+                    "ts": self._float(item.get("ts")),
+                    "time": self.plugin._format_timestamp_elapsed(self._float(item.get("ts"))) if self._float(item.get("ts")) else "",
+                    "scope": self._single_line(item.get("scope"), 80),
+                    "sender_id": self._single_line(item.get("sender_id"), 40),
+                    "chat": self._single_line(item.get("chat"), 20),
+                    "text": self._single_line(item.get("text"), 180),
+                    "decision": self._single_line(item.get("decision"), 40),
+                    "confidence": self._float(item.get("confidence")),
+                    "reason": self._single_line(item.get("reason"), 120),
+                    "wait_seconds": self._float(item.get("wait_seconds")),
+                    "outcome": self._single_line(item.get("outcome"), 40),
+                    "note": self._single_line(item.get("note"), 160),
+                    "source": self._single_line(item.get("source"), 40),
+                    "raw": self._single_line(item.get("raw"), 180),
+                    "message_count": self._int(item.get("message_count")),
+                }
+            )
+        examples: list[dict[str, Any]] = []
+        for item in examples_raw[-10:][::-1]:
+            if not isinstance(item, dict):
+                continue
+            messages = item.get("messages") if isinstance(item.get("messages"), list) else []
+            examples.append(
+                {
+                    "time": self.plugin._format_timestamp_elapsed(self._float(item.get("ts"))) if self._float(item.get("ts")) else "",
+                    "kind": self._single_line(item.get("kind"), 40),
+                    "scope": self._single_line(item.get("scope"), 80),
+                    "sender_id": self._single_line(item.get("sender_id"), 40),
+                    "messages": [self._single_line(message, 120) for message in messages[:4]],
+                    "previous_decision": self._single_line(item.get("previous_decision"), 40),
+                    "note": self._single_line(item.get("note"), 120),
+                }
+            )
+        return {
+            "enabled": bool(getattr(self.plugin, "enable_message_debounce", False)),
+            "smart_enabled": bool(getattr(self.plugin, "enable_smart_message_debounce", False)),
+            "text_wait": self._float(getattr(self.plugin, "text_message_debounce_seconds", 0.0)),
+            "smart_wait": self._float(getattr(self.plugin, "smart_message_debounce_wait_seconds", 0.0)),
+            "learning_window": self._float(getattr(self.plugin, "smart_message_debounce_learning_window_seconds", 0.0)),
+            "provider_id": self._single_line(getattr(self.plugin, "smart_message_debounce_provider_id", ""), 160),
+            "recent_logs": logs,
+            "examples": examples,
+        }
+
     @staticmethod
     def _presets() -> dict[str, dict[str, Any]]:
         return {
@@ -2894,6 +3673,7 @@ class PrivateCompanionPageApi:
             "PRIVATE_READING_VISION_PROVIDER_ID": "jm_cosmos_vision_provider_id",
             "NEWS_PROVIDER_ID": "news_provider_id",
             "WEB_EXPLORATION_PROVIDER_ID": "web_exploration_provider_id",
+            "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID": "smart_message_debounce_provider_id",
         }
         if key in attr_map:
             setattr(self.plugin, attr_map[key], str(value or "").strip())
@@ -3073,6 +3853,7 @@ class PrivateCompanionPageApi:
             "enable_cycle_state",
             "enable_skill_growth_simulation",
             "enable_message_debounce",
+            "enable_smart_message_debounce",
             "enable_recall_enhancement",
             "enable_recall_cancel_reply",
             "enable_recall_message_cache",
@@ -3215,6 +3996,11 @@ class PrivateCompanionPageApi:
             "max_daily_messages",
             "inbound_message_debounce_seconds",
             "enable_message_debounce",
+            "enable_smart_message_debounce",
+            "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID",
+            "smart_message_debounce_wait_seconds",
+            "smart_message_debounce_learning_window_seconds",
+            "smart_message_debounce_examples_limit",
             "text_message_debounce_seconds",
             "image_message_debounce_seconds",
             "forward_message_debounce_seconds",
@@ -3658,6 +4444,18 @@ class PrivateCompanionPageApi:
                 return max(0.0, min(15.0, float(value)))
             except (TypeError, ValueError):
                 return 0.0 if key != "image_message_debounce_seconds" else 8.0
+        if key in {"smart_message_debounce_wait_seconds", "smart_message_debounce_learning_window_seconds"}:
+            try:
+                return max(0.0, min(30.0, float(value)))
+            except (TypeError, ValueError):
+                return 3.0 if key == "smart_message_debounce_wait_seconds" else 8.0
+        if key == "smart_message_debounce_examples_limit":
+            try:
+                return max(0, min(30, int(value)))
+            except (TypeError, ValueError):
+                return 8
+        if key == "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID":
+            return self._single_line(value, 160)
         if key == "private_image_vision_wait_seconds":
             try:
                 return max(0.0, min(90.0, float(value)))
@@ -3756,6 +4554,7 @@ class PrivateCompanionPageApi:
             "forward_message_parse_nested",
             "forward_message_image_vision",
             "enable_message_debounce",
+            "enable_smart_message_debounce",
             "enable_recall_enhancement",
             "enable_recall_cancel_reply",
             "enable_recall_message_cache",
@@ -5178,7 +5977,7 @@ class PrivateCompanionPageApi:
                     "topic": self._single_line(raw.get("topic"), 100),
                     "motive": self._single_line(raw.get("motive"), 180),
                     "note": self._single_line(raw.get("note"), 180),
-                    "text_preview": self._single_line(raw.get("text_preview"), 180),
+                    "text_preview": self._display_message_text(raw.get("text_preview"), 180),
                     "scheduled_ts": self._float(raw.get("scheduled_ts")),
                     "scheduled": self.plugin._format_timestamp_elapsed(raw.get("scheduled_ts", 0)),
                     "created_ts": self._float(raw.get("created_ts")),
