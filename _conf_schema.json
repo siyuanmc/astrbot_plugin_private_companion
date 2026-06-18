@@ -2544,7 +2544,7 @@
   "enable_group_repeat_follow": {
     "description": "允许群聊复读跟读",
     "type": "bool",
-    "hint": "当群里同一句话连续复读超过三次时，Bot 可低概率跟读一次；同一轮复读最多跟一次。",
+    "hint": "当群里同一句话连续复读达到阈值时，Bot 可低概率跟读一次或打断一次；同一轮复读最多处理一次。",
     "default": true,
     "condition": {
       "enable_group_companion": true
@@ -2553,8 +2553,22 @@
   "group_repeat_count_distinct_users_only": {
     "description": "复读只计不同用户",
     "type": "bool",
-    "hint": "开启后，同一句话必须由 4 个不同群友说出才会触发复读跟读/打断；同一个人连续刷屏不会累计触发，也不会推高复读概率。",
+    "hint": "开启后，同一句话必须达到“复读触发阈值”个不同群友说出才会触发复读跟读/打断；同一个人连续刷屏不会累计触发，也不会推高复读概率。",
     "default": false,
+    "condition": {
+      "enable_group_repeat_follow": true
+    }
+  },
+  "group_repeat_trigger_threshold": {
+    "description": "复读触发阈值",
+    "type": "int",
+    "hint": "同一句话连续出现达到多少次后，才开始按概率跟读或打断。必须大于 2，默认 4；开启“复读只计不同用户”后，这里表示不同参与者数量。",
+    "slider": {
+      "min": 3,
+      "max": 20,
+      "step": 1
+    },
+    "default": 4,
     "condition": {
       "enable_group_repeat_follow": true
     }
@@ -2562,7 +2576,7 @@
   "group_repeat_follow_probability": {
     "description": "复读跟读初始概率（%）",
     "type": "int",
-    "hint": "同一句话第 4 次出现时的初始跟读概率。",
+    "hint": "同一句话达到复读触发阈值时的初始跟读概率。",
     "slider": {
       "min": 0,
       "max": 100,
@@ -2576,7 +2590,7 @@
   "group_repeat_interrupt_probability": {
     "description": "复读打断初始概率（%）",
     "type": "int",
-    "hint": "同一句话第 4 次出现时的初始打断概率。打断默认发送“禁止复读”。",
+    "hint": "同一句话达到复读触发阈值时的初始打断概率。打断默认发送“禁止复读”。",
     "slider": {
       "min": 0,
       "max": 100,

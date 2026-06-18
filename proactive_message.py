@@ -1879,20 +1879,12 @@ class ProactiveMessageMixin:
                 _single_line(repaired, 120),
             )
             return repaired
-        fallback_by_reason = {
-            "evening_greeting": "我这边慢慢安静下来了。给你留一句就继续收尾。",
-            "noon_greeting": "我这边刚停下来一下。给你留一句,不打扰你。",
-            "morning_greeting": "早。先把这句放你这边。",
-            "check_in": "我这边刚停下来一下。就来跟你说一句。",
-        }
-        fallback = fallback_by_reason.get(reason, "我这边刚停下来一下。就来跟你说一句。")
         logger.info(
-            "[PrivateCompanion] 主动消息主客体错位问句已替换为兜底: reason=%s before=%s after=%s",
+            "[PrivateCompanion] 主动消息主客体错位且无剩余自然内容,已丢弃本轮生成: reason=%s text=%s",
             reason,
             _single_line(cleaned, 120),
-            fallback,
         )
-        return fallback
+        return ""
 
     def _should_drop_misstaged_proactive_text(self, text: str, *, reason: str, action: str) -> bool:
         cleaned = _single_line(text, 220)

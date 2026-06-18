@@ -2952,6 +2952,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "group_conversation_followup_max_turns",
             "enable_group_conversation_followup",
             "enable_group_repeat_follow",
+            "group_repeat_trigger_threshold",
             "group_repeat_count_distinct_users_only",
             "group_interject_min_interval_minutes",
             "group_interject_max_daily",
@@ -3101,6 +3102,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 "private_reading_preference_max_terms": getattr(self.plugin, "private_reading_preference_max_terms", 8),
                 "private_reading_default_keywords": getattr(self.plugin, "jm_cosmos_default_keywords", ""),
                 "private_reading_blocked_tags": getattr(self.plugin, "private_reading_blocked_tags", "連載中,長篇,青年漫"),
+                "group_repeat_trigger_threshold": int(getattr(self.plugin, "group_repeat_trigger_threshold", 4) or 4),
                 "group_repeat_count_distinct_users_only": bool(getattr(self.plugin, "group_repeat_count_distinct_users_only", False)),
                 "group_repeat_follow_probability": int(round(float(getattr(self.plugin, "group_repeat_follow_probability", 0.18) or 0) * 100)),
                 "group_repeat_interrupt_probability": int(round(float(getattr(self.plugin, "group_repeat_interrupt_probability", 0.10) or 0) * 100)),
@@ -3918,6 +3920,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "group_conversation_followup_max_turns",
             "enable_group_conversation_followup",
             "enable_group_repeat_follow",
+            "group_repeat_trigger_threshold",
             "group_repeat_count_distinct_users_only",
             "group_interject_min_interval_minutes",
             "group_interject_max_daily",
@@ -4348,6 +4351,11 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         if key == "private_image_gif_max_frames":
             try:
                 return max(1, min(8, int(value)))
+            except (TypeError, ValueError):
+                return 4
+        if key == "group_repeat_trigger_threshold":
+            try:
+                return max(3, min(20, int(value)))
             except (TypeError, ValueError):
                 return 4
         if key in {

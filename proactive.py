@@ -1187,6 +1187,43 @@ class ProactiveMixin:
         user["planned_candidate_id"] = ""
         self._clear_planned_proactive_trigger(user)
 
+    def _maintenance_failure_cooldown_seconds(self, label: str) -> float:
+        if label in {"日常状态", "今日日程", "当前细化", "日记", "创作推进"}:
+            return 30 * 60
+        return 5 * 60
+
+    def _maintenance_task_blocked_by_failure(self, label: str, *, now: float | None = None) -> str:
+        state = getattr(self, "_maintenance_failure_cooldowns", None)
+        if not isinstance(state, dict):
+            return ""
+        item = state.get(label)
+        if not isinstance(item, dict):
+            return ""
+        check_now = _now_ts() if now is None else now
+        until = _safe_float(item.get("until"), 0, 0)
+        if until <= check_now:
+            state.pop(label, None)
+            return ""
+        error = _single_line(item.get("error"), 120)
+        return f"{label} 失败冷却中（{self._format_elapsed(until - check_now)}后重试" + (f"，上次错误：{error}" if error else "") + "）"
+
+    def _record_maintenance_task_failure(self, label: str, exc: Exception) -> None:
+        state = getattr(self, "_maintenance_failure_cooldowns", None)
+        if not isinstance(state, dict):
+            state = {}
+            self._maintenance_failure_cooldowns = state
+        now = _now_ts()
+        state[label] = {
+            "until": now + self._maintenance_failure_cooldown_seconds(label),
+            "error": _single_line(exc, 180),
+            "failed_at": now,
+        }
+
+    def _clear_maintenance_task_failure(self, label: str) -> None:
+        state = getattr(self, "_maintenance_failure_cooldowns", None)
+        if isinstance(state, dict):
+            state.pop(label, None)
+
     async def _scheduler_loop(self):
         while not self._stop_event.is_set():
             try:
@@ -1206,8 +1243,12 @@ class ProactiveMixin:
                     ("被动注入缓存", self._refresh_passive_injection_cache),
                 ):
                     try:
+                        if self._maintenance_task_blocked_by_failure(label):
+                            continue
                         await task_factory()
+                        self._clear_maintenance_task_failure(label)
                     except Exception as exc:
+                        self._record_maintenance_task_failure(label, exc)
                         logger.warning("[PrivateCompanion] 主动循环维护步骤失败,已跳过: %s error=%s", label, _single_line(exc, 160))
             except asyncio.CancelledError:
                 raise
@@ -1227,8 +1268,12 @@ class ProactiveMixin:
                 ("被动注入缓存", self._refresh_passive_injection_cache),
             ):
                 try:
+                    if self._maintenance_task_blocked_by_failure(label):
+                        continue
                     await task_factory()
+                    self._clear_maintenance_task_failure(label)
                 except Exception as exc:
+                    self._record_maintenance_task_failure(label, exc)
                     logger.warning("[PrivateCompanion] 主动链即时维护步骤失败,已跳过: %s error=%s", label, _single_line(exc, 160))
         except Exception as e:
             logger.warning(f"[PrivateCompanion] 主动链即时唤醒失败: {e}", exc_info=True)

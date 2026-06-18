@@ -340,7 +340,7 @@ const featureMeta = {
   enable_group_high_intensity_mode: ["群聊高强度收口", "短时间连续被 @、引用或增强唤醒后，自动合并同群后续唤醒消息，并暂停非必要群聊后台任务，减少 LLM 过载。"],
   enable_group_conversation_followup: ["连续对话保持", "群里叫过 Bot 后，短时间内判断同一用户没继续 @ 的话是否仍在对 Bot 说。"],
   enable_group_interjection: ["群主动插话", "允许 Bot 在群聊里主动插一句。谨慎开启。"],
-  enable_group_repeat_follow: ["复读处理", "同一句话连续复读超过三次时，可跟读一次或打断一次。"],
+  enable_group_repeat_follow: ["复读处理", "同一句话连续复读达到阈值时，可跟读一次或打断一次。"],
   enable_group_topic_threads: ["群话题线", "维护当前群聊正在聊什么，以及话题如何变化。"],
   enable_group_episode_memory: ["群聊片段", "把群聊阶段性内容整理成摘要片段。"],
   enable_group_interjection_feedback: ["插话反馈", "记录群友对主动插话的反应，后续调整频率。"],
@@ -513,6 +513,8 @@ const embeddedFeatureParentByKey = {
   enable_group_conversation_followup: "enable_group_scene_awareness",
   enable_group_slang_meanings: "enable_group_slang_learning",
   enable_group_interjection_feedback: "enable_group_interjection",
+  group_repeat_trigger_threshold: "enable_group_repeat_follow",
+  group_repeat_count_distinct_users_only: "enable_group_repeat_follow",
   enable_bilibili_boredom_watch: "enable_bilibili_integration",
   enable_news_daily_hot_read: "enable_news_integration",
   enable_ai_daily_watch: "enable_news_integration",
@@ -696,6 +698,8 @@ const configLabels = {
   repeat_follow_enabled: "复读跟读",
   group_interject_min_interval_minutes: "群插话最小间隔",
   group_interject_max_daily: "每群每日插话上限",
+  group_repeat_trigger_threshold: "复读触发阈值",
+  group_repeat_count_distinct_users_only: "复读只计不同用户",
   group_repeat_follow_probability: "跟读初始概率",
   group_repeat_interrupt_probability: "打断初始概率",
   group_repeat_interrupt_probability_step: "概率共同递增",
@@ -905,8 +909,10 @@ const configDescriptions = {
   group_conversation_followup_max_turns: "一次群聊连续对话最多自动续接几轮，防止 Bot 一直卷进对话。",
   group_interject_min_interval_minutes: "同一群两次主动插话之间的最小间隔。",
   group_interject_max_daily: "每个群每天最多允许几次主动插话。",
-  group_repeat_follow_probability: "群里同一句话复读超过阈值后，Bot 跟读一次的基础概率。这里以百分比填写。",
-  group_repeat_interrupt_probability: "复读链持续时，Bot 打断复读的基础概率。这里以百分比填写。",
+  group_repeat_trigger_threshold: "同一句话连续出现达到多少次后，才开始按概率跟读或打断。必须大于 2，默认 4；开启“复读只计不同用户”后，这里表示不同参与者数量。",
+  group_repeat_count_distinct_users_only: "开启后，同一个人连续重复同一句话只算 1 个参与者；需要不同群友一起复读且达到阈值才会触发 Bot 跟读或打断，避免一个人刷屏把 Bot 带进复读。关闭后按复读消息次数累计。",
+  group_repeat_follow_probability: "群里同一句话达到复读触发阈值后，Bot 跟读一次的基础概率。这里以百分比填写。",
+  group_repeat_interrupt_probability: "同一句话达到复读触发阈值后，Bot 打断复读的基础概率。这里以百分比填写。",
   group_repeat_interrupt_probability_step: "复读越久，跟读/打断概率共同增加的步进。这里以百分比填写。",
   group_repeat_interrupt_text: "选择文本打断时发送的句子，例如“禁止复读”。",
   group_repeat_interrupt_image_path: "表情包路径。填写后可用图片代替打断文本。",
@@ -1136,7 +1142,7 @@ const featureSettingGroups = {
   enable_group_episode_memory: ["max_group_recent_messages"],
   enable_group_relationship_graph: ["max_group_recent_messages"],
   enable_group_interjection: ["group_interject_min_interval_minutes", "group_interject_max_daily", "enable_group_interjection_feedback"],
-  enable_group_repeat_follow: ["group_repeat_follow_probability", "group_repeat_interrupt_probability", "group_repeat_interrupt_probability_step", "group_repeat_interrupt_text", "group_repeat_interrupt_image_path"],
+  enable_group_repeat_follow: ["group_repeat_trigger_threshold", "group_repeat_count_distinct_users_only", "group_repeat_follow_probability", "group_repeat_interrupt_probability", "group_repeat_interrupt_probability_step", "group_repeat_interrupt_text", "group_repeat_interrupt_image_path"],
   enable_group_interjection_feedback: ["group_interject_min_interval_minutes", "group_interject_max_daily"],
   enable_group_privacy_guard: [],
   enable_worldbook_member_recognition: ["worldbook_auto_import", "worldbook_member_match_aliases", "worldbook_self_registration", "worldbook_auto_pending_observations", "worldbook_member_inject_limit", "worldbook_config_paths"],
@@ -1477,6 +1483,7 @@ const featureSettingTypes = {
   segmented_proactive_content_cleanup_words: { type: "textarea" },
   private_reading_default_keywords: { type: "textarea" },
   private_reading_blocked_tags: { type: "textarea" },
+  group_repeat_trigger_threshold: { type: "number", min: 3, max: 20, step: 1 },
   group_repeat_interrupt_text: { type: "text" },
   group_repeat_interrupt_image_path: { type: "text" },
 };
@@ -7562,9 +7569,9 @@ function featureSettingInput(key, value) {
     return `<textarea data-feature-param="${safeKey}" rows="3">${escapeHtml(Array.isArray(value) ? value.join("\n") : value ?? "")}</textarea>`;
   }
   const numeric = spec.type === "number" || typeof value === "number";
-  const step = percentSettingKeys.has(key) ? "1" : probabilitySettingKeys.has(key) || key === "skill_growth_rate" ? "0.01" : "any";
-  const min = percentSettingKeys.has(key) || probabilitySettingKeys.has(key) ? "0" : "";
-  const max = percentSettingKeys.has(key) ? "100" : probabilitySettingKeys.has(key) ? "1" : "";
+  const step = spec.step ?? (percentSettingKeys.has(key) ? "1" : probabilitySettingKeys.has(key) || key === "skill_growth_rate" ? "0.01" : "any");
+  const min = spec.min ?? (percentSettingKeys.has(key) || probabilitySettingKeys.has(key) ? "0" : "");
+  const max = spec.max ?? (percentSettingKeys.has(key) ? "100" : probabilitySettingKeys.has(key) ? "1" : "");
   return `
     <input
       type="${numeric ? "number" : "text"}"

@@ -1723,7 +1723,8 @@ class GroupObservationMixin:
             sender_is_new = True
         group["repeat_follow_state"] = state
         count = _safe_int(state.get("distinct_count" if count_distinct_users else "count"), 1, 1)
-        if count <= 3 or bool(state.get("acted")) or bool(state.get("followed")):
+        trigger_threshold = max(3, _safe_int(getattr(self, "group_repeat_trigger_threshold", 4), 4, 3))
+        if count < trigger_threshold or bool(state.get("acted")) or bool(state.get("followed")):
             return {}
         today = _today_key()
         if group.get("interject_day") != today:

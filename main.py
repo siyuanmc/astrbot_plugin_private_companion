@@ -797,6 +797,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.group_high_intensity_merge_seconds = self._cfg_int(c, "group_high_intensity_merge_seconds", 8, 1, 30)
         self.enable_group_interjection = self._cfg_bool(c, "enable_group_interjection", False)
         self.enable_group_repeat_follow = self._cfg_bool(c, "enable_group_repeat_follow", True)
+        self.group_repeat_trigger_threshold = self._cfg_int(c, "group_repeat_trigger_threshold", 4, 3, 20)
         self.group_repeat_count_distinct_users_only = self._cfg_bool(c, "group_repeat_count_distinct_users_only", False)
         self.group_repeat_follow_probability = self._cfg_int(c, "group_repeat_follow_probability", 18, 0, 100) / 100
         self.group_repeat_interrupt_probability = self._cfg_int(c, "group_repeat_interrupt_probability", 10, 0, 100) / 100
@@ -1004,6 +1005,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self._passive_light_injection_cache: dict[str, Any] = {}
         self._data_save_task: asyncio.Task | None = None
         self._data_save_dirty = False
+        self._maintenance_failure_cooldowns: dict[str, dict[str, Any]] = {}
         self._framework_captured_send_cache: dict[str, list[Any]] = {}
         self._framework_session_locks: dict[str, asyncio.Lock] = {}
         self._segmented_reply_remainder_locks: dict[str, asyncio.Lock] = {}
