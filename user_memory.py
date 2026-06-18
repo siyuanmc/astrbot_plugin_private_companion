@@ -1518,9 +1518,14 @@ class UserMemoryMixin:
     async def _maybe_refresh_dialogue_episode(self, user_id: str, user: dict[str, Any]) -> None:
         if not self.enable_dialogue_episode_memory:
             return
+        now = _now_ts()
+        async with self._data_lock:
+            user = dict(self._get_user(user_id))
+        if now < _safe_float(user.get("dialogue_episode_retry_after"), 0):
+            return
         count = _safe_int(user.get("episode_message_count"), 0, 0)
         last_at = _safe_float(user.get("last_episode_refresh_at"), 0)
-        if count < self.episode_memory_refresh_messages and _now_ts() - last_at < self.episode_memory_refresh_minutes * 60:
+        if count < self.episode_memory_refresh_messages and now - last_at < self.episode_memory_refresh_minutes * 60:
             return
         raw_text = await self._collect_recent_private_conversation_text(user, hours=24, max_lines=70)
         if not raw_text or len(raw_text) < 80:
@@ -1547,18 +1552,32 @@ class UserMemoryMixin:
   "avoid_next": ["短期内不该反复提的内容"]
 }}
 """.strip()
-        raw = await self._llm_call(
-            prompt,
-            max_tokens=520,
-            provider_id=self._task_provider(self.dialogue_episode_provider_id, self.mai_style_provider_id),
-            task="dialogue_episode",
+        acquired = await self._try_acquire_user_background_task(
+            user_id,
+            "dialogue_episode",
+            now,
+            refresh_key="last_episode_refresh_at",
+            refresh_seconds=self.episode_memory_refresh_minutes * 60,
         )
-        payload = self._extract_json_payload(raw or "")
+        if not acquired:
+            return
+        try:
+            raw = await self._llm_call(
+                prompt,
+                max_tokens=520,
+                provider_id=self._task_provider(self.dialogue_episode_provider_id, self.mai_style_provider_id),
+                task="dialogue_episode",
+            )
+            payload = self._extract_json_payload(raw or "")
+        except Exception as exc:
+            await self._mark_user_background_retry(user_id, "dialogue_episode", now, exc)
+            return
         if not isinstance(payload, dict):
+            await self._mark_user_background_retry(user_id, "dialogue_episode", now, "invalid_json")
             return
         episode = {
             "date": _today_key(),
-            "created_ts": _now_ts(),
+            "created_ts": now,
             "summary": _single_line(payload.get("summary"), 140),
             "emotional_residue": _single_line(payload.get("emotional_residue"), 100),
             "reusable_topic": _single_line(payload.get("reusable_topic"), 100),
@@ -1567,6 +1586,7 @@ class UserMemoryMixin:
             "avoid_next": self._normalize_string_list(payload.get("avoid_next"), limit=6),
         }
         if not episode["summary"]:
+            await self._mark_user_background_retry(user_id, "dialogue_episode", now, "empty_summary")
             return
         open_loops = self._normalize_string_list(payload.get("open_loops"), limit=8, item_limit=110)
         async with self._data_lock:
@@ -1591,13 +1611,16 @@ class UserMemoryMixin:
                         {
                             "text": loop,
                             "status": "待自然延续",
-                            "created_ts": _now_ts(),
+                            "created_ts": now,
                             "source": "dialogue_episode",
                         }
                     )
                 del current_loops[:-12]
             current["episode_message_count"] = 0
-            current["last_episode_refresh_at"] = _now_ts()
+            current["last_episode_refresh_at"] = now
+            current["dialogue_episode_retry_after"] = 0
+            current["dialogue_episode_last_error"] = ""
+            current["dialogue_episode_running_at"] = 0
             self._save_data_sync()
 
     def _format_companion_planner_injection(self, user: dict[str, Any]) -> str:
@@ -1719,6 +1742,10 @@ class UserMemoryMixin:
         if not self.enable_companion_memory:
             return
         now = _now_ts()
+        async with self._data_lock:
+            user = dict(self._get_user(user_id))
+        if now < _safe_float(user.get("companion_memory_retry_after"), 0):
+            return
         last_at = _safe_float(user.get("last_memory_refresh_at"), 0)
         if now - last_at < self.memory_refresh_interval_minutes * 60:
             return
@@ -1758,14 +1785,28 @@ class UserMemoryMixin:
   "speaking_style": ["..."]
 }}
 """.strip()
-        raw = await self._llm_call(
-            prompt,
-            max_tokens=420,
-            provider_id=self._task_provider(self.companion_memory_provider_id, self.mai_style_provider_id),
-            task="memory_profile",
+        acquired = await self._try_acquire_user_background_task(
+            user_id,
+            "companion_memory",
+            now,
+            refresh_key="last_memory_refresh_at",
+            refresh_seconds=self.memory_refresh_interval_minutes * 60,
         )
-        payload = self._extract_json_payload(raw or "")
+        if not acquired:
+            return
+        try:
+            raw = await self._llm_call(
+                prompt,
+                max_tokens=420,
+                provider_id=self._task_provider(self.companion_memory_provider_id, self.mai_style_provider_id),
+                task="memory_profile",
+            )
+            payload = self._extract_json_payload(raw or "")
+        except Exception as exc:
+            await self._mark_user_background_retry(user_id, "companion_memory", now, exc)
+            return
         if not isinstance(payload, dict):
+            await self._mark_user_background_retry(user_id, "companion_memory", now, "invalid_json")
             return
         normalized: dict[str, list[str]] = {}
         for key in ("user_traits", "interests", "boundaries", "relationship_notes", "speaking_style"):
@@ -1783,7 +1824,59 @@ class UserMemoryMixin:
                 current_memory["profile"] = normalized
                 current_memory["profile_updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
             current["last_memory_refresh_at"] = now
+            current["companion_memory_retry_after"] = 0
+            current["companion_memory_last_error"] = ""
+            current["companion_memory_running_at"] = 0
             self._save_data_sync()
+
+    async def _try_acquire_user_background_task(
+        self,
+        user_id: str,
+        task: str,
+        now: float,
+        *,
+        refresh_key: str,
+        refresh_seconds: float,
+    ) -> bool:
+        retry_key = f"{task}_retry_after"
+        running_key = f"{task}_running_at"
+        async with self._data_lock:
+            current = self._get_user(user_id)
+            if now - _safe_float(current.get(refresh_key), 0) < max(0.0, float(refresh_seconds)):
+                return False
+            if now < _safe_float(current.get(retry_key), 0):
+                return False
+            running_at = _safe_float(current.get(running_key), 0)
+            if running_at > 0 and now - running_at < 10 * 60:
+                return False
+            current[running_key] = now
+            self._save_data_sync()
+        return True
+
+    async def _mark_user_background_retry(self, user_id: str, task: str, now: float, error: Any) -> None:
+        retry_key = f"{task}_retry_after"
+        error_key = f"{task}_last_error"
+        running_key = f"{task}_running_at"
+        if task == "dialogue_episode":
+            configured = _safe_int(getattr(self, "episode_memory_refresh_minutes", 60), 60, 1) * 60
+        elif task == "companion_memory":
+            configured = _safe_int(getattr(self, "memory_refresh_interval_minutes", 180), 180, 1) * 60
+        else:
+            configured = 10 * 60
+        delay = min(max(10 * 60, configured), 30 * 60)
+        async with self._data_lock:
+            current = self._get_user(user_id)
+            current[retry_key] = now + delay
+            current[error_key] = _single_line(error, 180)
+            current[running_key] = 0
+            self._save_data_sync()
+        logger.warning(
+            "[PrivateCompanion] 私聊后台整理失败,已进入短冷却避免重复请求: user=%s task=%s retry=%ss error=%s",
+            user_id,
+            task,
+            int(delay),
+            _single_line(error, 120),
+        )
 
     def _format_intent_relationship_injection(self, user: dict[str, Any]) -> str:
         intent = user.get("intent_profile")

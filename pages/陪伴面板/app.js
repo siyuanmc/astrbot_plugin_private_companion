@@ -345,6 +345,7 @@ const featureMeta = {
   enable_group_episode_memory: ["群聊片段", "把群聊阶段性内容整理成摘要片段。"],
   enable_group_interjection_feedback: ["插话反馈", "记录群友对主动插话的反应，后续调整频率。"],
   enable_group_slang_meanings: ["黑话释义", "解释群内黑话。"],
+  enable_group_slang_web_search: ["黑话联网参考", "为已有黑话候选搜索外部解释，并判断是否匹配本群用法。默认关闭。"],
   enable_group_relationship_graph: ["群关系网", "记录成员之间的互动关系和常见组合。"],
   enable_group_privacy_guard: ["群隐私保护", "保护私聊信息。"],
   enable_worldbook_member_recognition: ["群聊关系网", "以 QQ 号确认成员身份，昵称和别名只作辅助线索。"],
@@ -430,6 +431,7 @@ const featureGroups = [
       "enable_group_conversation_followup",
       "enable_group_slang_learning",
       "enable_group_slang_meanings",
+      "enable_group_slang_web_search",
       "enable_group_member_profiles",
       "enable_group_topic_threads",
       "enable_group_episode_memory",
@@ -590,6 +592,13 @@ const configLabels = {
   tts_voice_language: "TTS语音语种",
   tts_conversion_provider_id: "TTS文本转换模型",
   tts_extra_prompt: "TTS补充规则",
+  tts_frequency_control_mode: "TTS频率控制模式",
+  tts_session_min_interval_seconds: "TTS会话最小间隔秒数",
+  tts_private_min_interval_seconds: "私聊TTS最小间隔秒数",
+  tts_group_min_interval_seconds: "群聊TTS最小间隔秒数",
+  tts_trigger_probability: "TTS全局触发概率(%)",
+  tts_private_trigger_probability: "私聊TTS触发概率(%)",
+  tts_group_trigger_probability: "群聊TTS触发概率(%)",
   enable_tts_local_playback: "TTS生成后本机播放",
   tts_local_playback_volume: "本机播放音量",
   enable_tts_live_subtitle_sync: "同步到直播打字机字幕",
@@ -597,7 +606,7 @@ const configLabels = {
   tts_local_playback_min_interval_seconds: "本机播放最小间隔秒数",
   auto_voice_enabled: "自动语音转换",
   auto_voice_full_conversion_enabled: "自动语音完整转换",
-  auto_voice_probability: "自动语音触发概率(%)",
+  auto_voice_probability: "自动语音触发概率(旧)",
   auto_voice_max_chars: "自动语音最大字数",
   auto_voice_cooldown_seconds: "自动语音冷却秒数",
   main_user_voice_probability: "主用户触发概率(%)",
@@ -664,6 +673,8 @@ const configLabels = {
   forward_message_image_limit: "合并消息视觉图片上限",
   max_group_recent_messages: "群聊最近消息上限",
   max_group_slang_terms: "群黑话上限",
+  group_slang_web_search_terms: "黑话联网搜索词数",
+  group_slang_web_search_results: "每词搜索摘要条数",
   daily_token_limit: "每日 Token 限额",
   enable_daily_token_soft_limit: "启用每日 Token 软限额",
   daily_token_soft_limit: "每日 Token 软限额",
@@ -837,24 +848,31 @@ const configDescriptions = {
   timer_pre_silence_minutes: "已有明确自预约/定时主动时，距离预约时间不足该分钟数会暂停普通主动、链式追问和未回复补一句。若预约文本带有休息/睡觉/起床语义，会从预约创建起静默到到点。",
   max_daily_messages: "每个私聊对象每天最多收到多少条插件主动消息。",
   passive_topic_memory_hours: "记录最近被动回复主题的时间窗口，用来判断短时间内是否又在重复同类话题。",
-  tts_generation_mode: "hybrid：有 <tts> 就直接处理，没有时按自动语音规则转换；direct：只让主模型自己写 <tts>；convert：普通回复后统一交给转换模型生成 TTS 格式。适合实现“中文显示文本 + 外语语音块 + 语音后中文释义”。",
+  tts_generation_mode: "先决定语音从哪里来。hybrid：模型写了 <tts> 就用，否则可由自动语音兜底；direct：只接受模型自己写的 <tts>；convert：普通回复统一交给转换模型生成 TTS 格式。",
   tts_voice_language: "控制真正送入 TTS 的语音正文语种。可让聊天文本保留中文，<tts> 内使用日语或英语朗读；日语模式会尽量避免明显非日语文本直接进入 TTS，并会给缺少说明的外语语音块补中文释义。",
   tts_conversion_provider_id: "用于 convert 路径、hybrid 自动语音和语种修正的文本模型，不是语音合成模型。留空时显式 <tts> 标签仍可直接由 AstrBot 当前会话 TTS provider 处理。",
   tts_extra_prompt: "只填写本人格或声线的额外要求。基础格式、语种和 provider 自适应规则会自动生成，留空最稳。",
+  tts_frequency_control_mode: "选择频率规则。全局频控：用概率影响 LLM 是否倾向输出 TTS，并控制 hybrid 自动语音和 convert 转换；显式 <tts> 不再被概率剥离，只受 provider 和会话间隔保护。旧版行为按各路径旧逻辑触发。",
+  tts_session_min_interval_seconds: "仅全局频控生效。私聊/群聊未单独覆盖时使用的默认最小间隔；0 表示不限制。",
+  tts_private_min_interval_seconds: "仅全局频控生效。私聊会话的最小间隔覆盖值；-1 表示继承默认间隔，0 表示私聊不限制。",
+  tts_group_min_interval_seconds: "仅全局频控生效。群聊会话的最小间隔覆盖值；-1 表示继承默认间隔，0 表示群聊不限制。建议群聊比私聊更长。",
+  tts_trigger_probability: "仅全局频控生效。私聊/群聊未单独覆盖时使用的默认触发概率。概率未命中时会提示 LLM 默认不要输出 <tts>，但不会剥离已输出的 <tts>。",
+  tts_private_trigger_probability: "仅全局频控生效。私聊触发概率覆盖值；-1 表示继承默认概率，0 表示私聊默认不主动使用 TTS。",
+  tts_group_trigger_probability: "仅全局频控生效。群聊触发概率覆盖值；-1 表示继承默认概率。建议群聊低于私聊，避免打扰。",
   enable_tts_local_playback: "开启后，TTS 音频生成成功时会在运行 AstrBot 的电脑上直接播放。默认关闭，避免群聊自动语音频繁出声。",
   tts_local_playback_volume: "TTS 生成后在本机播放时使用的音量百分比。默认 35，避免突然满音量播放；0 表示静音。",
   enable_tts_live_subtitle_sync: "开启后，TTS 生成音频时会把朗读文本同步推送到“我会直播圈米养你”的打字机字幕 overlay。",
   tts_live_subtitle_url: "直播插件字幕 overlay 的 /show 接口地址。默认对应 127.0.0.1:18081/show。",
   tts_local_playback_min_interval_seconds: "两次 TTS 本机播放之间的最小间隔。0 表示不限制。",
-  auto_voice_enabled: "开启后，hybrid 路径可按概率把纯文本短回复转换为语音。",
-  auto_voice_full_conversion_enabled: "开启后，自动语音尽量把整条回复完整转换成一段语音。",
-  auto_voice_probability: "普通纯文本回复参与自动语音转换的概率，填写 0-100。",
-  auto_voice_max_chars: "普通回复不超过该字数才参与自动语音。填 0 表示不限制。主用户单独概率命中时不受此限制。",
-  auto_voice_cooldown_seconds: "同一会话成功触发自动语音后的冷却秒数。主用户单独概率命中时不受普通冷却限制。",
-  main_user_voice_probability: "群聊中主用户本人发言或被 @ 到时的触发概率。填 -1 表示继承普通概率。主用户来自 target_user_ids 和私聊身份别名归并。",
-  main_user_mention_voice_keywords: "群聊 @ 到主用户且命中这些关键词时，参与强制语音判定。多个关键词可用逗号、空格或换行分隔。",
-  main_user_mention_voice_probability: "命中 @主用户语音关键词后的触发概率，填写 0-100。",
-  main_user_mention_voice_prompt: "关键词规则命中后注入给模型的补充要求，例如更短、更贴近、使用某种声线。",
+  auto_voice_enabled: "仅 hybrid 生效。开启后，当模型没有写 <tts> 时，普通纯文本回复可以进入自动语音转换；direct/convert 不依赖这个开关。",
+  auto_voice_full_conversion_enabled: "仅 hybrid 自动语音生效。开启后，自动语音尽量把整条回复完整转换成一段语音；关闭时更偏向混合文本+语音。",
+  auto_voice_probability: "仅旧版行为下生效。控制 hybrid 自动语音的旧触发概率；全局频控下请使用 TTS 全局触发概率。",
+  auto_voice_max_chars: "仅 hybrid 自动语音生效。普通回复不超过该字数才参与自动语音；填 0 表示不限制。旧版主用户单独概率命中时不受此限制。",
+  auto_voice_cooldown_seconds: "仅旧版行为下生效。同一会话成功触发 hybrid 自动语音后，需要等待多少秒才能再次触发；全局频控下请使用 TTS 会话最小间隔秒数。",
+  main_user_voice_probability: "仅旧版行为下作为强触发概率使用。群聊中主用户本人发言或被 @ 到时，提高 hybrid 自动语音倾向；填 -1 表示继承旧自动语音概率。",
+  main_user_mention_voice_keywords: "仅旧版行为下作为强触发条件使用。群聊 @ 到主用户且命中这些关键词时，参与主用户关键词语音判定。多个关键词可用逗号、空格或换行分隔。",
+  main_user_mention_voice_probability: "仅旧版行为下生效。命中 @主用户语音关键词后的触发概率，填写 0-100。",
+  main_user_mention_voice_prompt: "主用户关键词规则命中后注入给模型的补充要求，例如更短、更贴近、使用某种声线。",
   daily_token_limit: "插件内部 LLM 任务的每日硬限额，达到后跳过非豁免后台调用。0 表示不限。",
   enable_daily_token_soft_limit: "作为达到限额就停止插件/停止后台链路的替代方案。开启后，达到软限额时暂缓新闻、网页探索、创作、群整理、自检和主动生图等低优先级后台任务，优先保留用户当下触发的回复。",
   daily_token_soft_limit: "今日插件内部 LLM 消耗达到该值后进入软降载。0 表示关闭软限额，只保留每日硬限额。",
@@ -943,6 +961,8 @@ const configDescriptions = {
   forward_message_image_limit: "单次合并消息最多转述多少张图片，超过上限的图片仍会保留占位。",
   max_group_recent_messages: "每个群保存的最近消息数量，用于场景、话题和插话判断。",
   max_group_slang_terms: "每个群最多保留多少条黑话/简称候选。",
+  group_slang_web_search_terms: "黑话释义联网参考开启时，每次最多拿多少个候选词去搜索。建议保持较小，减少搜索调用。",
+  group_slang_web_search_results: "黑话释义联网参考开启时，每个候选词最多保留多少条网页摘要给模型判断匹配程度。",
   memory_refresh_interval_minutes: "长期画像整理的最小间隔，越短越容易产生模型调用。",
   max_companion_memory_items: "每个私聊对象最多保留多少条长期画像条目。",
   max_learned_expression_items: "每个私聊对象最多保留多少条表达习惯样本。",
@@ -1136,7 +1156,8 @@ const featureSettingGroups = {
   enable_group_high_intensity_mode: ["group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds"],
   enable_group_conversation_followup: ["group_conversation_followup_seconds", "group_conversation_followup_max_turns"],
   enable_group_slang_learning: ["max_group_slang_terms", "max_group_recent_messages", "enable_group_slang_meanings"],
-  enable_group_slang_meanings: ["max_group_slang_terms"],
+  enable_group_slang_meanings: ["max_group_slang_terms", "enable_group_slang_web_search"],
+  enable_group_slang_web_search: ["group_slang_web_search_terms", "group_slang_web_search_results"],
   enable_group_member_profiles: ["max_group_recent_messages"],
   enable_group_topic_threads: ["max_group_recent_messages"],
   enable_group_episode_memory: ["max_group_recent_messages"],
@@ -1165,7 +1186,7 @@ const featureSettingGroups = {
   enable_private_reading_ask_recommendation: ["private_reading_ask_probability"],
   enable_private_reading_preference_influence: ["private_reading_preference_min_ratings", "private_reading_preference_max_terms"],
   enable_unanswered_screen_peek_followup: ["unanswered_screen_peek_after_minutes", "unanswered_screen_peek_cooldown_minutes"],
-  enable_tts_enhancement: ["tts_generation_mode", "tts_voice_language", "tts_conversion_provider_id", "tts_extra_prompt", "enable_tts_local_playback", "tts_local_playback_volume", "enable_tts_live_subtitle_sync", "tts_live_subtitle_url", "tts_local_playback_min_interval_seconds", "auto_voice_enabled", "auto_voice_full_conversion_enabled", "auto_voice_probability", "auto_voice_max_chars", "auto_voice_cooldown_seconds", "main_user_voice_probability", "main_user_mention_voice_keywords", "main_user_mention_voice_probability", "main_user_mention_voice_prompt"],
+  enable_tts_enhancement: ["tts_generation_mode", "tts_voice_language", "tts_conversion_provider_id", "tts_extra_prompt", "tts_frequency_control_mode", "tts_session_min_interval_seconds", "tts_private_min_interval_seconds", "tts_group_min_interval_seconds", "tts_trigger_probability", "tts_private_trigger_probability", "tts_group_trigger_probability", "enable_tts_local_playback", "tts_local_playback_volume", "enable_tts_live_subtitle_sync", "tts_live_subtitle_url", "tts_local_playback_min_interval_seconds", "auto_voice_enabled", "auto_voice_full_conversion_enabled", "auto_voice_max_chars", "auto_voice_cooldown_seconds", "main_user_voice_probability", "main_user_mention_voice_keywords", "main_user_mention_voice_probability", "main_user_mention_voice_prompt"],
   enable_creative_writing: ["creative_hidden_mode", "creative_inspiration_probability", "creative_share_probability", "creative_chars_per_session", "creative_max_active_projects"],
   creative_hidden_mode: ["creative_share_probability"],
 };
@@ -1423,24 +1444,29 @@ const featureSettingSections = {
   ],
   enable_tts_enhancement: [
     {
-      title: "生成路径",
-      note: "控制主模型写标签、后处理转换和 provider 情绪标签适配。",
+      title: "1. 生成路径",
+      note: "先决定语音从哪里来：模型写标签、插件自动补语音，还是统一后处理转换。",
       keys: ["tts_generation_mode", "tts_voice_language", "tts_conversion_provider_id", "tts_extra_prompt"],
     },
     {
-      title: "自动语音",
-      note: "hybrid 模式下，符合条件的纯文本回复可按概率转换为语音。",
-      keys: ["auto_voice_enabled", "auto_voice_probability", "auto_voice_max_chars", "auto_voice_cooldown_seconds", "auto_voice_full_conversion_enabled"],
+      title: "2. 频率策略",
+      note: "全局频控用默认概率和间隔控制三种路径；私聊/群聊覆盖项填 -1 则继承默认值。",
+      keys: ["tts_frequency_control_mode", "tts_session_min_interval_seconds", "tts_trigger_probability", "tts_private_min_interval_seconds", "tts_private_trigger_probability", "tts_group_min_interval_seconds", "tts_group_trigger_probability"],
     },
     {
-      title: "本机与直播联动",
+      title: "3. hybrid 自动语音",
+      note: "仅 hybrid 使用：模型没写 <tts> 时，是否把普通短文本转成语音。",
+      keys: ["auto_voice_enabled", "auto_voice_max_chars", "auto_voice_full_conversion_enabled"],
+    },
+    {
+      title: "4. 旧版频率细项",
+      note: "仅“旧版行为”使用：保留旧的 hybrid 自动语音概率、冷却和主用户强触发。",
+      keys: ["auto_voice_probability", "auto_voice_cooldown_seconds", "main_user_voice_probability", "main_user_mention_voice_keywords", "main_user_mention_voice_probability", "main_user_mention_voice_prompt"],
+    },
+    {
+      title: "5. 本机与直播联动",
       note: "TTS 音频生成后可在运行 AstrBot 的电脑播放，并同步推送到直播插件打字机字幕。",
       keys: ["enable_tts_local_playback", "tts_local_playback_volume", "tts_local_playback_min_interval_seconds", "enable_tts_live_subtitle_sync", "tts_live_subtitle_url"],
-    },
-    {
-      title: "主用户触发",
-      note: "群聊中主用户本人发言，或消息 @ 到主用户并命中关键词时，提高语音触发概率。",
-      keys: ["main_user_voice_probability", "main_user_mention_voice_keywords", "main_user_mention_voice_probability", "main_user_mention_voice_prompt"],
     },
   ],
 };
@@ -1448,8 +1474,14 @@ const featureSettingSections = {
 const featureSettingTypes = {
   forward_message_mode: { type: "select", options: [["inject", "注入"], ["transcribe", "转述"]] },
   tts_generation_mode: { type: "select", options: [["hybrid", "hybrid"], ["direct", "direct"], ["convert", "convert"]] },
+  tts_frequency_control_mode: { type: "select", options: [["global", "全局频控：间隔+概率控制三种路径"], ["legacy", "旧版行为：按各路径原逻辑触发"]] },
   tts_voice_language: { type: "select", options: [["ja", "日语"], ["zh", "中文"], ["en", "英语"]] },
   tts_conversion_provider_id: { type: "provider" },
+  tts_session_min_interval_seconds: { type: "number", min: 0, max: 3600, step: 1 },
+  tts_private_min_interval_seconds: { type: "number", min: -1, max: 3600, step: 1 },
+  tts_group_min_interval_seconds: { type: "number", min: -1, max: 3600, step: 1 },
+  tts_private_trigger_probability: { type: "number", min: -1, max: 100, step: 1 },
+  tts_group_trigger_probability: { type: "number", min: -1, max: 100, step: 1 },
   SMART_MESSAGE_DEBOUNCE_PROVIDER_ID: { type: "provider" },
   segmented_proactive_chat_scope: { type: "select", options: [["all", "全部"], ["private", "仅私聊"], ["group", "仅群聊"]] },
   photo_generation_backend: { type: "select", options: [["auto", "auto"], ["comfyui", "ComfyUI"], ["external", "在线图片 API"]] },
@@ -1508,6 +1540,9 @@ const percentSettingKeys = new Set([
   "group_wakeup_interest_probability",
   "group_wakeup_topic_interest_max_boost",
   "group_wakeup_debounce_pending_penalty",
+  "tts_trigger_probability",
+  "tts_private_trigger_probability",
+  "tts_group_trigger_probability",
   "auto_voice_probability",
   "main_user_mention_voice_probability",
   "local_photo_cpu_busy_percent",
@@ -7525,6 +7560,7 @@ function featureRelatedSettings(key) {
   const keys = featureSettingGroups[key] || [];
   return keys
     .filter((item) => visibleConfigKey(item))
+    .filter((item) => featureSettingVisibleForCurrentMode(key, item, settings))
     .filter((item) => Object.prototype.hasOwnProperty.call(settings, item) || Object.prototype.hasOwnProperty.call(state.featureDraft || {}, item))
     .map((item) => ({
       key: item,
@@ -7532,6 +7568,29 @@ function featureRelatedSettings(key) {
       feature: Object.prototype.hasOwnProperty.call(state.featureDraft || {}, item),
       description: configDescriptions[item] || "这个参数会影响该功能的触发频率、上下文范围或行为边界。",
     }));
+}
+
+function featureSettingVisibleForCurrentMode(featureKey, settingKey, settings = state.overview?.settings || {}) {
+  if (featureKey !== "enable_tts_enhancement") return true;
+  const mode = String(settings.tts_frequency_control_mode || "global");
+  const globalOnly = new Set([
+    "tts_session_min_interval_seconds",
+    "tts_private_min_interval_seconds",
+    "tts_group_min_interval_seconds",
+    "tts_trigger_probability",
+    "tts_private_trigger_probability",
+    "tts_group_trigger_probability",
+  ]);
+  const legacyOnly = new Set([
+    "auto_voice_probability",
+    "auto_voice_cooldown_seconds",
+    "main_user_voice_probability",
+    "main_user_mention_voice_keywords",
+    "main_user_mention_voice_probability",
+    "main_user_mention_voice_prompt",
+  ]);
+  if (mode === "legacy") return !globalOnly.has(settingKey);
+  return !legacyOnly.has(settingKey);
 }
 
 function featureSettingInputType(key, value) {
@@ -8278,6 +8337,13 @@ function bindFeatureDetailActions() {
         input.addEventListener("change", () => {
           const label = input.closest(".feature-param-check")?.querySelector("span");
           if (label) label.textContent = input.checked ? "开启" : "关闭";
+        });
+      }
+      if (state.selectedFeatureKey === "enable_tts_enhancement" && input.dataset.featureParam === "tts_frequency_control_mode") {
+        input.addEventListener("change", () => {
+          state.overview.settings = state.overview.settings || {};
+          state.overview.settings.tts_frequency_control_mode = input.value || "global";
+          renderFeatureSwitches();
         });
       }
     });

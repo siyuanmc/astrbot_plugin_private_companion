@@ -1837,7 +1837,11 @@ class GroupObservationMixin:
         if not self.enable_group_episode_memory:
             return
         now = _now_ts()
+        async with self._data_lock:
+            group = deepcopy(self._get_group(group_id))
         if now - _safe_float(group.get("last_episode_refresh_at"), 0) < self.group_episode_refresh_minutes * 60:
+            return
+        if now < _safe_float(group.get("group_episode_retry_after"), 0):
             return
         recent = group.get("recent_messages")
         if not isinstance(recent, list) or len(recent) < 12:
@@ -1869,14 +1873,28 @@ class GroupObservationMixin:
   "avoid_repeat": ["短期内不要重复接的话题"]
 }}
 """.strip()
-        raw = await self._llm_call(
-            prompt,
-            max_tokens=420,
-            provider_id=self._task_provider(self.group_episode_provider_id, self.mai_style_provider_id),
-            task="group_episode",
+        acquired = await self._try_acquire_group_background_task(
+            group_id,
+            "group_episode",
+            now,
+            refresh_key="last_episode_refresh_at",
+            refresh_seconds=self.group_episode_refresh_minutes * 60,
         )
-        payload = self._extract_json_payload(raw or "")
+        if not acquired:
+            return
+        try:
+            raw = await self._llm_call(
+                prompt,
+                max_tokens=420,
+                provider_id=self._task_provider(self.group_episode_provider_id, self.mai_style_provider_id),
+                task="group_episode",
+            )
+            payload = self._extract_json_payload(raw or "")
+        except Exception as exc:
+            await self._mark_group_background_retry(group_id, "group_episode", now, exc)
+            return
         if not isinstance(payload, dict):
+            await self._mark_group_background_retry(group_id, "group_episode", now, "invalid_json")
             return
         episode = {
             "date": _today_key(),
@@ -1888,6 +1906,7 @@ class GroupObservationMixin:
             "avoid_repeat": self._normalize_string_list(payload.get("avoid_repeat"), limit=6, item_limit=60),
         }
         if not episode["summary"]:
+            await self._mark_group_background_retry(group_id, "group_episode", now, "empty_summary")
             return
         async with self._data_lock:
             current = self._get_group(group_id)
@@ -1899,13 +1918,20 @@ class GroupObservationMixin:
                 episodes.append(episode)
             del episodes[:-self.max_group_episodes]
             current["last_episode_refresh_at"] = now
+            current["group_episode_retry_after"] = 0
+            current["group_episode_last_error"] = ""
+            current["group_episode_running_at"] = 0
             self._save_data_sync()
 
     async def _maybe_refresh_group_slang_meanings(self, group_id: str, group: dict[str, Any]) -> None:
         if not self.enable_group_slang_meanings:
             return
         now = _now_ts()
+        async with self._data_lock:
+            group = deepcopy(self._get_group(group_id))
         if now - _safe_float(group.get("last_slang_summary_at"), 0) < self.group_slang_summary_minutes * 60:
+            return
+        if now < _safe_float(group.get("group_slang_retry_after"), 0):
             return
         slang = group.get("slang_terms")
         if not isinstance(slang, list) or len(slang) < 5:
@@ -1931,9 +1957,19 @@ class GroupObservationMixin:
                 examples.append(f"{_single_line(item.get('name'), 18) or '群友'}: {text}")
         if not examples:
             return
+        web_evidence = await self._collect_group_slang_web_evidence(group_id, terms, examples)
+        web_evidence_block = (
+            "【联网参考】\n"
+            "下面是可选外部搜索摘要。它只能作为辅助证据,不能覆盖群聊样例；只有外部解释与本群样例能对应时才可采纳。"
+            "如果外部结果像百科、广告、无关网页、同词异义或无法匹配本群用法,请忽略。\n"
+            f"{web_evidence}\n"
+            if web_evidence
+            else ""
+        )
         prompt = f"""
 请根据群聊样例,给这些群内常见词/梗做很短的语义解释。这是一个“黑话解释”专门任务。
 只解释能从样例明确看出来的含义；证据不足、只是普通词、只是人名/群名片、只是口头语、含义不稳定时,直接不要输出这个词。
+如果提供了联网参考,还要判断外部解释与本群样例的匹配程度；外部解释不匹配本群用法时必须以群聊样例为准。
 不要写“语境不明”“可能是”“不确定”等模糊解释；低置信度宁可省略。
 不要输出解释过程。
 
@@ -1943,6 +1979,8 @@ class GroupObservationMixin:
 【群聊样例】
 {chr(10).join(examples[-60:])}
 
+{web_evidence_block}
+
 只输出 JSON,键为词,值为对象：
 {{
   "某词": {{
@@ -1950,48 +1988,71 @@ class GroupObservationMixin:
     "usage": "什么时候用,不确定就不要输出该词",
     "type": "外号|事件代称|梗|口头禅|调侃|称赞|辱骂|其他",
     "confidence": 0.0到1.0的小数,
-    "evidence": "最能说明含义的一条短样例"
+    "evidence": "最能说明含义的一条短样例",
+    "web_match": 0.0到1.0的小数,没有联网参考或不匹配就填0,
+    "web_evidence": "联网参考中最相关的一句,没有就空字符串"
   }}
 }}
 
 入库标准：只输出 confidence >= 0.65 的词。无法达到就省略。
 """.strip()
-        raw = await self._llm_call(
-            prompt,
-            max_tokens=560,
-            provider_id=self._task_provider(self.group_slang_provider_id, self.mai_style_provider_id),
-            task="group_slang",
+        acquired = await self._try_acquire_group_background_task(
+            group_id,
+            "group_slang",
+            now,
+            refresh_key="last_slang_summary_at",
+            refresh_seconds=self.group_slang_summary_minutes * 60,
         )
-        payload = self._extract_json_payload(raw or "")
+        if not acquired:
+            return
+        try:
+            raw = await self._llm_call(
+                prompt,
+                max_tokens=560,
+                provider_id=self._task_provider(self.group_slang_provider_id, self.mai_style_provider_id),
+                task="group_slang",
+            )
+            payload = self._extract_json_payload(raw or "")
+        except Exception as exc:
+            await self._mark_group_background_retry(group_id, "group_slang", now, exc)
+            return
+        if not isinstance(payload, dict):
+            await self._mark_group_background_retry(group_id, "group_slang", now, "invalid_json")
+            return
         normalized: dict[str, dict[str, str]] = {}
-        if isinstance(payload, dict):
-            for term, value in payload.items():
-                key = _single_line(term, 20)
-                if not key:
-                    continue
-                if isinstance(value, dict):
-                    meaning = _single_line(value.get("meaning"), 90)
-                    usage = _single_line(value.get("usage"), 90)
-                    slang_type = _single_line(value.get("type"), 24)
-                    evidence = _single_line(value.get("evidence"), 120)
-                    confidence = min(1.0, _safe_float(value.get("confidence"), 0.0, 0.0))
-                else:
-                    meaning = _single_line(value, 90)
-                    usage = ""
-                    slang_type = ""
-                    evidence = ""
-                    confidence = 0.0
-                if not meaning or confidence < 0.65 or self._is_uncertain_group_slang_meaning(meaning, usage):
-                    continue
-                normalized[key] = {
-                    "meaning": meaning,
-                    "usage": usage,
-                    "type": slang_type,
-                    "confidence": f"{confidence:.2f}",
-                    "evidence": evidence,
-                    "source": "llm_slang",
-                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                }
+        for term, value in payload.items():
+            key = _single_line(term, 20)
+            if not key:
+                continue
+            if isinstance(value, dict):
+                meaning = _single_line(value.get("meaning"), 90)
+                usage = _single_line(value.get("usage"), 90)
+                slang_type = _single_line(value.get("type"), 24)
+                evidence = _single_line(value.get("evidence"), 120)
+                web_match = min(1.0, _safe_float(value.get("web_match"), 0.0, 0.0))
+                web_hit = _single_line(value.get("web_evidence"), 140)
+                confidence = min(1.0, _safe_float(value.get("confidence"), 0.0, 0.0))
+            else:
+                meaning = _single_line(value, 90)
+                usage = ""
+                slang_type = ""
+                evidence = ""
+                web_match = 0.0
+                web_hit = ""
+                confidence = 0.0
+            if not meaning or confidence < 0.65 or self._is_uncertain_group_slang_meaning(meaning, usage):
+                continue
+            normalized[key] = {
+                "meaning": meaning,
+                "usage": usage,
+                "type": slang_type,
+                "confidence": f"{confidence:.2f}",
+                "evidence": evidence,
+                "web_match": f"{web_match:.2f}" if web_match > 0 else "",
+                "web_evidence": web_hit,
+                "source": "llm_slang",
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            }
         async with self._data_lock:
             current = self._get_group(group_id)
             removed_uncertain = self._prune_uncertain_group_slang_meanings(current)
@@ -2005,7 +2066,104 @@ class GroupObservationMixin:
                     continue
                 meanings[term] = payload
             current["last_slang_summary_at"] = now
+            current["group_slang_retry_after"] = 0
+            current["group_slang_last_error"] = ""
+            current["group_slang_running_at"] = 0
             if removed_uncertain:
                 logger.info("[PrivateCompanion] 已清理低置信度群黑话释义: group=%s removed=%s", group_id, removed_uncertain)
             self._save_data_sync()
+
+    async def _try_acquire_group_background_task(
+        self,
+        group_id: str,
+        task: str,
+        now: float,
+        *,
+        refresh_key: str,
+        refresh_seconds: float,
+    ) -> bool:
+        retry_key = f"{task}_retry_after"
+        running_key = f"{task}_running_at"
+        async with self._data_lock:
+            current = self._get_group(group_id)
+            if now - _safe_float(current.get(refresh_key), 0) < max(0.0, float(refresh_seconds)):
+                return False
+            if now < _safe_float(current.get(retry_key), 0):
+                return False
+            running_at = _safe_float(current.get(running_key), 0)
+            if running_at > 0 and now - running_at < 10 * 60:
+                return False
+            current[running_key] = now
+            self._save_data_sync()
+        return True
+
+    async def _mark_group_background_retry(self, group_id: str, task: str, now: float, error: Any) -> None:
+        retry_key = f"{task}_retry_after"
+        error_key = f"{task}_last_error"
+        running_key = f"{task}_running_at"
+        delay = 10 * 60
+        if task == "group_episode":
+            delay = min(max(10 * 60, _safe_int(getattr(self, "group_episode_refresh_minutes", 60), 60, 1) * 60), 30 * 60)
+        elif task == "group_slang":
+            delay = min(max(10 * 60, _safe_int(getattr(self, "group_slang_summary_minutes", 360), 360, 1) * 60), 30 * 60)
+        async with self._data_lock:
+            current = self._get_group(group_id)
+            current[retry_key] = now + delay
+            current[error_key] = _single_line(error, 180)
+            current[running_key] = 0
+            self._save_data_sync()
+        logger.warning(
+            "[PrivateCompanion] 群聊后台整理失败,已进入短冷却避免重复请求: group=%s task=%s retry=%ss error=%s",
+            group_id,
+            task,
+            int(delay),
+            _single_line(error, 120),
+        )
+
+    async def _collect_group_slang_web_evidence(self, group_id: str, terms: list[str], examples: list[str]) -> str:
+        if not bool(getattr(self, "enable_group_slang_web_search", False)):
+            return ""
+        picker = getattr(self, "_pick_available_web_search_umo", None)
+        searcher = getattr(self, "_run_astrbot_web_search", None)
+        if not callable(picker) or not callable(searcher):
+            return ""
+        search_umo = picker()
+        if not search_umo:
+            return ""
+        term_limit = max(1, min(12, _safe_int(getattr(self, "group_slang_web_search_terms", 4), 4, 1, 12)))
+        result_limit = max(1, min(5, _safe_int(getattr(self, "group_slang_web_search_results", 2), 2, 1, 5)))
+        picked_terms: list[str] = []
+        for term in terms:
+            clean = _single_line(term, 20)
+            if not clean or clean in picked_terms:
+                continue
+            if len(clean) <= 1:
+                continue
+            picked_terms.append(clean)
+            if len(picked_terms) >= term_limit:
+                break
+        if not picked_terms:
+            return ""
+        lines: list[str] = []
+        for term in picked_terms:
+            query = f"{term} 网络用语 梗 黑话 含义"
+            try:
+                results = await searcher(query, umo=search_umo, topic="general")
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] 群黑话联网参考搜索失败: group=%s term=%s err=%s", group_id, term, _single_line(exc, 120))
+                continue
+            hits = []
+            for item in results[:result_limit]:
+                if not isinstance(item, dict):
+                    continue
+                title = _single_line(item.get("title"), 80)
+                snippet = _single_line(item.get("snippet"), 180)
+                if not title and not snippet:
+                    continue
+                hits.append(f"- {title}: {snippet}".strip())
+            if hits:
+                lines.append(f"{term}:\n" + "\n".join(hits))
+        if lines:
+            logger.info("[PrivateCompanion] 群黑话联网参考已收集: group=%s terms=%s", group_id, len(lines))
+        return "\n".join(lines)[:1800]
 

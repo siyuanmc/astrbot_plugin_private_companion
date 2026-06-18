@@ -2274,6 +2274,37 @@
       "enable_group_companion": true
     }
   },
+  "enable_group_slang_web_search": {
+    "description": "黑话释义联网参考",
+    "type": "bool",
+    "hint": "默认关闭。开启后，黑话释义整理会低频调用 AstrBot 全局网页搜索，为已有黑话候选收集外部解释摘要，并让模型判断外部解释与本群聊天样例是否匹配。搜索结果只作为证据，不会直接覆盖群内用法。",
+    "default": false,
+    "condition": {
+      "enable_group_slang_meanings": true
+    }
+  },
+  "group_slang_web_search_terms": {
+    "description": "黑话联网搜索词数",
+    "type": "int",
+    "hint": "每次黑话释义整理最多拿多少个候选词去搜索。建议保持较小，避免额外搜索调用过多。",
+    "default": 4,
+    "min": 1,
+    "max": 12,
+    "condition": {
+      "enable_group_slang_web_search": true
+    }
+  },
+  "group_slang_web_search_results": {
+    "description": "每词搜索摘要条数",
+    "type": "int",
+    "hint": "每个黑话候选最多保留多少条网页搜索摘要给释义模型参考。",
+    "default": 2,
+    "min": 1,
+    "max": 5,
+    "condition": {
+      "enable_group_slang_web_search": true
+    }
+  },
   "enable_group_relationship_graph": {
     "description": "启用群友互动关系网络",
     "type": "bool",
@@ -3193,7 +3224,7 @@
     "default": "hybrid",
     "options": ["hybrid", "direct", "convert"],
     "labels": ["hybrid：标签优先+自动转换", "direct：只让主模型写标签", "convert：统一后处理转换"],
-    "hint": "hybrid：有 <tts> 就直接处理，没有时按自动语音规则转换。direct：只向主模型注入 <tts> 规则，不做后处理转换。convert：主模型普通回复后统一交给转换模型生成 TTS 格式。",
+    "hint": "先决定语音从哪里来。hybrid：模型写了 <tts> 就用，否则可由自动语音兜底；direct：只接受模型自己写的 <tts>；convert：普通回复统一交给转换模型生成 TTS 格式。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3224,6 +3255,80 @@
     "type": "text",
     "default": "",
     "hint": "只填写本人格或声线的额外要求。基础 <tts> 格式、语种和 provider 情绪标签适配规则会自动生成，留空最稳。",
+    "condition": {
+      "enable_tts_enhancement": true
+    }
+  },
+  "tts_frequency_control_mode": {
+    "description": "TTS频率控制模式",
+    "type": "string",
+    "default": "global",
+    "options": ["global", "legacy"],
+    "labels": ["全局频控：间隔+概率控制三种路径", "旧版行为：按各路径原逻辑触发"],
+    "hint": "选择频率规则。全局频控用概率影响 LLM 是否倾向输出 TTS，并控制 hybrid 自动语音和 convert 转换；显式 <tts> 不再被概率剥离，只受 provider 和会话间隔保护。旧版行为按各路径旧逻辑触发。",
+    "condition": {
+      "enable_tts_enhancement": true
+    }
+  },
+  "tts_session_min_interval_seconds": {
+    "description": "TTS会话最小间隔秒数",
+    "type": "float",
+    "default": 90,
+    "min": 0,
+    "hint": "仅全局频控生效。同一会话两次真正发送语音之间的最小间隔；0 表示不限制。",
+    "condition": {
+      "enable_tts_enhancement": true
+    }
+  },
+  "tts_private_min_interval_seconds": {
+    "description": "私聊TTS最小间隔秒数",
+    "type": "float",
+    "default": -1,
+    "min": -1,
+    "hint": "仅全局频控生效。私聊会话的最小间隔覆盖值；-1 表示继承 TTS 会话最小间隔秒数，0 表示私聊不限制。",
+    "condition": {
+      "enable_tts_enhancement": true
+    }
+  },
+  "tts_group_min_interval_seconds": {
+    "description": "群聊TTS最小间隔秒数",
+    "type": "float",
+    "default": -1,
+    "min": -1,
+    "hint": "仅全局频控生效。群聊会话的最小间隔覆盖值；-1 表示继承 TTS 会话最小间隔秒数，0 表示群聊不限制。建议群聊比私聊更长。",
+    "condition": {
+      "enable_tts_enhancement": true
+    }
+  },
+  "tts_trigger_probability": {
+    "description": "TTS全局触发概率(%)",
+    "type": "int",
+    "default": 20,
+    "min": 0,
+    "max": 100,
+    "hint": "仅全局频控生效。作为私聊/群聊未覆盖时的默认触发概率；概率未命中时会提示 LLM 默认不要输出 <tts>，但不会剥离 LLM 已输出的 <tts>。",
+    "condition": {
+      "enable_tts_enhancement": true
+    }
+  },
+  "tts_private_trigger_probability": {
+    "description": "私聊TTS触发概率(%)",
+    "type": "int",
+    "default": -1,
+    "min": -1,
+    "max": 100,
+    "hint": "仅全局频控生效。私聊触发概率覆盖值；-1 表示继承 TTS 全局触发概率，0 表示私聊默认不主动使用 TTS。",
+    "condition": {
+      "enable_tts_enhancement": true
+    }
+  },
+  "tts_group_trigger_probability": {
+    "description": "群聊TTS触发概率(%)",
+    "type": "int",
+    "default": -1,
+    "min": -1,
+    "max": 100,
+    "hint": "仅全局频控生效。群聊触发概率覆盖值；-1 表示继承 TTS 全局触发概率。建议群聊低于私聊，避免打扰。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3280,7 +3385,7 @@
     "description": "自动语音转换",
     "type": "bool",
     "default": false,
-    "hint": "开启后，hybrid 路径可按概率把纯文本短回复转换为语音；convert 路径不依赖此开关。",
+    "hint": "仅 hybrid 生效。开启后，当模型没有写 <tts> 时，普通纯文本回复可以进入自动语音转换；direct/convert 不依赖这个开关。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3289,18 +3394,18 @@
     "description": "自动语音完整转换",
     "type": "bool",
     "default": false,
-    "hint": "开启后，自动语音尽量把整条回复完整转换为一段语音，而不是混合保留部分文本。",
+    "hint": "仅 hybrid 自动语音生效。开启后，自动语音尽量把整条回复完整转换为一段语音；关闭时更偏向混合文本+语音。",
     "condition": {
       "enable_tts_enhancement": true
     }
   },
   "auto_voice_probability": {
-    "description": "自动语音触发概率(%)",
+    "description": "自动语音触发概率(旧)",
     "type": "int",
     "default": 20,
     "min": 0,
     "max": 100,
-    "hint": "普通纯文本回复参与自动语音转换的概率。0 表示不触发，100 表示符合条件时总是触发。",
+    "hint": "仅旧版行为下生效。控制 hybrid 自动语音的旧触发概率；全局频控下请使用“TTS全局触发概率(%)”。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3310,7 +3415,7 @@
     "type": "int",
     "default": 50,
     "min": 0,
-    "hint": "普通回复不超过该字数才参与自动语音。填 0 表示不限制。主用户单独概率命中时不受此限制。",
+    "hint": "仅 hybrid 自动语音生效。普通回复不超过该字数才参与自动语音；填 0 表示不限制。旧版主用户单独概率命中时不受此限制。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3320,7 +3425,7 @@
     "type": "int",
     "default": 120,
     "min": 0,
-    "hint": "同一会话成功触发自动语音后，需要等待多少秒才能再次触发。主用户单独概率命中时不受普通冷却限制。",
+    "hint": "仅旧版行为下生效。同一会话成功触发 hybrid 自动语音后，需要等待多少秒才能再次触发；全局频控下请使用“TTS会话最小间隔秒数”。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3331,7 +3436,7 @@
     "default": -1,
     "min": -1,
     "max": 100,
-    "hint": "群聊中主用户本人发言或被 @ 到时的触发概率。填 -1 表示继承普通概率。主用户来自 target_user_ids 和私聊身份别名归并。",
+    "hint": "仅旧版行为下作为强触发概率使用。群聊中主用户本人发言或被 @ 到时，提高 hybrid 自动语音倾向；填 -1 表示继承旧自动语音概率。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3340,7 +3445,7 @@
     "description": "@主用户语音关键词",
     "type": "text",
     "default": "",
-    "hint": "群聊 @ 到主用户且命中这些关键词时，参与强制语音判定。多个关键词可用逗号、空格或换行分隔。",
+    "hint": "仅旧版行为下作为强触发条件使用。群聊 @ 到主用户且命中这些关键词时，参与主用户关键词语音判定。多个关键词可用逗号、空格或换行分隔。",
     "condition": {
       "enable_tts_enhancement": true
     }
@@ -3351,7 +3456,7 @@
     "default": 0,
     "min": 0,
     "max": 100,
-    "hint": "命中 @主用户语音关键词后的触发概率。0 表示不启用关键词强制触发。",
+    "hint": "仅旧版行为下生效。命中 @主用户语音关键词后的触发概率。0 表示不启用关键词强触发。",
     "condition": {
       "enable_tts_enhancement": true
     }

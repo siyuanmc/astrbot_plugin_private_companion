@@ -77,6 +77,21 @@ class TtsEnhancementMixin:
             self.tts_voice_language = "ja"
         self.tts_conversion_provider_id = self._cfg_str(config, "tts_conversion_provider_id", "")
         self.tts_extra_prompt = self._cfg_str(config, "tts_extra_prompt", "")
+        self.tts_frequency_control_mode = self._cfg_str(config, "tts_frequency_control_mode", "global", "global").lower()
+        if self.tts_frequency_control_mode not in {"global", "legacy"}:
+            self.tts_frequency_control_mode = "global"
+        self.tts_session_min_interval_seconds = self._cfg_float(config, "tts_session_min_interval_seconds", 90.0, 0.0)
+        self.tts_private_min_interval_seconds = self._cfg_float(config, "tts_private_min_interval_seconds", -1.0, -1.0)
+        self.tts_group_min_interval_seconds = self._cfg_float(config, "tts_group_min_interval_seconds", -1.0, -1.0)
+        self.tts_trigger_probability = self._cfg_int(
+            config,
+            "tts_trigger_probability",
+            self._cfg_int(config, "auto_voice_probability", self._cfg_int(config, "auto_japanese_voice_probability", 20, 0, 100), 0, 100),
+            0,
+            100,
+        ) / 100.0
+        self.tts_private_trigger_probability = self._cfg_int(config, "tts_private_trigger_probability", -1, -1, 100) / 100.0
+        self.tts_group_trigger_probability = self._cfg_int(config, "tts_group_trigger_probability", -1, -1, 100) / 100.0
         self.auto_voice_enabled = self._cfg_bool(config, "auto_voice_enabled", self._cfg_bool(config, "auto_japanese_voice_enabled", False))
         self.auto_voice_full_conversion_enabled = self._cfg_bool(
             config,
@@ -86,7 +101,7 @@ class TtsEnhancementMixin:
         self.auto_voice_probability = self._cfg_int(
             config,
             "auto_voice_probability",
-            self._cfg_int(config, "auto_japanese_voice_probability", 20, 0, 100),
+            int(round(self.tts_trigger_probability * 100)),
             0,
             100,
         ) / 100.0
@@ -132,6 +147,9 @@ class TtsEnhancementMixin:
         self.tts_local_playback_min_interval_seconds = self._cfg_float(config, "tts_local_playback_min_interval_seconds", 0.0, 0.0)
         self._tts_local_playback_last_at = 0.0
         self._tts_auto_voice_last_at: dict[str, float] = {}
+        if not isinstance(getattr(self, "_tts_session_last_at", None), dict):
+            self._tts_session_last_at: dict[str, float] = {}
+        self._apply_tts_runtime_overrides()
 
     def _tts_provider_kind(self, tts_provider: Any = None, provider_settings: dict[str, Any] | None = None) -> str:
         pieces: list[str] = []
@@ -203,6 +221,8 @@ class TtsEnhancementMixin:
         if not isinstance(settings, dict):
             return
         lang = self._normalize_tts_voice_language_value(settings.get("tts_voice_language"))
+        if not lang:
+            lang = self._normalize_tts_voice_language_value(getattr(self, "tts_voice_language", "ja"))
         if lang:
             self.tts_voice_language = lang
 
@@ -396,16 +416,125 @@ class TtsEnhancementMixin:
             source = source.replace(token, original)
         return source.strip()
 
-    def _tts_text_matches_language(self, text: str) -> bool:
-        spoken = self._normalize_tts_spoken_text(text, provider_kind="fishaudio")
-        lang = getattr(self, "tts_voice_language", "ja")
-        if lang == "ja":
-            return bool(re.search(r"[\u3040-\u30ff\u31f0-\u31ff]", spoken))
-        if lang == "en":
-            letters = len(re.findall(r"[A-Za-z]", spoken))
-            cjk = len(re.findall(r"[\u4e00-\u9fff]", spoken))
-            return letters >= max(4, cjk)
-        return bool(spoken)
+    def _tts_session_key(self, event: Any) -> str:
+        return _single_line(getattr(event, "unified_msg_origin", ""), 160) if event is not None else ""
+
+    def _tts_event_scope_kind(self, event: Any) -> str:
+        origin = str(getattr(event, "unified_msg_origin", "") or "")
+        if "GroupMessage" in origin:
+            return "group"
+        if "FriendMessage" in origin:
+            return "private"
+        return ""
+
+    def _tts_effective_min_interval_seconds(self, event: Any) -> float:
+        interval = float(getattr(self, "tts_session_min_interval_seconds", 0.0) or 0.0)
+        scope = self._tts_event_scope_kind(event)
+        override = None
+        if scope == "private":
+            override = getattr(self, "tts_private_min_interval_seconds", -1.0)
+        elif scope == "group":
+            override = getattr(self, "tts_group_min_interval_seconds", -1.0)
+        try:
+            override_value = float(override)
+        except (TypeError, ValueError):
+            override_value = -1.0
+        return max(0.0, override_value if override_value >= 0 else interval)
+
+    def _tts_effective_trigger_probability(self, event: Any) -> float:
+        probability = float(getattr(self, "tts_trigger_probability", 1.0) or 0.0)
+        scope = self._tts_event_scope_kind(event)
+        override = None
+        if scope == "private":
+            override = getattr(self, "tts_private_trigger_probability", -0.01)
+        elif scope == "group":
+            override = getattr(self, "tts_group_trigger_probability", -0.01)
+        try:
+            override_value = float(override)
+        except (TypeError, ValueError):
+            override_value = -0.01
+        return max(0.0, min(1.0, override_value if override_value >= 0 else probability))
+
+    def _tts_session_interval_remaining(self, event: Any) -> float:
+        if getattr(self, "tts_frequency_control_mode", "global") == "legacy":
+            return 0.0
+        session = self._tts_session_key(event)
+        interval = self._tts_effective_min_interval_seconds(event)
+        if not session or interval <= 0:
+            return 0.0
+        last = float(getattr(self, "_tts_session_last_at", {}).get(session, 0.0) or 0.0)
+        return max(0.0, interval - (time.time() - last))
+
+    def _mark_tts_session_sent(self, event: Any) -> None:
+        session = self._tts_session_key(event)
+        if not session:
+            return
+        state = getattr(self, "_tts_session_last_at", None)
+        if not isinstance(state, dict):
+            state = {}
+            self._tts_session_last_at = state
+        state[session] = time.time()
+
+    def _event_explicitly_requests_tts(self, event: Any) -> bool:
+        text = str(getattr(event, "message_str", "") or "").strip().lower()
+        if not text:
+            return False
+        compact = re.sub(r"\s+", "", text)
+        negative_patterns = (
+            r"(不要|别|不用|不必|禁止|关闭|取消|别再|先别).{0,8}(语音|tts|朗读|念出来|读出来)",
+            r"(语音|tts|朗读|念出来|读出来).{0,8}(不要|别|不用|不必|禁止|关闭|取消)",
+            r"(不想|不是想|没想|暂时不想|先不想).{0,8}(听|听听|听一下|听见|听到).{0,8}(你|妳|你的|妳的).{0,4}(声音|声)",
+            r"(不想|不是想|没想|暂时不想|先不想).{0,8}(你的|妳的).{0,4}(声音|声)",
+        )
+        if any(re.search(pattern, compact, flags=re.IGNORECASE) for pattern in negative_patterns):
+            return False
+        positive_patterns = (
+            r"(用|发|来|回|回复|说|讲).{0,10}(语音|tts|朗读|念出来|读出来)",
+            r"(语音|tts|朗读|念出来|读出来).{0,10}(回|回复|发|来|说|讲|一下|模式)",
+            r"(开|启用|打开).{0,8}(语音|tts)",
+            r"(想|想要|想听|想听听|想听一下|想听见|想听到|想听你|想听妳).{0,8}(你|妳|你的|妳的).{0,4}(声音|声)",
+            r"(想|想要).{0,6}(听|听听|听一下|听见|听到).{0,8}(你|妳|你的|妳的).{0,4}(声音|声)",
+            r"(让我|给我|陪我).{0,6}(听|听听|听一下).{0,8}(你|妳|你的|妳的).{0,4}(声音|声)",
+        )
+        return any(re.search(pattern, compact, flags=re.IGNORECASE) for pattern in positive_patterns)
+
+    def _tts_trigger_probability_allows(self, event: Any, *, reason: str) -> bool:
+        if getattr(self, "tts_frequency_control_mode", "global") == "legacy":
+            return True
+        cached = getattr(event, "_private_companion_tts_trigger_probability_allowed", None)
+        if isinstance(cached, bool):
+            return cached
+        probability = self._tts_effective_trigger_probability(event)
+        if probability >= 1.0:
+            try:
+                setattr(event, "_private_companion_tts_trigger_probability_allowed", True)
+            except Exception:
+                pass
+            return True
+        if probability <= 0.0:
+            logger.info(
+                "[PrivateCompanion] TTS全局触发概率为0,已按普通文本处理: reason=%s session=%s",
+                reason,
+                _single_line(self._tts_session_key(event), 80) or "unknown",
+            )
+            try:
+                setattr(event, "_private_companion_tts_trigger_probability_allowed", False)
+            except Exception:
+                pass
+            return False
+        allowed = random.random() <= probability
+        try:
+            setattr(event, "_private_companion_tts_trigger_probability_allowed", allowed)
+        except Exception:
+            pass
+        if not allowed:
+            logger.info(
+                "[PrivateCompanion] TTS全局触发概率未命中: reason=%s probability=%.2f session=%s",
+                reason,
+                probability,
+                _single_line(self._tts_session_key(event), 80) or "unknown",
+            )
+        return allowed
 
     def _tts_visible_text_has_chinese(self, text: str) -> bool:
         cleaned = self._strip_any_tts_markup(text)
@@ -530,16 +659,27 @@ TTS 朗读文本：
     def _build_tts_rule_prompt(self, provider_kind: str = "generic") -> str:
         lang = self._tts_language_label()
         mode = getattr(self, "tts_generation_mode", "hybrid")
+        frequency_mode = getattr(self, "tts_frequency_control_mode", "global")
         bilingual_rule = (
-            f"当语音正文目标语种不是中文时，每个 <tts>...</tts> 语音块后面都必须紧跟一句自然中文含义，方便用户看到语音对应中文；不要只输出外语语音块，也不要只在语音块前放一句无关中文。中文可见文本必须是完整自然句，不能以“还/还是/或者/要不要/因为/所以/但是/然后/和/对/从/到/让”等连接词或半个问题结尾；如果有多句中文含义，用换行分开。"
+            f"当语音正文目标语种不是中文时，每个 <tts>...</tts> 语音块后面都必须紧跟一句自然中文含义，方便用户看到语音对应中文；不要只输出外语语音块，也不要只在语音块前放一句无关中文。中文可见文本必须是完整自然句，不能以“还/还是/或者/要不要/因为/所以/但是/然后/和/对/从/到/让”等连接词或半个问题结尾；如果有多句中文含义，用换行分开。目标语种为日语时，<tts> 内除极短语气词外必须包含假名，不要只写“喜欢/大丈夫”这类容易混淆的汉字词。"
             if getattr(self, "tts_voice_language", "ja") != "zh"
             else ""
         )
-        tag_rule = (
-            "可以使用 <tts>...</tts> 标出真正需要朗读的内容；标签外文本会作为普通聊天文字保留。适合采用“中文显示文本 + 外语语音块”的表达：标签外中文自然聊天，标签内按目标语种朗读。"
-            if mode in {"hybrid", "direct"}
-            else "本轮主模型可以正常回复，不需要主动写 <tts>；后处理会生成语音格式。"
-        )
+        if mode in {"hybrid", "direct"}:
+            if frequency_mode == "legacy":
+                tag_rule = (
+                    "可以使用 <tts>...</tts> 标出真正需要朗读的内容；标签外文本会作为普通聊天文字保留。"
+                    "适合采用“中文显示文本 + 外语语音块”的表达：标签外中文自然聊天，标签内按目标语种朗读。"
+                    "由你根据当前回复是否适合被听见、情绪是否更贴近、用户是否明显期待语音来自行判断；不要为了格式而滥用。"
+                )
+            else:
+                tag_rule = (
+                    "可以使用 <tts>...</tts> 标出真正需要朗读的内容；标签外文本会作为普通聊天文字保留。"
+                    "可以采用“中文显示文本 + 外语语音块”的表达：标签外中文自然聊天，标签内按目标语种朗读。"
+                    "不要刻意使用语音；只有在一句话更适合被听见、情绪更贴近或用户明显期待语音时才写 <tts>。"
+                )
+        else:
+            tag_rule = "本轮主模型可以正常回复，不需要主动写 <tts>；后处理会生成语音格式。"
         emotion_rule = (
             "当前 TTS provider 适合保留 [happy]、[sad] 这类方括号情绪标签。"
             if self._tts_provider_allows_emotion_tags(provider_kind)
@@ -555,20 +695,26 @@ TTS 朗读文本：
             if getattr(self, "tts_voice_language", "ja") == "zh":
                 examples = (
                     "参考格式：\n"
-                    "例1：<tts>嗯，我在听。</tts>你慢慢说。\n"
-                    "例2：先别急，<tts>我陪你想一下。</tts>这件事可以一点点拆开。"
+                    "例1：嗯，我在听。你慢慢说。\n"
+                    "例2：<tts>嗯，我在听。</tts>你慢慢说。\n"
+                    "例3：先别急，<tts>我陪你想一下。</tts>这件事可以一点点拆开。\n"
+                    "例4：这句普通发文字就好，不需要语音。"
                 )
             elif getattr(self, "tts_voice_language", "ja") == "en":
                 examples = (
                     "参考格式：\n"
-                    "例1：<tts>I am listening.</tts>我在听。你慢慢说。\n"
-                    "例2：先别急，<tts>Let me stay with you for a moment.</tts>让我陪你待一会儿。我们一点点想。"
+                    "例1：我在听。你慢慢说。\n"
+                    "例2：<tts>I am listening.</tts>我在听。你慢慢说。\n"
+                    "例3：先别急，<tts>Let me stay with you for a moment.</tts>让我陪你待一会儿。我们一点点想。\n"
+                    "例4：普通说明直接用中文文字，不要为了凑语音硬写 <tts>。"
                 )
             else:
                 examples = (
                     "参考格式：\n"
-                    "例1：<tts>ちゃんと聞いてるよ。</tts>我有在好好听哦。你慢慢说。\n"
-                    "例2：先别急，<tts>少しだけ、そばにいるね。</tts>我先在你旁边待一会儿。我们一点点想。"
+                    "例1：我有在好好听哦。你慢慢说。\n"
+                    "例2：<tts>ちゃんと聞いてるよ。</tts>我有在好好听哦。你慢慢说。\n"
+                    "例3：先别急，<tts>少しだけ、そばにいるね。</tts>我先在你旁边待一会儿。我们一点点想。\n"
+                    "例4：这句只发中文文字就好，不要为了表现语音而硬加 <tts>。"
                 )
         extra = _single_line(getattr(self, "tts_extra_prompt", ""), 800)
         if not extra:
@@ -617,10 +763,33 @@ TTS 朗读文本：
         prompt = str(getattr(req, "system_prompt", "") or "")
         if marker not in prompt and getattr(self, "tts_generation_mode", "hybrid") in {"hybrid", "direct"}:
             req.system_prompt = f"{prompt}\n\n{marker}\n{self._build_tts_rule_prompt(provider_kind)}".strip()
+        user_requested_tts = self._event_explicitly_requests_tts(event)
+        if (
+            not user_requested_tts
+            and getattr(self, "tts_generation_mode", "hybrid") in {"hybrid", "direct"}
+            and getattr(self, "tts_frequency_control_mode", "global") != "legacy"
+            and not self._tts_trigger_probability_allows(event, reason="llm_tts_prompt")
+        ):
+            req.system_prompt = (
+                f"{req.system_prompt}\n\n【本轮 TTS 频率控制】\n"
+                "这轮自动语音概率未命中，默认不要输出 <tts>...</tts>。"
+                "如果用户本轮明确要求语音、想听你的声音或要求朗读，仍应以回应用户需求为主，可以输出 <tts>。"
+            ).strip()
         if self._should_force_tts_for_main_user_event(event):
+            frequency_mode = getattr(self, "tts_frequency_control_mode", "global")
+            if frequency_mode == "legacy":
+                force_rule = "这轮消息来自主用户或明确 @ 到主用户。若当前回复适合语音表达，适合采用一段 <tts>...</tts>；由你根据语境判断，仍需遵守目标语种和中文释义。"
+            else:
+                force_rule = "这轮消息来自主用户或明确 @ 到主用户。如果语音比纯文字更自然，可以采用一段 <tts>...</tts>；不要刻意使用语音，仍需遵守目标语种、中文释义和会话最小间隔。"
             req.system_prompt = (
                 f"{req.system_prompt}\n\n【本轮 TTS 强化触发】\n"
-                "这轮消息来自主用户或明确 @ 到主用户。请在自然回复里包含一段适合 TTS 朗读的 <tts>...</tts> 内容。"
+                f"{force_rule}"
+            ).strip()
+        if user_requested_tts and getattr(self, "tts_generation_mode", "hybrid") in {"hybrid", "direct"}:
+            req.system_prompt = (
+                f"{req.system_prompt}\n\n【用户语音请求】\n"
+                "用户本轮明确希望听到语音或你的声音。请以回应用户需求为主：如果当前回复适合用语音表达，可以直接写一段 <tts>...</tts>；"
+                "这类顺应用户请求的语音不受自动语音触发概率限制，但仍需自然克制、遵守目标语种和中文释义，不要为了格式而硬加。"
             ).strip()
 
     async def protect_tts_enhancement_response_blocks(self, event: Any, resp: Any) -> None:
@@ -832,6 +1001,8 @@ TTS 朗读文本：
             should_convert = ok
         if not should_convert:
             return []
+        if not self._tts_trigger_probability_allows(event, reason=reason or mode):
+            return []
         converted = await self._convert_text_to_tts_markup(text, event, full=(mode == "convert" or self.auto_voice_full_conversion_enabled))
         if not converted:
             return []
@@ -851,16 +1022,17 @@ TTS 朗读文本：
         if not getattr(self, "auto_voice_enabled", False):
             return False, ""
         session = str(getattr(event, "unified_msg_origin", "") or "")
+        use_legacy_frequency = getattr(self, "tts_frequency_control_mode", "global") == "legacy"
         is_main = self._event_targets_main_user(event)
-        if is_main and self.main_user_voice_probability >= 0:
+        if use_legacy_frequency and is_main and self.main_user_voice_probability >= 0:
             probability = self.main_user_voice_probability
             bypass_limits = True
             reason = "main_user"
         else:
-            probability = getattr(self, "auto_voice_probability", 0.0)
+            probability = getattr(self, "auto_voice_probability", 0.0) if use_legacy_frequency else 1.0
             bypass_limits = False
             reason = "auto"
-        if self._event_mentions_main_user_with_keyword(event):
+        if use_legacy_frequency and self._event_mentions_main_user_with_keyword(event):
             probability = max(probability, getattr(self, "main_user_mention_voice_probability", 0.0))
             bypass_limits = True
             reason = "main_user_keyword"
@@ -870,7 +1042,7 @@ TTS 朗读文本：
         max_chars = int(getattr(self, "auto_voice_max_chars", 0) or 0)
         if max_chars > 0 and not bypass_limits and len(cleaned) > max_chars:
             return False, ""
-        cooldown = int(getattr(self, "auto_voice_cooldown_seconds", 0) or 0)
+        cooldown = int(getattr(self, "auto_voice_cooldown_seconds", 0) or 0) if use_legacy_frequency else 0
         if cooldown > 0 and not bypass_limits and session:
             last = float(getattr(self, "_tts_auto_voice_last_at", {}).get(session, 0) or 0)
             if time.time() - last < cooldown:
@@ -950,15 +1122,18 @@ TTS 朗读文本：
         if getattr(self, "tts_voice_language", "ja") == "zh":
             output_rule = "必须包含一个 <tts>...</tts> 语音块"
             display_rule = "语音和显示文本同为中文时，不需要额外翻译。"
+            language_rule = "语音块内必须是自然中文。"
         else:
             output_rule = "必须包含一个 <tts>...</tts> 语音块，且语音块后必须补一句自然中文含义"
             display_rule = "不要只输出 <tts>...</tts>；最终格式建议为：<tts>目标语种朗读文本</tts>\\n中文含义。中文含义必须完整收口，不能停在“还/还是/或者/要不要/因为/所以/但是/然后/和/对/从/到/让”等连接词后；如果原回复有多个短句，就用换行拆成多句完整中文，不要用空格硬连。"
+            language_rule = "语音块内必须完全使用目标语种，不要夹中文评价、中文语气词或中文说明。目标语种为日语时，除极短语气词外必须包含假名，不要只输出汉字词。"
         prompt = f"""
 请把下面这条回复转换成适合 TTS 朗读的最终输出。
 
 目标语种：{lang}
 输出格式：{output_rule}
 显示文本规则：{display_rule}
+语种规则：{language_rule}
 Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_allows_emotion_tags(provider_kind) else "按普通朗读文本处理"}
 补充要求：{extra or "无"}
 
@@ -1258,6 +1433,17 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
                 pos = match.end()
                 continue
             source_spoken = spoken
+            remaining = self._tts_session_interval_remaining(event)
+            if remaining > 0:
+                output.append(Plain(match.group(1).strip()))
+                logger.info(
+                    "[PrivateCompanion] TTS会话级节流生效,已按普通文本保留: session=%s remain=%.1fs text=%s",
+                    _single_line(self._tts_session_key(event), 80) or "unknown",
+                    remaining,
+                    _single_line(spoken, 80),
+                )
+                pos = match.end()
+                continue
             if self._tts_text_needs_language_conversion(spoken, provider_kind=provider_kind):
                 before_convert = spoken
                 spoken = await self._convert_text_to_spoken_language(spoken, event, provider_kind=provider_kind)
@@ -1276,6 +1462,7 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
             )
             if record is not None:
                 output.append(record)
+                self._mark_tts_session_sent(event)
                 if getattr(self, "tts_voice_language", "ja") != "zh":
                     next_start = matches[index + 1].start() if index + 1 < len(matches) else len(normalized)
                     visible_after_this_block = normalized[match.end():next_start]

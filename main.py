@@ -302,7 +302,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "4.0.3",
+    "4.0.4",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, TtsEnhancementMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -812,6 +812,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.enable_group_episode_memory = self._cfg_bool(c, "enable_group_episode_memory", True)
         self.enable_group_interjection_feedback = self._cfg_bool(c, "enable_group_interjection_feedback", True)
         self.enable_group_slang_meanings = self._cfg_bool(c, "enable_group_slang_meanings", True)
+        self.enable_group_slang_web_search = self._cfg_bool(c, "enable_group_slang_web_search", False)
+        self.group_slang_web_search_terms = self._cfg_int(c, "group_slang_web_search_terms", 4, 1, 12)
+        self.group_slang_web_search_results = self._cfg_int(c, "group_slang_web_search_results", 2, 1, 5)
         self.enable_group_relationship_graph = self._cfg_bool(c, "enable_group_relationship_graph", True)
         self.enable_group_privacy_guard = self._cfg_bool(c, "enable_group_privacy_guard", True)
         self.enable_worldbook_member_recognition = self._cfg_bool(c, "enable_worldbook_member_recognition", True)

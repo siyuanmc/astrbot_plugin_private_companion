@@ -2643,6 +2643,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_group_episode_memory",
             "enable_group_interjection_feedback",
             "enable_group_slang_meanings",
+            "enable_group_slang_web_search",
             "enable_group_relationship_graph",
             "enable_group_privacy_guard",
             "enable_worldbook_member_recognition",
@@ -2862,6 +2863,13 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "tts_voice_language",
             "tts_conversion_provider_id",
             "tts_extra_prompt",
+            "tts_frequency_control_mode",
+            "tts_session_min_interval_seconds",
+            "tts_private_min_interval_seconds",
+            "tts_group_min_interval_seconds",
+            "tts_trigger_probability",
+            "tts_private_trigger_probability",
+            "tts_group_trigger_probability",
             "enable_tts_local_playback",
             "enable_tts_live_subtitle_sync",
             "tts_live_subtitle_url",
@@ -2998,6 +3006,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "screen_diary_context_max_chars",
             "max_group_recent_messages",
             "max_group_slang_terms",
+            "group_slang_web_search_terms",
+            "group_slang_web_search_results",
             "memory_refresh_interval_minutes",
             "episode_memory_refresh_messages",
             "episode_memory_refresh_minutes",
@@ -3107,6 +3117,27 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 "group_repeat_follow_probability": int(round(float(getattr(self.plugin, "group_repeat_follow_probability", 0.18) or 0) * 100)),
                 "group_repeat_interrupt_probability": int(round(float(getattr(self.plugin, "group_repeat_interrupt_probability", 0.10) or 0) * 100)),
                 "group_repeat_interrupt_probability_step": int(round(float(getattr(self.plugin, "group_repeat_interrupt_probability_step", 0.12) or 0) * 100)),
+            }
+        )
+        def _percent_attr(name: str, default: float = 0.0, *, inherit: bool = False) -> int:
+            try:
+                raw = float(getattr(self.plugin, name, default) or 0.0)
+            except (TypeError, ValueError):
+                raw = default
+            if inherit and raw < 0:
+                return -1
+            if raw <= 1:
+                raw *= 100
+            return max(-1 if inherit else 0, min(100, int(round(raw))))
+
+        values.update(
+            {
+                "tts_trigger_probability": _percent_attr("tts_trigger_probability", 0.2),
+                "tts_private_trigger_probability": _percent_attr("tts_private_trigger_probability", -0.01, inherit=True),
+                "tts_group_trigger_probability": _percent_attr("tts_group_trigger_probability", -0.01, inherit=True),
+                "auto_voice_probability": _percent_attr("auto_voice_probability", 0.2),
+                "main_user_voice_probability": _percent_attr("main_user_voice_probability", -0.01, inherit=True),
+                "main_user_mention_voice_probability": _percent_attr("main_user_mention_voice_probability", 0.0),
             }
         )
         return values
@@ -3590,6 +3621,13 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "tts_voice_language",
             "tts_conversion_provider_id",
             "tts_extra_prompt",
+            "tts_frequency_control_mode",
+            "tts_session_min_interval_seconds",
+            "tts_private_min_interval_seconds",
+            "tts_group_min_interval_seconds",
+            "tts_trigger_probability",
+            "tts_private_trigger_probability",
+            "tts_group_trigger_probability",
             "enable_tts_local_playback",
             "enable_tts_live_subtitle_sync",
             "tts_live_subtitle_url",
@@ -3753,6 +3791,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_group_episode_memory",
             "enable_group_interjection_feedback",
             "enable_group_slang_meanings",
+            "enable_group_slang_web_search",
             "enable_group_relationship_graph",
             "enable_group_privacy_guard",
             "enable_worldbook_member_recognition",
@@ -3842,6 +3881,13 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "tts_voice_language",
             "tts_conversion_provider_id",
             "tts_extra_prompt",
+            "tts_frequency_control_mode",
+            "tts_session_min_interval_seconds",
+            "tts_private_min_interval_seconds",
+            "tts_group_min_interval_seconds",
+            "tts_trigger_probability",
+            "tts_private_trigger_probability",
+            "tts_group_trigger_probability",
             "enable_tts_local_playback",
             "enable_tts_live_subtitle_sync",
             "tts_live_subtitle_url",
@@ -3966,6 +4012,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "screen_diary_context_max_chars",
             "max_group_recent_messages",
             "max_group_slang_terms",
+            "group_slang_web_search_terms",
+            "group_slang_web_search_results",
             "memory_refresh_interval_minutes",
             "episode_memory_refresh_messages",
             "episode_memory_refresh_minutes",
@@ -4082,6 +4130,18 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         if key == "tts_generation_mode":
             mode = str(value or "hybrid").strip().lower()
             return mode if mode in {"hybrid", "direct", "convert"} else "hybrid"
+        if key == "tts_frequency_control_mode":
+            mode = str(value or "global").strip().lower()
+            aliases = {
+                "全局": "global",
+                "全局频控": "global",
+                "新版": "global",
+                "旧版": "legacy",
+                "旧版行为": "legacy",
+                "legacy_mode": "legacy",
+            }
+            mode = aliases.get(mode, mode)
+            return mode if mode in {"global", "legacy"} else "global"
         if key == "tts_voice_language":
             lang = str(value or "ja").strip().lower()
             return lang if lang in {"ja", "zh", "en"} else "ja"
@@ -4089,6 +4149,16 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             return str(value or "").strip()[:1200]
         if key == "tts_conversion_provider_id":
             return str(value or "").strip()[:160]
+        if key == "tts_session_min_interval_seconds":
+            try:
+                return max(0.0, min(3600.0, float(value)))
+            except (TypeError, ValueError):
+                return 90.0
+        if key in {"tts_private_min_interval_seconds", "tts_group_min_interval_seconds"}:
+            try:
+                return max(-1.0, min(3600.0, float(value)))
+            except (TypeError, ValueError):
+                return -1.0
         if key == "main_user_mention_voice_keywords":
             return str(value or "").strip()[:1200]
         if key == "forward_message_mode":
@@ -4211,12 +4281,20 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 return max(0, min(5, int(value)))
             except (TypeError, ValueError):
                 return 1
-        if key == "auto_voice_probability":
+        if key in {"tts_trigger_probability", "auto_voice_probability"}:
             try:
                 raw = float(value)
                 return max(0, min(100, int(round(raw * 100 if 0 <= raw <= 1 else raw))))
             except (TypeError, ValueError):
                 return 20
+        if key in {"tts_private_trigger_probability", "tts_group_trigger_probability"}:
+            try:
+                raw = float(value)
+                if raw < 0:
+                    return -1
+                return max(0, min(100, int(round(raw * 100 if 0 <= raw <= 1 else raw))))
+            except (TypeError, ValueError):
+                return -1
         if key == "main_user_voice_probability":
             try:
                 raw = float(value)
@@ -4302,6 +4380,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "atrelay_member_cache_minutes",
             "atrelay_multi_target_limit",
             "private_image_vision_cache_max_items",
+            "group_slang_web_search_terms",
+            "group_slang_web_search_results",
             "auto_voice_max_chars",
             "auto_voice_cooldown_seconds",
         }:
