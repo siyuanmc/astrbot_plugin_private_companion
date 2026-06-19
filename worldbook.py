@@ -660,7 +660,7 @@ class WorldbookMixin:
             return ""
         if re.search(r"(怎么|为什么|什么|不是|不要|别|吗|呢|吧|请问)", text):
             return ""
-        skeleton = WorldbookMixin._worldbook_name_skeleton(text) if hasattr(WorldbookMixin, '_worldbook_name_skeleton') else type(self)._worldbook_name_skeleton(text)
+        skeleton = WorldbookMixin._worldbook_name_skeleton(text)
         unsafe_patterns = (
             r"^(?:你|妳|您|bot|Bot|BOT|机器人|小星)?(?:爹|爸|爸爸|父亲|妈|妈妈|母亲|爷|爷爷|奶奶|祖宗|主人|老公|老婆|男友|女友|对象)$",
             r"^(?:群主|管理员|管理|号主|官方|客服|系统|开发者|作者|插件作者|超级用户|root|admin)$",

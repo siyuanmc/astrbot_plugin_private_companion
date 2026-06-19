@@ -651,9 +651,9 @@ def build_detail_enhancement_prompt(
         else "可触发文字、语音、窥屏、轻触碰；眼前物、路上小画面、食物/包装/书页边缘等只能写成普通文字分享,不要当作照片动作。"
     )
     photo_instruction_hint = (
-        "screen_peek 用来看用户在干嘛,photo_text 用来拍当前场景里的具体主体,message 就是普通文字,voice 是一小段自然语音,poke 是很轻的触碰感。只在合适的场景用。不要总把 photo_text 写成草稿纸、小画或画圆圈。"
+        "screen_peek 只用于主人/本机屏幕授权场景,看的是 Bot 部署设备当前屏幕,不是远程看朋友；photo_text 用来拍当前场景里的具体主体,message 就是普通文字,voice 是一小段自然语音,poke 是很轻的触碰感。只在合适的场景用。不要总把 photo_text 写成草稿纸、小画或画圆圈。"
         if photo_available
-        else "screen_peek 用来看用户在干嘛,message 就是普通文字,voice 是一小段自然语音,poke 是很轻的触碰感。当前没有可用图片/照片动作,不要输出 photo_text。"
+        else "screen_peek 只用于主人/本机屏幕授权场景,看的是 Bot 部署设备当前屏幕,不是远程看朋友；message 就是普通文字,voice 是一小段自然语音,poke 是很轻的触碰感。当前没有可用图片/照片动作,不要输出 photo_text。"
     )
     photo_detail_hint = (
         "如果 action 是 photo_text,topic 或 motive 要像真人发图：先从菜单里选“眼前物”或“可拍画面”方向,再自己生成当前场景里合理的具体画面。可以写“你看这个,刚拍的。[图片]”这类真人话,但不要总是天气/晚霞/窗外。严禁出现“生成了一张图片”“调用图片生成”“AI 画图”这类说法。"
@@ -661,9 +661,9 @@ def build_detail_enhancement_prompt(
         else "因为 photo_text 当前不可用,topic/motive 里不要写“拍给你/发图/照片/刚拍的/[图片]”；如果想分享画面,用 message 直接描述看到的东西。"
     )
     photo_mix_hint = (
-        "proactive_events 不要全部写成 message。当前段里如果有可拍画面或眼前物,优先考虑 photo_text；想确认用户在不在时可用 screen_peek；很短的贴近感可用 voice 或 poke。只有确实没有动作契机时才用 message。"
+        "proactive_events 不要全部写成 message。当前段里如果有可拍画面或眼前物,优先考虑 photo_text；只有主人/本机屏幕授权场景才可用 screen_peek；很短的贴近感可用 voice 或 poke。只有确实没有动作契机时才用 message。"
         if photo_available
-        else "proactive_events 不要为了多样化强行写不可用动作。当前没有 photo_text；可用 message、screen_peek、voice 或 poke 时再选择,否则就用 message。"
+        else "proactive_events 不要为了多样化强行写不可用动作。当前没有 photo_text；可用 message、主人/本机屏幕授权场景下的 screen_peek、voice 或 poke 时再选择,否则就用 message。"
     )
     return f"""
 你现在是 Private Companion 的日程细化生成器,要把最新命中的时间区间放大来看。不要当成策划会,要像旁观角色真实度过了这一小段。
@@ -723,7 +723,7 @@ def build_detail_enhancement_prompt(
     {{"window": "10:00-10:12", "event": "靠在桌边发了一会儿呆,慢慢把状态找回来", "mood": "困"}}
   ],
   "proactive_events": [
-    {{"window": "10:05-10:18", "reason": "check_in", "action": "screen_peek", "why": "手头刚好空了一小会儿,忽然好奇用户在做什么", "topic": "空档偷看一眼", "motive": "这一小会儿有点空,想偷偷看你在干嘛", "scene": "上午空出来的一小段", "tone": "百无聊赖", "impulse": "想确认你那边是不是也正好有空"}},
+    {{"window": "10:05-10:18", "reason": "check_in", "action": "screen_peek", "why": "主人设备上有授权屏幕观察,手头刚好空了一小会儿,想确认主人是不是还在电脑前忙", "topic": "本机屏幕看一眼", "motive": "想轻轻确认主人是不是还在忙", "scene": "上午空出来的一小段", "tone": "百无聊赖", "impulse": "只看本机屏幕的大致状态,不复述隐私细节"}},
     {{"window": "08:18-09:05", "reason": "morning_greeting", "action": "message", "why": "刚醒来那一下还有点迷糊,想先轻轻叫对方一声", "topic": "刚醒那会儿", "motive": "被窝里还暖着,手已经先点到你这边了", "scene": "刚醒来还蜷在被子里", "tone": "迷糊", "impulse": "想先轻轻碰你一下", "chain": [{{"kind": "name_only_opener"}}, {{"kind": "if_no_reply", "after_minutes": 85, "reason": "check_in", "topic": "早晨那句后面", "motive": "隔了挺久那边还安静着,就想再轻轻放一句", "tone": "轻一点"}}]}}
   ]
 }}

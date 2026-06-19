@@ -72,6 +72,8 @@ class PrivateCompanionPageApiUsersGroupsMixin:
                     user["enabled"] = enabled
                     user["manual_enabled"] = enabled
                     user["manual_disabled"] = not enabled
+                    if enabled:
+                        self.plugin._ensure_private_user_umo(user_id, user)
                     if not enabled:
                         self.plugin._clear_pending_proactive_plan(user)
                 if "nickname" in payload:
@@ -151,12 +153,43 @@ class PrivateCompanionPageApiUsersGroupsMixin:
                 groups = deepcopy(self.plugin.data.get("groups", {}))
             if not isinstance(groups, dict):
                 groups = {}
-            items = [self._group_summary(group_id, group) for group_id, group in groups.items() if isinstance(group, dict)]
+            visible_groups = [
+                (group_id, group)
+                for group_id, group in groups.items()
+                if isinstance(group, dict) and not self._looks_like_member_shadow_group(str(group_id), group)
+            ]
+            shadow_count = len(groups) - len(visible_groups)
+            items = [self._group_summary(group_id, group) for group_id, group in visible_groups]
             items.sort(key=lambda item: item.get("last_seen_ts") or 0, reverse=True)
-            return self._ok({"items": items[:limit], "total": len(items)})
+            return self._ok({"items": items[:limit], "total": len(items), "shadow_total": shadow_count})
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 获取群列表失败: {exc}", exc_info=True)
             return self._error(str(exc))
+
+    def _looks_like_member_shadow_group(self, group_id: str, group: dict[str, Any]) -> bool:
+        """Hide historical records created when a sender id was mistaken for a group id."""
+        gid = str(group_id or group.get("group_id") or "").strip()
+        if not gid or not gid.isdigit():
+            return False
+        configured = set(self.plugin._configured_group_ids()) | set(self.plugin._configured_group_blacklist_ids())
+        if gid in configured:
+            return False
+        recent = group.get("recent_messages") if isinstance(group.get("recent_messages"), list) else []
+        sender_ids = [
+            str(item.get("sender_id") or "").strip()
+            for item in recent
+            if isinstance(item, dict) and str(item.get("sender_id") or "").strip()
+        ]
+        if not sender_ids:
+            return False
+        members = group.get("members") if isinstance(group.get("members"), dict) else {}
+        same_sender_hits = sum(1 for sender_id in sender_ids if sender_id == gid)
+        unique_senders = {sender_id for sender_id in sender_ids if sender_id}
+        if gid in members and same_sender_hits >= max(1, int(len(sender_ids) * 0.8)) and len(unique_senders) <= 2:
+            return True
+        if not self._single_line(group.get("name") or group.get("group_name"), 80) and same_sender_hits == len(sender_ids) and len(members) <= 2:
+            return True
+        return False
     async def get_group(self) -> dict[str, Any]:
         group_id = str(request.args.get("group_id", "")).strip()
         if not group_id:

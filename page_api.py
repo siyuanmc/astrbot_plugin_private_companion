@@ -85,7 +85,12 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             users = data.get("users") if isinstance(data.get("users"), dict) else {}
             groups = data.get("groups") if isinstance(data.get("groups"), dict) else {}
             enabled_users = sum(1 for item in users.values() if isinstance(item, dict) and item.get("enabled", True))
-            enabled_groups = sum(1 for item in groups.values() if isinstance(item, dict) and item.get("enabled", True))
+            visible_groups = {
+                str(group_id): group
+                for group_id, group in groups.items()
+                if isinstance(group, dict) and not self._looks_like_member_shadow_group(str(group_id), group)
+            }
+            enabled_groups = sum(1 for item in visible_groups.values() if isinstance(item, dict) and item.get("enabled", True))
             return self._ok(
                 {
                     "plugin": {
@@ -104,8 +109,9 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     },
                     "group": {
                         "enabled": bool(getattr(self.plugin, "enable_group_companion", False)),
-                        "group_count": len(groups),
+                        "group_count": len(visible_groups),
                         "enabled_group_count": enabled_groups,
+                        "shadow_group_count": max(0, len(groups) - len(visible_groups)),
                         "access_mode": getattr(self.plugin, "group_access_mode", "whitelist"),
                         "whitelist": self.plugin._configured_group_ids(),
                         "blacklist": self.plugin._configured_group_blacklist_ids(),
@@ -1069,9 +1075,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             )
             add("warn", "主动候选", title, detail, ts=self._float(item.get("last_seen_ts") or item.get("created_ts")), jump="proactive")
 
-        for item in token_stats.get("recent", [])[:50]:
-            if bool(item.get("success", True)):
-                continue
+        for item in self._active_token_failures(token_stats.get("recent", []), limit=50):
             title = f"{self._single_line(item.get('task'), 40) or 'LLM 调用'} 失败"
             detail = "；".join(
                 part
@@ -1085,6 +1089,35 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
 
         events.sort(key=lambda item: self._float(item.get("ts")), reverse=True)
         return events
+
+    def _active_token_failures(
+        self,
+        recent: Any,
+        *,
+        max_age_seconds: float = 30 * 60,
+        limit: int = 80,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(recent, list):
+            return []
+        now = time.time()
+        recovered: set[tuple[str, str]] = set()
+        failures: list[dict[str, Any]] = []
+        for item in recent[:limit]:
+            if not isinstance(item, dict):
+                continue
+            task = self._single_line(item.get("task"), 40) or "LLM 调用"
+            provider = self._single_line(item.get("provider"), 80) or "-"
+            key = (task, provider)
+            if bool(item.get("success", True)):
+                recovered.add(key)
+                continue
+            ts = self._float(item.get("ts"))
+            if ts > 0 and now - ts > max_age_seconds:
+                continue
+            if key in recovered:
+                continue
+            failures.append(item)
+        return failures
 
     def _proactive_candidate_block_is_normal(self, note: str) -> bool:
         text = self._single_line(note, 180)
@@ -1235,12 +1268,12 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         else:
             add("ok", "SQLite WAL 检查通过", f"已检查 {len(sqlite_status.get('items', []))} 个数据库文件。", "", "troubleshooting")
 
-        token_errors = [item for item in token_stats.get("recent", []) if not bool(item.get("success", True))]
+        token_errors = self._active_token_failures(token_stats.get("recent", []))
         if token_errors:
             first = token_errors[0]
             add("error", "最近存在模型调用失败", first.get("error") or f"{first.get('task') or '任务'} 调用失败。", "到 Token 页查看失败任务和 provider", "tokens")
         else:
-            add("ok", "近期模型调用无失败记录", "Token 最近调用列表里没有失败项。", "", "tokens")
+            add("ok", "近期模型调用无待处理失败", "近 30 分钟内没有未恢复的模型调用失败；历史失败可在 Token 页查看。", "", "tokens")
 
         image_cache = cache.get("private_image_vision", {})
         if image_cache.get("enabled"):
@@ -6138,6 +6171,19 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             signature = self._single_line(item.get("signature"), 120)
             topic = self._single_line(item.get("topic"), 100)
             motive = self._single_line(item.get("motive"), 180)
+            sanitizer = getattr(self.plugin, "_sanitize_friend_proactive_plan_fields", None)
+            if isinstance(user, dict) and callable(sanitizer):
+                sanitized = sanitizer(
+                    user,
+                    reason=reason,
+                    action=action,
+                    topic=topic,
+                    motive=motive,
+                )
+                reason = self._single_line(sanitized.get("reason"), 40) or reason
+                action = self._single_line(sanitized.get("action"), 40) or action
+                topic = self._single_line(sanitized.get("topic"), 100)
+                motive = self._single_line(sanitized.get("motive"), 180)
             merged = None
             for existing in reversed(buckets):
                 if existing.get("status") != status:
@@ -6273,6 +6319,36 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             user_summary = self._user_summary(str(user_id), user)
             source_counts[source] = source_counts.get(source, 0) + 1
             status_counts[status] = status_counts.get(status, 0) + 1
+            action = (
+                self._single_line(user.get("planned_proactive_action"), 40)
+                or self._single_line(timer_event.get("action"), 40)
+                or "message"
+            )
+            reason = (
+                self._single_line(user.get("planned_proactive_reason"), 40)
+                or self._single_line(timer_event.get("reason"), 40)
+            )
+            topic = (
+                self._single_line(user.get("planned_proactive_topic"), 80)
+                or self._single_line(timer_event.get("topic"), 80)
+            )
+            motive = (
+                self._single_line(user.get("planned_proactive_motive"), 180)
+                or self._single_line(timer_event.get("motive"), 180)
+            )
+            sanitizer = getattr(self.plugin, "_sanitize_friend_proactive_plan_fields", None)
+            if callable(sanitizer):
+                sanitized = sanitizer(
+                    user,
+                    reason=reason,
+                    action=action,
+                    topic=topic,
+                    motive=motive,
+                )
+                reason = self._single_line(sanitized.get("reason"), 40) or reason
+                action = self._single_line(sanitized.get("action"), 40) or action
+                topic = self._single_line(sanitized.get("topic"), 80)
+                motive = self._single_line(sanitized.get("motive"), 180)
             items.append(
                 {
                     "user_id": str(user_id),
@@ -6281,15 +6357,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     "user_role_label": user_summary.get("relationship_role_label") or "",
                     "source": source,
                     "status": status,
-                    "action": self._single_line(user.get("planned_proactive_action"), 40)
-                    or self._single_line(timer_event.get("action"), 40)
-                    or "message",
-                    "reason": self._single_line(user.get("planned_proactive_reason"), 40)
-                    or self._single_line(timer_event.get("reason"), 40),
-                    "topic": self._single_line(user.get("planned_proactive_topic"), 80)
-                    or self._single_line(timer_event.get("topic"), 80),
-                    "motive": self._single_line(user.get("planned_proactive_motive"), 180)
-                    or self._single_line(timer_event.get("motive"), 180),
+                    "action": action,
+                    "reason": reason,
+                    "topic": topic,
+                    "motive": motive,
                     "scheduled_ts": scheduled_ts,
                     "scheduled": self.plugin._format_timestamp_elapsed(scheduled_ts),
                     "last_skip": self.plugin._format_timestamp_elapsed(user.get("last_proactive_skip_at", 0)),
@@ -6316,6 +6387,23 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             user = users.get(user_id) if isinstance(users.get(user_id), dict) else {}
             user_summary = self._user_summary(user_id, user) if user_id else {}
             status = self._single_line(raw.get("status"), 32) or "unknown"
+            audit_reason = self._single_line(raw.get("reason"), 40)
+            audit_action = self._single_line(raw.get("action"), 60)
+            audit_topic = self._single_line(raw.get("topic"), 100)
+            audit_motive = self._single_line(raw.get("motive"), 180)
+            sanitizer = getattr(self.plugin, "_sanitize_friend_proactive_plan_fields", None)
+            if isinstance(user, dict) and callable(sanitizer):
+                sanitized = sanitizer(
+                    user,
+                    reason=audit_reason,
+                    action=audit_action,
+                    topic=audit_topic,
+                    motive=audit_motive,
+                )
+                audit_reason = self._single_line(sanitized.get("reason"), 40) or audit_reason
+                audit_action = self._single_line(sanitized.get("action"), 60) or audit_action
+                audit_topic = self._single_line(sanitized.get("topic"), 100)
+                audit_motive = self._single_line(sanitized.get("motive"), 180)
             audit_status_counts[status] = audit_status_counts.get(status, 0) + 1
             audit_items.append(
                 {
@@ -6326,10 +6414,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     "user_role_label": user_summary.get("relationship_role_label") or "",
                     "status": status,
                     "source": self._single_line(raw.get("source"), 40),
-                    "reason": self._single_line(raw.get("reason"), 40),
-                    "action": self._single_line(raw.get("action"), 60),
-                    "topic": self._single_line(raw.get("topic"), 100),
-                    "motive": self._single_line(raw.get("motive"), 180),
+                    "reason": audit_reason,
+                    "action": audit_action,
+                    "topic": audit_topic,
+                    "motive": audit_motive,
                     "note": self._single_line(raw.get("note"), 180),
                     "text_preview": self._display_message_text(raw.get("text_preview"), 180),
                     "scheduled_ts": self._float(raw.get("scheduled_ts")),

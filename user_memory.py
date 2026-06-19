@@ -1314,6 +1314,19 @@ class UserMemoryMixin:
         del recent[:-18]
 
     async def _review_and_rewrite_response(self, user: dict[str, Any], inbound_text: str, response_text: str) -> str:
+        relay_claim_checker = getattr(self, "_unexecuted_relay_claim_reason", None)
+        if callable(relay_claim_checker):
+            relay_claim_note = relay_claim_checker(response_text)
+            if relay_claim_note:
+                fallback_builder = getattr(self, "_fallback_unexecuted_relay_reply", None)
+                fallback = fallback_builder(inbound_text) if callable(fallback_builder) else ""
+                logger.info(
+                    "[PrivateCompanion] 被动回复含未执行转述承诺,已改为诚实边界: reason=%s before=%s after=%s",
+                    relay_claim_note,
+                    _single_line(response_text, 120),
+                    _single_line(fallback, 120),
+                )
+                return fallback or response_text
         if not self.enable_response_self_review:
             return response_text
         trimmed = self._trim_abrupt_closing_topic_shift(response_text, inbound_text=inbound_text)

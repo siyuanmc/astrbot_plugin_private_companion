@@ -7119,17 +7119,19 @@ class DailyStateMixin:
                         )
                         self._save_data_sync()
             except Exception as e:
-                logger.warning(f"[PrivateCompanion] 发送给 {user_id} 失败: {e}")
+                formatter = getattr(self, "_format_send_exception", None)
+                error_text = formatter(e) if callable(formatter) else (_single_line(str(e), 180) or repr(e))
+                logger.warning("[PrivateCompanion] 发送给 %s 失败: %s", user_id, error_text)
                 async with self._data_lock:
                     current_after_failure = self._get_user(user_id)
                     if is_troubleshooting_for_send:
-                        self._append_troubleshooting_proactive_step(current_after_failure, "主动发送", "error", f"发送失败: {_single_line(e, 120)}")
+                        self._append_troubleshooting_proactive_step(current_after_failure, "主动发送", "error", f"发送失败: {_single_line(error_text, 120)}")
                         self._record_troubleshooting_proactive_result(
                             user_id,
                             current_after_failure,
                             ok=False,
                             detail="主动消息已生成，但发送失败",
-                            error=f"发送失败: {_single_line(e, 160)}",
+                            error=f"发送失败: {_single_line(error_text, 160)}",
                             text=text,
                             action=effective_action_for_send or planned_action_for_send or "message",
                             reason=reason or "check_in",
@@ -7148,7 +7150,7 @@ class DailyStateMixin:
                         current_after_failure["planned_followup_kind"] = ""
                         current_after_failure["planned_proactive_quota_exempt"] = False
                         self._schedule_next_proactive(current_after_failure, now=_now_ts(), delay_hours=(6, 12))
-                    self._update_proactive_audit(audit_id, status="failed", note=f"发送失败: {_single_line(e, 140)}")
+                    self._update_proactive_audit(audit_id, status="failed", note=f"发送失败: {_single_line(error_text, 140)}")
                     self._save_data_sync()
                 continue
             finally:

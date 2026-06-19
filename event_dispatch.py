@@ -2225,18 +2225,37 @@ class EventDispatchMixin:
             self._save_data_sync()
 
     def _extract_group_id_from_event(self, event: AstrMessageEvent) -> str:
+        raw = self._event_raw_payload(event)
+        for key in ("group_id", "group", "group_no", "group_uin"):
+            value = _single_line(raw.get(key), 80)
+            if value and value.isdigit():
+                return value
         umo = str(getattr(event, "unified_msg_origin", "") or "")
         match = re.search(r":GroupMessage:(\d+)", umo)
         if match:
             return match.group(1)
-        session_id = str(getattr(event, "session_id", "") or "")
-        if session_id.isdigit():
-            return session_id
         message_obj = getattr(event, "message_obj", None)
-        for attr in ("group_id", "group"):
+        for attr in ("group_id", "group", "group_no", "group_uin"):
             value = getattr(message_obj, attr, None) if message_obj is not None else None
-            if value:
+            if value and str(value).strip().isdigit():
                 return str(value)
+        try:
+            if bool(getattr(event, "is_private_chat", lambda: False)()):
+                return ""
+        except Exception:
+            pass
+        message_type = str(raw.get("message_type") or raw.get("detail_type") or "").lower()
+        event_message_type = getattr(event, "message_type", None)
+        event_message_type_text = str(getattr(event_message_type, "name", event_message_type) or "").lower()
+        is_group_hint = (
+            message_type == "group"
+            or event_message_type_text in {"group", "group_message", "messagetype.group"}
+            or ":GroupMessage:" in umo
+        )
+        session_id = str(getattr(event, "session_id", "") or "").strip()
+        sender_id = _single_line(raw.get("user_id"), 80)
+        if is_group_hint and session_id.isdigit() and session_id != sender_id:
+            return session_id
         return ""
 
     def _sender_display_name(self, event: AstrMessageEvent) -> str:
@@ -2678,6 +2697,14 @@ class EventDispatchMixin:
             def feed_plain(chunk: str) -> None:
                 index = 0
                 text_chunk = str(chunk or "")
+                cjk_char_pattern = re.compile(r"[\u3400-\u9fff\u3040-\u30ff]")
+
+                def next_non_space_char(start: int) -> str:
+                    pos = start
+                    while pos < len(text_chunk) and text_chunk[pos].isspace():
+                        pos += 1
+                    return text_chunk[pos] if pos < len(text_chunk) else ""
+
                 while index < len(text_chunk):
                     matched = ""
                     for word in sorted_words:
@@ -2708,6 +2735,17 @@ class EventDispatchMixin:
                         push_current()
                         index += len(matched)
                     else:
+                        char = text_chunk[index]
+                        if char.isspace():
+                            previous = current[-1] if current else ""
+                            following = next_non_space_char(index)
+                            if previous and following and cjk_char_pattern.fullmatch(previous) and cjk_char_pattern.fullmatch(following):
+                                current.append("，")
+                                push_current()
+                                index += 1
+                                while index < len(text_chunk) and text_chunk[index].isspace():
+                                    index += 1
+                                continue
                         current.append(text_chunk[index])
                         index += 1
 
@@ -2722,6 +2760,21 @@ class EventDispatchMixin:
                     feed_plain(chunk)
             push_current()
             return segments
+
+        def _normalize_cjk_chat_spaces(value: str) -> str:
+            cjk = r"\u3400-\u9fff\u3040-\u30ff"
+            cjk_punct = r"，。！？；：、…~～"
+            parts: list[str] = []
+            for chunk, protected in _protected_cleanup_chunks(str(value or "")):
+                if protected:
+                    parts.append(chunk)
+                    continue
+                cleaned_chunk = re.sub(rf"(?<=[{cjk_punct}])\s+(?=[{cjk}])", "", chunk)
+                cleaned_chunk = re.sub(rf"(?<=[{cjk}])\s+(?=[{cjk_punct}])", "", cleaned_chunk)
+                cleaned_chunk = re.sub(rf"(?<=[{cjk_punct}])\s+(?=[{cjk_punct}])", "", cleaned_chunk)
+                cleaned_chunk = re.sub(rf"(?<=[{cjk}])\s+(?=[{cjk}])", "，", cleaned_chunk)
+                parts.append(cleaned_chunk)
+            return "".join(parts).strip()
 
         def _clean_segment(segment: str) -> str:
             original = str(segment or "")
@@ -2774,7 +2827,7 @@ class EventDispatchMixin:
                 cleaned_parts.append(cleaned_chunk)
             cleaned = "".join(cleaned_parts)
             cleaned = self._strip_leading_sentence_boundary_artifacts(cleaned)
-            return cleaned
+            return _normalize_cjk_chat_spaces(cleaned)
 
         def _visible_len(value: str) -> int:
             return len(re.sub(r"\s+", "", str(value or "")))
@@ -2814,12 +2867,12 @@ class EventDispatchMixin:
             if not right:
                 return left
             if re.search(r"[！？!?]$", left):
-                return f"{left} {right}".strip()
+                return _normalize_cjk_chat_spaces(f"{left} {right}".strip())
             softened = re.sub(r"[。…~～]+$", "，", left)
             softened = re.sub(r"[!?！？]+$", "，", softened)
             if not re.search(r"[，,、\s]$", softened):
                 softened += "，"
-            return f"{softened}{right.lstrip()}"
+            return _normalize_cjk_chat_spaces(f"{softened}{right.lstrip()}")
 
         def _merge_segments(raw: list[str]) -> list[str]:
             segments = [str(item or "").strip() for item in raw if str(item or "").strip()]

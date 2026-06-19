@@ -357,6 +357,14 @@ class ProactiveEngineMixin:
         now = _now_ts()
         source = _single_line(candidate.get("source"), 40) or "unknown"
         scheduled = _safe_float(candidate.get("scheduled_ts"), now)
+        social_relay_note = self._unverified_social_relay_plan_reason(
+            candidate,
+            source=source,
+            has_trigger=bool(self._candidate_trigger_message_id(candidate)),
+        )
+        if social_relay_note:
+            self._record_proactive_candidate(user_id, candidate, status="blocked", note=social_relay_note)
+            return False
         rest_until = self._user_rest_silence_until(user, now=now)
         if rest_until > now and scheduled < rest_until and source != "timer":
             self._record_proactive_candidate(user_id, candidate, status="blocked", note="用户明确休息中")
@@ -383,6 +391,19 @@ class ProactiveEngineMixin:
         action = _single_line(candidate.get("action"), 40) or "message"
         if self._private_user_role(user, str(user_id)) == "friend" and self._action_has_photo_text(action):
             action = self._fallback_action_for_unavailable(action, user)
+        if self._private_user_role(user, str(user_id)) == "friend":
+            sanitized = self._sanitize_friend_proactive_plan_fields(
+                user,
+                reason=_single_line(candidate.get("reason"), 40) or "check_in",
+                action=action,
+                topic=_single_line(candidate.get("topic"), 80),
+                motive=_single_line(candidate.get("motive"), 180),
+            )
+            action = sanitized["action"]
+            candidate = dict(candidate)
+            candidate["reason"] = sanitized["reason"]
+            candidate["topic"] = sanitized["topic"]
+            candidate["motive"] = sanitized["motive"]
         if not self._action_is_available(action, user):
             self._record_proactive_candidate(user_id, candidate, status="blocked", note="动作不可用或媒体额度不足")
             return False
@@ -566,8 +587,21 @@ class ProactiveEngineMixin:
             return False, "私聊对象未启用"
         if user.get("proactive_sending"):
             return False, "上一条主动消息仍在发送中"
+        umo_filled = False
+        filler = getattr(self, "_ensure_private_user_umo", None)
+        if callable(filler):
+            try:
+                umo_filled = bool(filler(user_id, user))
+            except Exception:
+                umo_filled = False
         if not user.get("umo"):
             return False, "缺少私聊会话"
+        if umo_filled:
+            logger.info(
+                "[PrivateCompanion] 已为主动私聊对象补全 UMO: user=%s umo=%s",
+                _single_line(user_id, 40),
+                _single_line(user.get("umo"), 120),
+            )
         if self._simulation_active(user):
             return self._should_send_simulation(user)
         daily_limit = self._effective_user_daily_limit(user)
@@ -649,6 +683,16 @@ class ProactiveEngineMixin:
             self._clear_pending_proactive_plan(user)
             self._schedule_next_proactive(user, now=now, delay_hours=(1, 4))
             return False, "候选主动计划已过期,已重新安排"
+        social_relay_note = self._unverified_social_relay_plan_reason(
+            user,
+            source=planned_source,
+            has_trigger=bool(_single_line(user.get("planned_proactive_trigger_message_id"), 120)),
+        )
+        if not is_troubleshooting and social_relay_note:
+            self._mark_planned_candidate_status(user, "blocked", social_relay_note)
+            self._clear_pending_proactive_plan(user)
+            self._schedule_next_proactive(user, now=now, delay_hours=(1.5, 4.5))
+            return False, social_relay_note
 
         self._reset_daily_counter_if_needed(user)
         if not is_troubleshooting and _safe_int(user.get("sent_today"), 0) >= daily_limit:
@@ -682,6 +726,20 @@ class ProactiveEngineMixin:
                 planned_action = str(user.get("planned_proactive_action") or planned_action or "message")
                 if _safe_float(user.get("next_proactive_at"), 0) > now + 1:
                     return False, emotion_note
+        if not is_troubleshooting and self._private_user_role(user) == "friend":
+            sanitized = self._sanitize_friend_proactive_plan_fields(
+                user,
+                reason=planned_reason,
+                action=planned_action,
+                topic=_single_line(user.get("planned_proactive_topic"), 80),
+                motive=_single_line(user.get("planned_proactive_motive"), 180),
+            )
+            user["planned_proactive_reason"] = sanitized["reason"]
+            user["planned_proactive_action"] = sanitized["action"]
+            user["planned_proactive_topic"] = sanitized["topic"]
+            user["planned_proactive_motive"] = sanitized["motive"]
+            planned_reason = sanitized["reason"]
+            planned_action = sanitized["action"]
         if not is_troubleshooting and not self._friend_can_receive_proactive_reason(user, planned_reason, planned_action):
             self._clear_pending_proactive_plan(user)
             self._schedule_next_proactive(user, now=now, delay_hours=(2, 6))
@@ -737,6 +795,57 @@ class ProactiveEngineMixin:
         if not signature:
             return False
         return self._recent_proactive_topic_repeated(user, signature)
+
+    def _unverified_social_relay_plan_reason(
+        self,
+        item: dict[str, Any],
+        *,
+        source: str = "",
+        has_trigger: bool = False,
+    ) -> str:
+        if not isinstance(item, dict):
+            return ""
+        normalized_source = str(source or item.get("source") or item.get("planned_proactive_source") or "").strip()
+        if normalized_source in {"timer", "troubleshooting", "simulation", "group_share"}:
+            return ""
+        if has_trigger:
+            return ""
+        reason = str(item.get("reason") or item.get("planned_proactive_reason") or "")
+        if reason in {"group_share", "news_share", "bili_video_share", "web_exploration_share"}:
+            return ""
+        if normalized_source not in {"event", "random", "unknown", ""}:
+            return ""
+        text = " ".join(
+            _single_line(item.get(key), 180)
+            for key in (
+                "topic",
+                "planned_proactive_topic",
+                "motive",
+                "planned_proactive_motive",
+                "why",
+                "scene",
+                "impulse",
+            )
+            if _single_line(item.get(key), 180)
+        )
+        if not text:
+            return ""
+        relay_markers = ("转达", "转述", "转告", "带话", "捎话")
+        if any(token in text for token in relay_markers):
+            return "疑似第三方转述/带话内容,缺少真实触发来源"
+        invite_markers = ("约", "邀请", "要不要去", "去不去", "一起", "夜宵", "吃饭", "见面", "碰头")
+        soft_message_markers = ("留言", "说一声", "说一下", "告诉你一声", "通知你一声")
+        third_party_patterns = (
+            r"[\u4e00-\u9fffA-Za-z0-9_]{1,12}(?:说|问|发(?:来|了|的)?(?:消息)?|留言|约|邀请)",
+            r"(?:他|她|TA|ta)(?:说|问|发(?:来|了|的)?|留言|约|邀请)",
+            r"(?:他的|她的|TA的|ta的).{0,8}(?:消息|留言|邀约|邀请)",
+        )
+        has_third_party_signal = any(re.search(pattern, text) for pattern in third_party_patterns)
+        if has_third_party_signal and any(token in text for token in soft_message_markers):
+            return "疑似第三方留言/带话内容,缺少真实触发来源"
+        if any(token in text for token in invite_markers) and has_third_party_signal:
+            return "疑似第三方邀约内容,缺少真实触发来源"
+        return ""
 
     def _mark_planned_candidate_status(self, user: dict[str, Any], status: str, note: str = "") -> None:
         candidate_id = str(user.get("planned_candidate_id") or "")
@@ -1731,6 +1840,12 @@ class ProactiveEngineMixin:
         ):
             if not isinstance(event, dict):
                 continue
+            if self._unverified_social_relay_plan_reason(
+                event,
+                source="event",
+                has_trigger=bool(_single_line(event.get("trigger_message_id"), 120)),
+            ):
+                continue
             reason = str(event.get("reason") or "check_in")
             event_ts = self._timestamp_from_story_event(event, reason)
             if self._friend_proactive_scheduled_too_early(user, event_ts):
@@ -2137,6 +2252,12 @@ class ProactiveEngineMixin:
         future_events = []
         for event in events:
             if not isinstance(event, dict):
+                continue
+            if self._unverified_social_relay_plan_reason(
+                event,
+                source="event",
+                has_trigger=bool(_single_line(event.get("trigger_message_id"), 120)),
+            ):
                 continue
             event_ts = self._timestamp_from_story_event(event, str(event.get("reason") or "check_in"))
             if event_ts > now or (event_ts > 0 and now - event_ts <= self.max_proactive_plan_lag_minutes * 60):

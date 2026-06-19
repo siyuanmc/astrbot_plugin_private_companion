@@ -120,7 +120,7 @@ _REASON_TEXT = {
 # 动作描述 - 生活化
 _ACTION_TEXT = {
     "message": "发了条消息给你",
-    "screen_peek": "悄悄看了看你",
+    "screen_peek": "看了眼本机屏幕",
     "photo_text": "拍了张照片发给你",
     "poke": "轻轻戳了戳你",
     "voice": "发了段语音跟你说",
@@ -141,9 +141,9 @@ PROACTIVE_ABILITY_REGISTRY = [
         "module": "主动行为",
         "name": "screen_peek",
         "label": "轻窥屏",
-        "when": "想确认对方在不在、忙不忙,且语气更像探头一下",
-        "use_for": "check_in、quiet_care、短空档里的试探",
-        "avoid": "复述屏幕内容、承认偷看、把观察写成分析报告",
+        "when": "仅主人/本机屏幕授权场景下,想确认主人电脑前是否还在忙",
+        "use_for": "主人 check_in、quiet_care、短空档里的本机屏幕试探",
+        "avoid": "用于朋友或非本机对象、复述屏幕内容、承认偷看、把观察写成分析报告",
     },
     {
         "module": "主动行为",

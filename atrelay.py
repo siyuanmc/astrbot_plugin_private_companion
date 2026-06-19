@@ -326,7 +326,7 @@ class AtRelayMixin:
             return ""
         return """
 【跨会话转述与 @ 群友工具】
-当用户明确要求你“发到某个群”“告诉某个群友”“帮我 @ 某人”“私聊某人”时,优先调用 `pc_relay_message`,不要在普通回复里预览要发送的完整内容。
+当用户明确要求你“发到某个群”“告诉某个群友”“替我/帮我跟某人说一声”“帮我 @ 某人”“私聊某人”时,优先调用 `pc_relay_message`,不要在普通回复里预览要发送的完整内容。
 - 统一入口：常见转述只用 `pc_relay_message`。你只需要整理 destination/group_hint/recipient_hint/message/relay_mode。
 - destination 规则：发群填 `group`,私聊填 `private`,不确定填 `auto`。私聊转群、群聊转私聊、群聊转群聊都走同一个工具。
 - 群聊转私聊：只发送用户明确要求转述的内容,不要附带群聊上下文、内部记忆或“群里大家说了什么”。

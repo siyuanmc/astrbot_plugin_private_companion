@@ -302,7 +302,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "Codex",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "4.0.4",
+    "4.0.7",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, TtsEnhancementMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -622,6 +622,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.segmented_proactive_regex = str(c.get("segmented_proactive_regex", r".*?[。？！~…\n]+|.+$"))
         split_words = c.get("segmented_proactive_split_words", ["。", "？", "！", "~", "…", "“"])
         self.segmented_proactive_split_words = [str(item) for item in split_words] if isinstance(split_words, list) else ["。", "？", "！", "~", "…", "“"]
+        if "……" in self.segmented_proactive_split_words and "…" not in self.segmented_proactive_split_words:
+            self.segmented_proactive_split_words.append("…")
         self.enable_segmented_proactive_content_cleanup = self._cfg_bool(c, "enable_segmented_proactive_content_cleanup", False)
         self.segmented_proactive_content_cleanup_scope = self._cfg_str(c, "segmented_proactive_content_cleanup_scope", "all", "all")
         if self.segmented_proactive_content_cleanup_scope not in {"all", "trailing"}:
@@ -1894,7 +1896,11 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         current_prompt = req.system_prompt or ""
         atrelay_instruction = self._atrelay_tool_instruction()
         if atrelay_instruction and "<!-- private_companion_atrelay_tools_v1 -->" not in current_prompt:
-            if any(token in message_text for token in ("发到", "发给", "告诉", "转告", "通知", "私聊", "@", "艾特", "群友", "群里", "群聊", "出现", "冒泡", "上线")):
+            if any(token in message_text for token in (
+                "发到", "发给", "告诉", "转告", "转达", "带话", "捎话", "通知", "私聊",
+                "帮我", "替我", "你去", "跟他说", "和他说", "跟她说", "和她说", "说一声",
+                "@", "艾特", "群友", "群里", "群聊", "出现", "冒泡", "上线",
+            )):
                 current_prompt = f"{current_prompt}\n\n<!-- private_companion_atrelay_tools_v1 -->\n{atrelay_instruction}".strip()
                 req.system_prompt = current_prompt
                 await self._record_request_prompt_fragment(
@@ -2047,6 +2053,95 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             mode="private",
         )
 
+    def _request_context_text_size(self, value: Any, *, depth: int = 0) -> int:
+        if depth > 8 or value is None:
+            return 0
+        if isinstance(value, str):
+            return len(value)
+        if isinstance(value, (int, float, bool)):
+            return len(str(value))
+        if isinstance(value, dict):
+            total = 0
+            for key, item in value.items():
+                if str(key) in {"tool_calls", "extra_content", "metadata"}:
+                    continue
+                total += self._request_context_text_size(item, depth=depth + 1)
+            return total
+        if isinstance(value, (list, tuple)):
+            return sum(self._request_context_text_size(item, depth=depth + 1) for item in value)
+        return len(str(value))
+
+    def _plain_context_content_for_fast_reply(self, content: Any) -> str:
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    if item.strip():
+                        parts.append(item.strip())
+                    continue
+                if not isinstance(item, dict):
+                    text = str(item or "").strip()
+                    if text:
+                        parts.append(text)
+                    continue
+                item_type = str(item.get("type") or "").lower()
+                if item_type in {"text", "input_text"}:
+                    text = str(item.get("text") or "").strip()
+                    if text:
+                        parts.append(text)
+                elif "image" in item_type:
+                    parts.append("[图片]")
+                elif "audio" in item_type or "voice" in item_type:
+                    parts.append("[语音]")
+            return "\n".join(parts).strip()
+        if isinstance(content, dict):
+            for key in ("text", "content", "value"):
+                if key in content:
+                    return self._plain_context_content_for_fast_reply(content.get(key))
+        return str(content or "").strip()
+
+    def _trim_passive_request_context_if_needed(self, event: AstrMessageEvent, req: ProviderRequest, *, is_private_chat: bool) -> None:
+        if not is_private_chat:
+            return
+        contexts = getattr(req, "contexts", None)
+        if not isinstance(contexts, list) or len(contexts) <= 24:
+            return
+        approx_tokens = max(0, self._request_context_text_size(contexts) // 4)
+        if approx_tokens < 50000 and len(contexts) < 120:
+            return
+        trimmed: list[Any] = []
+        for item in contexts[-36:]:
+            if not isinstance(item, dict):
+                text = self._plain_context_content_for_fast_reply(item)
+                if text:
+                    trimmed.append({"role": "user", "content": _single_line(text, 1200)})
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            if role not in {"system", "user", "assistant"}:
+                continue
+            text = self._plain_context_content_for_fast_reply(item.get("content"))
+            if not text:
+                continue
+            trimmed.append({"role": role, "content": _single_line(text, 1200)})
+        trimmed = trimmed[-24:]
+        if not trimmed:
+            return
+        try:
+            req.contexts = trimmed
+        except Exception:
+            return
+        logger.info(
+            "[PrivateCompanion] 私聊超长上下文已启用轻量护栏: session=%s contexts=%s->%s approx_tokens=%s",
+            _single_line(getattr(event, "unified_msg_origin", ""), 120) or "unknown",
+            len(contexts),
+            len(trimmed),
+            approx_tokens,
+        )
+
     @filter.on_llm_request()
     async def inject_humanized_state(self, event: AstrMessageEvent, req: ProviderRequest):
         """LLM 请求前注入陪伴状态、群聊上下文、工具边界和合并消息阅读上下文。"""
@@ -2056,6 +2151,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             return
         self._remember_external_llm_request_for_token_stats(event, req)
         is_private_chat = bool(getattr(event, "is_private_chat", lambda: False)())
+        self._trim_passive_request_context_if_needed(event, req, is_private_chat=is_private_chat)
         group_id_for_lock = ""
         if not is_private_chat and self.enable_group_companion:
             group_id_for_lock = self._extract_group_id_from_event(event)
@@ -2728,7 +2824,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             if release_now:
                 self._release_framework_session_lock_for_event(event, label="llm_response_finally")
 
-    async def _debug_prompt_text(self, kind: str, user: dict[str, Any]) -> str:
+    async def _debug_prompt_text(self, kind: str, user: dict[str, Any], event: AstrMessageEvent | None = None) -> str:
         normalized = str(kind or "").strip().lower()
         await self._ensure_weather_context()
         if normalized in {"日程", "plan", "daily_plan"}:
@@ -2778,7 +2874,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 f"{framework_prompt}"
             )
         if normalized in {"回复注入", "reply", "injection"}:
-            await self._refresh_default_persona_prompt(getattr(event, "unified_msg_origin", "") or "")
+            await self._refresh_default_persona_prompt(getattr(event, "unified_msg_origin", "") if event is not None else "")
             state = await self._ensure_daily_state()
             parts = [self._format_state_injection(state)]
             detail_injection = self._format_detail_injection()
@@ -3072,7 +3168,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             else:
                 await self._reply(event, message)
         if action in {"查看提示词", "提示词", "prompt"}:
-            prompt_text = await self._debug_prompt_text(value or "主动", user)
+            prompt_text = await self._debug_prompt_text(value or "主动", user, event)
             await self._reply(event, prompt_text)
         if action in {"重置细化"}:
             plan = await self._ensure_daily_plan(force=False)

@@ -23,7 +23,7 @@ except ImportError:
 from astrbot.core import file_token_service
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-from .helpers import _single_line
+from .helpers import _safe_int, _single_line
 
 
 TTS_BLOCK_PATTERN = re.compile(r"<t{2,}s\b[^>]*>.*?</t{2,}s>", re.IGNORECASE | re.DOTALL)
@@ -899,6 +899,10 @@ TTS 朗读文本：
             if non_plain_tail:
                 new_chain = list(new_chain) + non_plain_tail
         ordered_chunks = self._split_tts_chain_for_ordered_send(new_chain)
+        expanded_chunks: list[list[Any]] = []
+        for chunk in ordered_chunks:
+            expanded_chunks.extend(self._tts_segment_plain_chunk_for_ordered_send(event, chunk))
+        ordered_chunks = expanded_chunks
         if len(ordered_chunks) > 1:
             inbound_ts_getter = getattr(self, "_event_inbound_activity_ts", None)
             if callable(inbound_ts_getter):
@@ -917,7 +921,7 @@ TTS 朗读文本：
                 )
             )
             return
-        event.set_result(self._build_result_from_chain(new_chain))
+        event.set_result(self._build_result_from_chain(ordered_chunks[0] if ordered_chunks else new_chain))
 
     def _split_tts_chain_for_ordered_send(self, chain: list[Any]) -> list[list[Any]]:
         chunks: list[list[Any]] = []
@@ -1466,6 +1470,19 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
         if subtitle_task is not None:
             await subtitle_task
 
+    def _tts_visible_fallback_text(self, text: str, fallback_plain: str = "") -> str:
+        normalized = self._normalize_tts_tags(str(text or ""))
+        visible = re.sub(r"<tts\b[^>]*>.*?</tts>", "", normalized, flags=re.IGNORECASE | re.DOTALL)
+        visible = re.sub(TTS_TAG_PATTERN, "", visible).strip()
+        if visible:
+            return visible
+        fallback = str(fallback_plain or "").strip()
+        if fallback:
+            return fallback
+        if getattr(self, "tts_voice_language", "ja") == "zh":
+            return re.sub(TTS_TAG_PATTERN, "", normalized).strip()
+        return ""
+
     async def _process_tts_tags(self, text: str, event_or_provider: Any, provider_settings: dict[str, Any] | None = None, config: dict[str, Any] | None = None, fallback_plain: str = "") -> list[Any]:
         if hasattr(event_or_provider, "get_result"):
             event = event_or_provider
@@ -1484,10 +1501,10 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
             config = config or getattr(self, "config", {}) or {}
             provider_settings = provider_settings or dict((config or {}).get("provider_tts_settings", {}) or {})
         if not tts_provider:
-            fallback_text = fallback_plain or re.sub(TTS_TAG_PATTERN, "", str(text or "")).strip()
+            fallback_text = self._tts_visible_fallback_text(text, fallback_plain)
             if fallback_text:
                 logger.warning(
-                    "[PrivateCompanion] TTS强化检测到标签但当前会话没有可用 TTS provider,已按普通文本发送: %s",
+                    "[PrivateCompanion] TTS强化检测到标签但当前会话没有可用 TTS provider,已隐藏朗读文本并按普通文本发送: %s",
                     _single_line(fallback_text, 160),
                 )
                 return [Plain(fallback_text)]
@@ -1509,9 +1526,8 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
             source_spoken = spoken
             remaining = self._tts_session_interval_remaining(event)
             if remaining > 0:
-                output.append(Plain(match.group(1).strip()))
                 logger.info(
-                    "[PrivateCompanion] TTS会话级节流生效,已按普通文本保留: session=%s remain=%.1fs text=%s",
+                    "[PrivateCompanion] TTS会话级节流生效,已隐藏朗读文本并保留可见文本: session=%s remain=%.1fs text=%s",
                     _single_line(self._tts_session_key(event), 80) or "unknown",
                     remaining,
                     _single_line(spoken, 80),
@@ -1601,6 +1617,10 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
             and not plain_after_last_record
         ):
             output.append(Plain(_single_line(fallback_plain, 800)))
+        if not output:
+            fallback_text = self._tts_visible_fallback_text(normalized, fallback_plain)
+            if fallback_text:
+                output.append(Plain(_single_line(fallback_text, 800)))
         return output
 
     async def _convert_text_to_spoken_language(self, text: str, event: Any, *, provider_kind: str) -> str:

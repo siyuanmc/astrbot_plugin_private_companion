@@ -928,7 +928,7 @@ class ProactiveMessageMixin:
 8. 含蓄一点：把在意藏在具体的小片段、半句吐槽或顺手递过去的东西里。少用“我想你了”“我来关心你”“你在忙什么呀”这种直球表达。
 9. 可以自然流露关心、分享一个小话题、问一个小问题,但要像朋友间的随手一句,不像客服回访。问题不要每次都问出口,有时只放一句就停。
 10. 主动内容从内容选择菜单里挑一个方向,再结合当前日程和聊天历史生成新的具体内容。不要照抄菜单示例,不要只会问候、天气、吃没吃、忙不忙。
-11. 如果刚刚确实做了行动,例如偷看了一眼屏幕、拍了图、戳了对方或发了语音,也不要写成“我刚刚偷看/我正在拍/我发了语音”的汇报。
+11. 如果刚刚确实做了行动,例如在主人授权下看了眼本机屏幕、拍了图、戳了对方或发了语音,也不要写成“我刚刚偷看/我正在拍/我发了语音”的汇报。
 12. 如果发图,先选一个可拍画面或眼前物方向,再生成当前场景里合理的具体画面。不要总是天气、窗外、晚霞。
 13. 连贯性优先：当前时间、当前生活片段、聊天历史要合成同一个合理现场。只抓一个最自然的当下切口开口。
 14. 不要把用户很久前的请求、邀约、相对时间说法当成此刻正在等你处理的事。除非定时提醒或当前日程明确要求兑现约定,否则旧消息只保留成情绪和关系背景。
@@ -991,7 +991,7 @@ class ProactiveMessageMixin:
 8. 含蓄一点：把在意藏在具体的小片段、半句吐槽或顺手递过去的东西里。少用“我想你了”“我来关心你”“你在忙什么呀”这种直球表达。
 9. 可以自然流露关心、分享一个小话题、问一个小问题——但要像朋友间的随手一句,不像客服回访。问题不要每次都问出口,有时只放一句就停。
 10. 主动内容从“内容选择菜单”里挑一个方向,再结合当前日程和聊天历史生成新的具体内容。不要照抄菜单示例,不要只会问候、天气、吃没吃、忙不忙。
-11. 你刚刚确实做了行动（比如偷看了一眼屏幕/拍了图/戳了对方/发了语音）,也不要写成“我刚刚偷看/我正在拍/我发了语音”的汇报。只发聊天里会出现的话；图片可以用“[图片]”,语音就直接写语音内容。
+11. 你刚刚确实做了行动（比如在主人授权下看了眼本机屏幕/拍了图/戳了对方/发了语音）,也不要写成“我刚刚偷看/我正在拍/我发了语音”的汇报。只发聊天里会出现的话；图片可以用“[图片]”,语音就直接写语音内容。
 12. 如果发图,先在内容选择菜单里选“可拍画面”或“眼前物”方向,再自己生成当前场景里合理的具体画面。不要总是天气、窗外、晚霞。
 13. 连贯性优先：当前时间、当前生活片段、聊天历史要合成同一个合理现场。只抓一个最自然的当下切口开口,不要把多个不同时段或不同地点的生活碎片拼成一条消息；如果资料之间冲突,优先服从当前真实时段和当前生活片段。
 14. 不要把用户很久前的请求、邀约、相对时间说法当成此刻正在等你处理的事。除非定时提醒或当前日程明确要求兑现约定,否则旧消息只保留成情绪和关系背景,主动消息要从当前时段自然开口。
@@ -1130,6 +1130,7 @@ class ProactiveMessageMixin:
                     "本轮是独立主动开口：聊天历史只能提供关系背景,不能被写成当前有人刚问你、约你、让你做决定。",
                     "开头不要使用回复式承接词,例如“好呀/好啊/可以呀/行啊/那就/你说呢/要不/我哪来的/你到时候/一直等着”。",
                     "不要承接旧邀约、旧时间点或旧问答,尤其不要把下午、五点、放学、去哪儿逛、出去走走、一直等着、垫钱、到时候叫你这类历史片段当成当前正在发生。",
+                    "不要承诺或声称会替用户联系第三方、转述、带话、问某人；只有真实转述工具执行成功后才可以说消息已发送。",
                     "如果想轻轻延续关系感,只能从当前时段自起一句,像刚把一句话放进私聊里。",
                 ]
             )
@@ -1139,6 +1140,7 @@ class ProactiveMessageMixin:
                     "【主动承接边界】",
                     "本轮有明确的续接来源,可以自然接住那个来源；但仍然不要接不存在的用户新消息,也不要把过期相对时间当成当前事实。",
                     "如果续接来源和当前时段冲突,优先服从当前时段,把旧内容改成轻背景。",
+                    "如果续接来源涉及第三方邀约、留言或带话,只能提醒用户自己处理,不要在普通主动里承诺你会去说；真实转述必须由工具完成。",
                 ]
             )
         if reason in {"group_share", "news_share", "bili_video_share", "web_exploration_share", "creative_share", "diary_share", "activity_share", "background_schedule"}:
@@ -1163,6 +1165,34 @@ class ProactiveMessageMixin:
                 "可以改成“看到这个画面/这个颜色挺好看/想到你可能会喜欢这个颜色”。",
             ]
         )
+
+    def _unexecuted_relay_claim_reason(self, text: str, *, action_context: str = "") -> str:
+        cleaned = _single_line(text, 260)
+        if not cleaned:
+            return ""
+        context = str(action_context or "")
+        if any(token in context for token in ("pc_relay_message", "转述工具", "消息已发送", "已挂起", "atrelay")):
+            return ""
+        target_patterns = (
+            r"我(?:这就|现在|等下|一会儿|待会儿)?(?:去|会|来|可以)?(?:帮你|替你)?(?:跟|和|给)([^，。！？!?、\s]{1,12})(?:说一声|说一下|转告|转达|带话|留言)",
+            r"我(?:这就|现在|等下|一会儿|待会儿)?(?:帮你|替你)([^，。！？!?、\s]{0,12})(?:转告|转达|带话|留言)",
+            r"(?:已经|已)(?:帮你|替你)?(?:转告|转达|带话|留言|说过)",
+        )
+        for pattern in target_patterns:
+            match = re.search(pattern, cleaned)
+            if not match:
+                continue
+            target = _single_line(match.group(1) if match.lastindex else "", 20)
+            if target and target.startswith(("你", "妳")):
+                continue
+            return "没有真实转述工具执行结果"
+        return ""
+
+    def _fallback_unexecuted_relay_reply(self, inbound_text: str) -> str:
+        inbound = _single_line(inbound_text, 160)
+        if any(token in inbound for token in ("替我", "帮我", "你去", "跟他", "和他", "跟她", "和她", "说一声", "转告", "转达")):
+            return "这个不能只嘴上答应啦。你把要带的话和对象说清楚，我再走转述。"
+        return "这个我不能假装已经去说了。要转述的话，你把对象和要带的话说清楚。"
 
     def _format_proactive_specificity_hint(
         self,
@@ -1841,6 +1871,14 @@ class ProactiveMessageMixin:
         cleaned = self._collapse_multi_candidate_proactive_text(cleaned, user=user, name=name)
         cleaned = self._repair_proactive_subject_drift(cleaned, reason=reason, action=action, action_context=action_context)
         cleaned = self._visible_text_without_tts_reading(cleaned, limit=1000)
+        relay_claim_note = self._unexecuted_relay_claim_reason(cleaned, action_context=action_context)
+        if relay_claim_note:
+            logger.info(
+                "[PrivateCompanion] 主动消息含未执行转述承诺,已丢弃: reason=%s text=%s",
+                relay_claim_note,
+                _single_line(cleaned, 120),
+            )
+            return ""
         if self._should_drop_vague_generic_proactive(user, reason=reason, action=action, action_context=action_context, text=cleaned):
             return ""
         if self._should_drop_misstaged_proactive_text(cleaned, reason=reason, action=action):
@@ -2744,7 +2782,12 @@ class ProactiveMessageMixin:
 
     def _resolve_aiocqhttp_client(self) -> Any:
         platform_manager = getattr(self.context, "platform_manager", None)
-        platforms = list(getattr(platform_manager, "platform_insts", []) or [])
+        platforms: list[Any] = []
+        if platform_manager is not None:
+            try:
+                platforms = list(platform_manager.get_insts())
+            except Exception:
+                platforms = list(getattr(platform_manager, "platform_insts", []) or [])
         for platform in platforms:
             platform_names = set()
             try:
@@ -2753,11 +2796,16 @@ class ProactiveMessageMixin:
                 platform_names.add(str(getattr(meta, "name", "") or "").strip())
             except Exception:
                 pass
+            platform_desc = f"{platform.__class__.__module__}.{platform.__class__.__name__}".lower()
             for attr in ("bot", "client", "_bot", "_client", "cqhttp"):
                 client = getattr(platform, attr, None)
+                client_desc = f"{client.__class__.__module__}.{client.__class__.__name__}".lower() if client is not None else ""
                 if client is not None and (
                     "aiocqhttp" in platform_names
                     or "default(aiocqhttp)" in platform_names
+                    or "aiocqhttp" in platform_desc
+                    or "aiocqhttp" in client_desc
+                    or (hasattr(client, "send_private_msg") and hasattr(client, "send_group_msg"))
                     or hasattr(client, "friend_poke")
                     or hasattr(client, "group_poke")
                 ):
@@ -2780,11 +2828,16 @@ class ProactiveMessageMixin:
         return True
 
     async def _call_onebot_action(self, client: Any, action: str, **params: Any) -> bool:
+        ok, _ = await self._call_onebot_action_with_error(client, action, **params)
+        return ok
+
+    async def _call_onebot_action_with_error(self, client: Any, action: str, **params: Any) -> tuple[bool, str]:
         candidates = (
             "call_action",
             "call_api",
             "api",
         )
+        last_error = ""
         for attr in candidates:
             func = getattr(client, attr, None)
             if not callable(func):
@@ -2794,17 +2847,21 @@ class ProactiveMessageMixin:
                 if hasattr(result, "__await__"):
                     result = await result
                 if self._onebot_action_result_ok(result):
-                    return True
+                    return True, ""
+                last_error = f"{attr} 返回失败: {_single_line(result, 180)}"
             except TypeError:
                 try:
                     result = func(action, params)
                     if hasattr(result, "__await__"):
                         result = await result
                     if self._onebot_action_result_ok(result):
-                        return True
-                except Exception:
+                        return True, ""
+                    last_error = f"{attr} 返回失败: {_single_line(result, 180)}"
+                except Exception as exc:
+                    last_error = self._format_send_exception(exc)
                     continue
-            except Exception:
+            except Exception as exc:
+                last_error = self._format_send_exception(exc)
                 continue
         func = getattr(client, action, None)
         if callable(func):
@@ -2812,10 +2869,12 @@ class ProactiveMessageMixin:
                 result = func(**params)
                 if hasattr(result, "__await__"):
                     result = await result
-                return self._onebot_action_result_ok(result)
-            except Exception:
-                return False
-        return False
+                if self._onebot_action_result_ok(result):
+                    return True, ""
+                return False, f"{action} 返回失败: {_single_line(result, 180)}"
+            except Exception as exc:
+                return False, self._format_send_exception(exc)
+        return False, last_error or f"OneBot 客户端不支持动作 {action}"
 
     def _input_status_user_id_from_umo(self, umo: str) -> str:
         if not umo or ":FriendMessage:" not in str(umo):
@@ -3972,6 +4031,32 @@ class ProactiveMessageMixin:
             return MessageType.GROUP_MESSAGE
         return MessageType.FRIEND_MESSAGE
 
+    def _format_send_exception(self, exc: Exception | BaseException | None) -> str:
+        if exc is None:
+            return ""
+        text = _single_line(str(exc), 180)
+        if text:
+            return f"{exc.__class__.__name__}: {text}"
+        return repr(exc)
+
+    def _describe_send_target(self, umo: str, session: MessageSession | None, platform: Any | None) -> str:
+        if session is None:
+            return f"umo={_single_line(umo, 140) or '-'} session=unparsed platform=-"
+        platform_id = _single_line(getattr(session, "platform_id", ""), 60)
+        session_id = _single_line(getattr(session, "session_id", ""), 80)
+        message_type = _single_line(getattr(session, "message_type", ""), 60)
+        platform_desc = "found" if platform else "missing"
+        if platform:
+            try:
+                meta = platform.meta()
+                platform_desc = _single_line(getattr(meta, "id", "") or getattr(meta, "name", ""), 80) or "found"
+            except Exception:
+                platform_desc = platform.__class__.__name__
+        return (
+            f"umo={_single_line(umo, 140) or '-'} "
+            f"platform_id={platform_id or '-'} type={message_type or '-'} session_id={session_id or '-'} platform={platform_desc}"
+        )
+
     async def _trigger_proactive_decorating_hooks(self, umo: str, chain: list[Any]) -> list[Any]:
         if not self.enable_proactive_decorating_hooks or not chain:
             return chain
@@ -4310,6 +4395,52 @@ class ProactiveMessageMixin:
             return self._segmented_chat_scope_allows("group")
         return self._segmented_chat_scope_allows("private")
 
+    async def _onebot_messages_from_chain(self, chain: list[Any]) -> tuple[list[dict[str, Any]], str]:
+        try:
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+
+            messages = await AiocqhttpMessageEvent._parse_onebot_json(MessageChain(chain))
+            return list(messages or []), ""
+        except Exception as exc:
+            return [], self._format_send_exception(exc)
+
+    async def _send_chain_components_via_onebot_direct(
+        self,
+        umo: str,
+        session: MessageSession | None,
+        chain: list[Any],
+    ) -> tuple[bool, str]:
+        if session is None:
+            return False, "UMO 无法解析，不能使用 OneBot 原生兜底"
+        target_id = _single_line(getattr(session, "session_id", ""), 80)
+        if not target_id or not target_id.isdigit():
+            return False, f"session_id 不是纯数字，不能使用 OneBot 原生兜底: {target_id or '-'}"
+        client = self._resolve_aiocqhttp_client()
+        if client is None:
+            return False, "没有找到可用的 aiocqhttp/OneBot 客户端"
+        messages, parse_error = await self._onebot_messages_from_chain(chain)
+        if not messages:
+            return False, parse_error or "消息链无法转换为 OneBot 消息段"
+        target_value: Any = target_id
+        try:
+            target_value = int(target_id)
+        except Exception:
+            pass
+        is_group = self._message_type_for_session(session) == MessageType.GROUP_MESSAGE
+        action = "send_group_msg" if is_group else "send_private_msg"
+        params = {"group_id": target_value, "message": messages} if is_group else {"user_id": target_value, "message": messages}
+        ok, error = await self._call_onebot_action_with_error(client, action, **params)
+        if ok:
+            logger.info(
+                "[PrivateCompanion] 主动消息已通过 OneBot 原生兜底发送: action=%s target=%s segments=%s umo=%s",
+                action,
+                target_id,
+                len(messages),
+                _single_line(umo, 140),
+            )
+            return True, ""
+        return False, error or f"OneBot 原生动作 {action} 返回失败"
+
     async def _send_chain_components(self, umo: str, chain: list[Any]) -> None:
         hit = self._forbidden_recall_hit(self._chain_text_for_forbidden_recall(chain))
         if hit:
@@ -4332,6 +4463,7 @@ class ProactiveMessageMixin:
             return
         session = self._parse_message_session(umo)
         platform = self._get_platform_for_session(session) if session else None
+        precise_error: Exception | None = None
         if self.enable_precise_platform_send and session and platform:
             try:
                 status = getattr(platform, "status", None)
@@ -4346,8 +4478,54 @@ class ProactiveMessageMixin:
                 await platform.send_by_session(session_obj, MessageChain(processed_chain))
                 return
             except Exception as e:
-                logger.warning("[PrivateCompanion] 精确平台发送失败,回退核心发送: %s", e)
-        await self.context.send_message(umo, self._build_result_from_chain(processed_chain))
+                precise_error = e
+                logger.warning(
+                    "[PrivateCompanion] 精确平台发送失败,回退核心发送: target=%s error=%s",
+                    self._describe_send_target(umo, session, platform),
+                    self._format_send_exception(e),
+                )
+        core_error: Exception | None = None
+        core_result: Any = None
+        try:
+            core_result = await self.context.send_message(umo, self._build_result_from_chain(processed_chain))
+            if core_result is not False:
+                return
+            logger.warning(
+                "[PrivateCompanion] 主动核心发送未找到匹配平台,尝试 OneBot 原生兜底: target=%s",
+                self._describe_send_target(umo, session, platform),
+            )
+        except Exception as e:
+            core_error = e
+            target = self._describe_send_target(umo, session, platform)
+            precise_text = self._format_send_exception(precise_error) or "未尝试或未失败"
+            fallback_text = self._format_send_exception(e)
+            logger.warning(
+                "[PrivateCompanion] 主动核心发送失败: target=%s precise_error=%s fallback_error=%s",
+                target,
+                precise_text,
+                fallback_text,
+            )
+        direct_ok, direct_error = await self._send_chain_components_via_onebot_direct(umo, session, processed_chain)
+        if direct_ok:
+            return
+        target = self._describe_send_target(umo, session, platform)
+        precise_text = self._format_send_exception(precise_error) or "未尝试或未失败"
+        if core_error is not None:
+            fallback_text = self._format_send_exception(core_error)
+        elif core_result is False:
+            fallback_text = "AstrBot 核心发送返回 False（未找到匹配平台或平台拒绝发送）"
+        else:
+            fallback_text = "未尝试或未失败"
+        logger.warning(
+            "[PrivateCompanion] 主动发送兜底也失败: target=%s precise_error=%s fallback_error=%s direct_error=%s",
+            target,
+            precise_text,
+            fallback_text,
+            direct_error,
+        )
+        raise RuntimeError(
+            f"主动消息发送失败: {target}; precise={precise_text}; fallback={fallback_text}; direct={direct_error}"
+        ) from core_error
 
     async def _send_media_proactive_chain(
         self,
