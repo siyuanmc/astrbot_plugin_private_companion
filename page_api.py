@@ -2972,6 +2972,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 "threshold": self._int(high_intensity.get("threshold")) if isinstance(high_intensity, dict) else 0,
                 "remaining_seconds": self._float(high_intensity.get("remaining_seconds")) if isinstance(high_intensity, dict) else 0.0,
                 "merge_seconds": self._float(getattr(self.plugin, "group_high_intensity_merge_seconds", 8)),
+                "max_merge_messages": self._int(getattr(self.plugin, "group_high_intensity_max_merge_messages", 8)),
             },
         }
 
@@ -3580,6 +3581,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "text_message_debounce_seconds",
             "image_message_debounce_seconds",
             "forward_message_debounce_seconds",
+            "text_message_debounce_max_wait_seconds",
+            "message_debounce_max_merge_messages",
             "enable_semantic_message_debounce",
             "semantic_message_debounce_seconds",
             "enable_proactive_quote_trigger_message",
@@ -3656,6 +3659,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "group_high_intensity_wakeup_threshold",
             "group_high_intensity_cooldown_seconds",
             "group_high_intensity_merge_seconds",
+            "group_high_intensity_max_merge_messages",
             "enable_forward_message_adaptation",
             "forward_message_mode",
             "forward_message_max_messages",
@@ -4100,6 +4104,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enabled": bool(getattr(self.plugin, "enable_message_debounce", False)),
             "smart_enabled": bool(getattr(self.plugin, "enable_smart_message_debounce", False)),
             "text_wait": self._float(getattr(self.plugin, "text_message_debounce_seconds", 0.0)),
+            "max_wait": self._float(getattr(self.plugin, "text_message_debounce_max_wait_seconds", 0.0)),
+            "max_merge": self._int(getattr(self.plugin, "message_debounce_max_merge_messages", 0)),
             "smart_wait": self._float(getattr(self.plugin, "smart_message_debounce_wait_seconds", 0.0)),
             "learning_window": self._float(getattr(self.plugin, "smart_message_debounce_learning_window_seconds", 0.0)),
             "provider_id": self._single_line(getattr(self.plugin, "smart_message_debounce_provider_id", ""), 160),
@@ -4618,6 +4624,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "text_message_debounce_seconds",
             "image_message_debounce_seconds",
             "forward_message_debounce_seconds",
+            "text_message_debounce_max_wait_seconds",
+            "message_debounce_max_merge_messages",
             "enable_semantic_message_debounce",
             "semantic_message_debounce_seconds",
             "enable_proactive_quote_trigger_message",
@@ -4692,6 +4700,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "group_high_intensity_wakeup_threshold",
             "group_high_intensity_cooldown_seconds",
             "group_high_intensity_merge_seconds",
+            "group_high_intensity_max_merge_messages",
             "enable_forward_message_adaptation",
             "forward_message_mode",
             "forward_message_max_messages",
@@ -5072,6 +5081,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "group_high_intensity_wakeup_threshold",
             "group_high_intensity_cooldown_seconds",
             "group_high_intensity_merge_seconds",
+            "group_high_intensity_max_merge_messages",
             "photo_action_max_daily",
             "comfyui_photo_wait_seconds",
             "local_photo_cpu_busy_percent",
@@ -5125,9 +5135,13 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "auto_voice_cooldown_seconds",
         }:
             try:
+                if key == "group_high_intensity_max_merge_messages":
+                    return max(0, min(50, int(value)))
                 parsed = max(0, int(value))
                 return parsed
             except (TypeError, ValueError):
+                if key == "group_high_intensity_max_merge_messages":
+                    return 8
                 return 0
         if key == "group_wakeup_interest_probability":
             try:
@@ -5150,6 +5164,16 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 return max(0.0, min(15.0, float(value)))
             except (TypeError, ValueError):
                 return 0.0 if key != "image_message_debounce_seconds" else 8.0
+        if key == "text_message_debounce_max_wait_seconds":
+            try:
+                return max(0.0, min(30.0, float(value)))
+            except (TypeError, ValueError):
+                return 12.0
+        if key == "message_debounce_max_merge_messages":
+            try:
+                return max(0, min(30, int(value)))
+            except (TypeError, ValueError):
+                return 8
         if key in {"smart_message_debounce_model_timeout_seconds", "smart_message_debounce_wait_seconds", "smart_message_debounce_learning_window_seconds"}:
             try:
                 upper = 5.0 if key == "smart_message_debounce_model_timeout_seconds" else 30.0

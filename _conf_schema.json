@@ -551,6 +551,30 @@
     "default": 0,
     "condition": "enable_message_debounce"
   },
+  "text_message_debounce_max_wait_seconds": {
+    "description": "文本收口最长等待秒数",
+    "type": "float",
+    "hint": "普通文本/群聊文本使用滑动等待时的总时长上限。用户持续补话也不会超过这个时间；0 表示不额外限制，只使用内部安全上限。",
+    "slider": {
+      "min": 0,
+      "max": 30,
+      "step": 0.5
+    },
+    "default": 12,
+    "condition": "enable_message_debounce"
+  },
+  "message_debounce_max_merge_messages": {
+    "description": "最大合并消息数",
+    "type": "int",
+    "hint": "一次收口最多合并多少条补充消息。达到上限后会立刻结束等待进入回复链，避免连续补话一直拖住；0 表示不限制。",
+    "slider": {
+      "min": 0,
+      "max": 30,
+      "step": 1
+    },
+    "default": 8,
+    "condition": "enable_message_debounce"
+  },
   "enable_semantic_message_debounce": {
     "description": "旧版语义收口开关",
     "type": "bool",
@@ -2247,10 +2271,24 @@
   "group_high_intensity_merge_seconds": {
     "description": "高强度合并等待秒数",
     "type": "int",
-    "hint": "高强度收口期间，第一条明确叫到 Bot 的消息会等待这么久，把同一群后续叫 Bot 的消息合并进同一轮回复，减少多次 LLM 调用。",
+    "hint": "高强度收口期间的固定合并窗口。第一条明确叫到 Bot 的消息最多等待这么久，把同一群后续叫 Bot 的消息合并进同一轮回复，减少多次 LLM 调用。",
     "slider": {
       "min": 1,
       "max": 30,
+      "step": 1
+    },
+    "default": 8,
+    "condition": {
+      "enable_group_high_intensity_mode": true
+    }
+  },
+  "group_high_intensity_max_merge_messages": {
+    "description": "高强度最大合并消息数",
+    "type": "int",
+    "hint": "高强度收口期间同一轮最多合并多少条叫 Bot 的消息。达到上限会立刻结束等待进入回复链；0 表示不限制。",
+    "slider": {
+      "min": 0,
+      "max": 50,
       "step": 1
     },
     "default": 8,

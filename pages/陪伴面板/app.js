@@ -612,6 +612,7 @@ function featureLockedByProactiveOnlyMode(key) {
 }
 
 function visibleFeatureSwitchKey(key) {
+  if (key === "enable_proactive_only_mode") return false;
   if (hiddenCompatibilityConfigKeys.has(key)) return false;
   const detailSettingKeys = new Set(Object.values(featureSettingGroups || {}).flat());
   const groupedFeatureKeys = new Set(featureGroups.flatMap((group) => group.keys));
@@ -720,6 +721,8 @@ const configLabels = {
   text_message_debounce_seconds: "文本补话等待秒数",
   image_message_debounce_seconds: "图片补话等待秒数",
   forward_message_debounce_seconds: "转发补话等待秒数",
+  text_message_debounce_max_wait_seconds: "文本最长等待秒数",
+  message_debounce_max_merge_messages: "最大合并消息数",
   enable_semantic_message_debounce: "旧版收口兼容开关",
   semantic_message_debounce_seconds: "旧版文本等待秒数",
   enable_proactive_quote_trigger_message: "引用触发消息",
@@ -826,6 +829,7 @@ const configLabels = {
   group_high_intensity_wakeup_threshold: "高强度唤醒阈值",
   group_high_intensity_cooldown_seconds: "收口持续秒数",
   group_high_intensity_merge_seconds: "合并等待秒数",
+  group_high_intensity_max_merge_messages: "高强度最大合并数",
   worldbook_auto_import: "启动时刷新关系网",
   worldbook_member_match_aliases: "允许别名辅助匹配",
   worldbook_self_registration: "允许群聊自登记",
@@ -1000,6 +1004,8 @@ const configDescriptions = {
   text_message_debounce_seconds: "普通文本后的补话等待时间。旧版“语义收口等待秒数”会作为该项的兼容默认值；设为 0 时文本不固定等待。",
   image_message_debounce_seconds: "只发图片、截图或表情包后的补话等待时间，适合保留几秒给用户先图后文。",
   forward_message_debounce_seconds: "只发合并转发/聊天记录后的补话等待时间。设为 0 表示转发不额外等待。",
+  text_message_debounce_max_wait_seconds: "普通文本和群聊文本滑动等待的总时长上限。用户持续补话也不会超过该时间；0 表示只使用内部安全上限。",
+  message_debounce_max_merge_messages: "一次收口最多合并多少条补充消息。达到上限后会立刻结束等待进入回复链；0 表示不限制。",
   enable_semantic_message_debounce: "旧版兼容项，已并入消息收口防抖，不再单独配置。",
   semantic_message_debounce_seconds: "旧版兼容项，读取时会迁移为文本补话等待秒数。",
   enable_proactive_quote_trigger_message: "开启后，群聊被 @、引用、唤醒或连续对话保持时，Bot 的普通回复会引用当前触发消息；群聊主动插话会引用触发消息；模型预约的私聊主动若能追溯到同一私聊消息，也会引用。复读跟读/打断不会引用。",
@@ -1055,7 +1061,8 @@ const configDescriptions = {
   group_high_intensity_wakeup_window_seconds: "统计连续唤醒的时间窗口。默认 60 秒，即一分钟内连续被叫到才进入高强度收口。",
   group_high_intensity_wakeup_threshold: "窗口内达到多少次唤醒后进入收口。默认 3 次，用于减少连续 @、连续引用造成的多次 LLM 调用。",
   group_high_intensity_cooldown_seconds: "进入收口降载后维持多久。期间明确 @ 或引用会被合并处理，非必要后台动作会让路。",
-  group_high_intensity_merge_seconds: "高强度期间第一条明确叫到 Bot 的消息会等待多久，用来把同一群后续叫 Bot 的消息合并进同一轮回复。",
+  group_high_intensity_merge_seconds: "高强度期间第一条明确叫到 Bot 的消息最多等待多久。这是固定合并窗口，不会因持续补话无限延长。",
+  group_high_intensity_max_merge_messages: "高强度期间同一轮最多合并多少条叫 Bot 的消息。达到上限会立刻结束等待进入回复链；0 表示不限制。",
   forward_message_mode: "注入：把合并消息摘要塞进主模型上下文；转述：先用专门模型读一遍再交给主模型。",
   forward_message_max_messages: "合并消息最多读取多少条节点，过多会截断。",
   forward_message_max_chars: "注入模式下放进主模型上下文的最大字符数。",
@@ -1199,7 +1206,7 @@ const featureSettingGroups = {
   inject_passive_states: ["humanized_state_intensity"],
   enable_cycle_state: ["humanized_state_intensity"],
   enable_skill_growth_simulation: ["skill_growth_rate", "enable_skill_growth_passive_injection", "enable_skill_growth_schedule_influence", "skill_growth_schedule_influence_strength"],
-  enable_message_debounce: ["inbound_message_debounce_seconds", "text_message_debounce_seconds", "image_message_debounce_seconds", "forward_message_debounce_seconds", "enable_smart_message_debounce", "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID", "smart_message_debounce_model_timeout_seconds", "smart_message_debounce_wait_seconds", "smart_message_debounce_learning_window_seconds", "smart_message_debounce_examples_limit"],
+  enable_message_debounce: ["inbound_message_debounce_seconds", "text_message_debounce_seconds", "image_message_debounce_seconds", "forward_message_debounce_seconds", "text_message_debounce_max_wait_seconds", "message_debounce_max_merge_messages", "enable_smart_message_debounce", "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID", "smart_message_debounce_model_timeout_seconds", "smart_message_debounce_wait_seconds", "smart_message_debounce_learning_window_seconds", "smart_message_debounce_examples_limit"],
   enable_recall_enhancement: ["enable_recall_cancel_reply", "enable_recall_message_cache", "enable_recall_transcribe_command", "recall_message_cache_ttl_seconds", "recall_message_cache_max_items", "enable_forbidden_word_recall", "recall_forbidden_words", "recall_forbidden_scope", "recall_forbidden_word_case_sensitive"],
   enable_recall_cancel_reply: ["recall_message_cache_ttl_seconds"],
   enable_recall_message_cache: ["enable_recall_transcribe_command", "recall_message_cache_ttl_seconds", "recall_message_cache_max_items"],
@@ -1243,6 +1250,7 @@ const featureSettingGroups = {
     "group_high_intensity_wakeup_threshold",
     "group_high_intensity_cooldown_seconds",
     "group_high_intensity_merge_seconds",
+    "group_high_intensity_max_merge_messages",
     "enable_group_slang_learning",
     "enable_group_slang_meanings",
     "enable_group_member_profiles",
@@ -1258,8 +1266,8 @@ const featureSettingGroups = {
   enable_group_persona_denoise: [],
   enable_forward_message_adaptation: ["forward_message_mode", "forward_message_max_messages", "forward_message_max_chars", "forward_message_parse_nested", "forward_message_image_vision", "forward_message_image_limit"],
   enable_group_scene_awareness: ["group_scene_recent_limit", "enable_group_conversation_followup", "group_conversation_followup_seconds", "group_conversation_followup_max_turns"],
-  enable_group_wakeup_enhancement: ["group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_short_text_wait_seconds", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_scene_recent_limit"],
-  enable_group_high_intensity_mode: ["group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds"],
+  enable_group_wakeup_enhancement: ["group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_short_text_wait_seconds", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_high_intensity_max_merge_messages", "group_scene_recent_limit"],
+  enable_group_high_intensity_mode: ["group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_high_intensity_max_merge_messages"],
   enable_group_conversation_followup: ["group_conversation_followup_seconds", "group_conversation_followup_max_turns"],
   enable_group_slang_learning: ["max_group_slang_terms", "max_group_recent_messages", "enable_group_slang_meanings"],
   enable_group_slang_meanings: ["max_group_slang_terms", "enable_group_slang_web_search"],
@@ -1330,7 +1338,7 @@ const featureSettingSections = {
     {
       title: "补话等待",
       note: "分别控制文本、图片和合并转发后等待用户继续补充的时间；开启智能文本收口后，文本固定等待会隐藏。",
-      keys: ["text_message_debounce_seconds", "image_message_debounce_seconds", "forward_message_debounce_seconds"],
+      keys: ["text_message_debounce_seconds", "image_message_debounce_seconds", "forward_message_debounce_seconds", "text_message_debounce_max_wait_seconds", "message_debounce_max_merge_messages"],
     },
     {
       title: "智能文本收口",
@@ -1398,7 +1406,7 @@ const featureSettingSections = {
     {
       title: "唤醒与高强度",
       note: "控制被叫到、兴趣关键词和连续唤醒后的收口。",
-      keys: ["enable_group_wakeup_enhancement", "group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds"],
+      keys: ["enable_group_wakeup_enhancement", "group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_high_intensity_max_merge_messages"],
     },
     {
       title: "群记忆与互动",
@@ -1514,7 +1522,7 @@ const featureSettingSections = {
     {
       title: "高强度收口",
       note: "连续被叫到时，合并同群后续唤醒消息，减少多次 LLM 调用和后台成本。",
-      keys: ["enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds"],
+      keys: ["enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_high_intensity_max_merge_messages"],
     },
     {
       title: "记录与上下文",
@@ -1891,8 +1899,15 @@ async function loadImageCache() {
 }
 
 async function loadTroubleshooting() {
-  const data = await fetchJson("/troubleshooting");
+  const [data, overview] = await Promise.all([
+    fetchJson("/troubleshooting"),
+    fetchJson("/overview").catch(() => null),
+  ]);
   state.troubleshooting = data || null;
+  if (overview) {
+    state.overview = overview;
+    state.featureDraft = featureDraftFromOverview(overview);
+  }
   renderTroubleshooting();
   return data;
 }
@@ -2411,6 +2426,7 @@ function renderTroubleshooting() {
   const sqliteEl = $("#troubleshootingSqlite");
   const chainEl = $("#troubleshootingChainTests");
   const injectionsEl = $("#troubleshootingPromptInjections");
+  const debounceEl = $("#troubleshootingDebounceTrace");
   if (!summaryEl || !checksEl || !eventsEl || !sqliteEl || !chainEl || !injectionsEl) return;
   const data = state.troubleshooting || {};
   const summary = data.summary || {};
@@ -2472,6 +2488,9 @@ function renderTroubleshooting() {
     : `<div class="empty small">没有检测到候选 SQLite 数据库文件</div>`;
   chainEl.innerHTML = troubleshootingChainTestMarkup(data.chain_tests || {});
   injectionsEl.innerHTML = troubleshootingPromptInjectionMarkup(data.prompt_injections || {});
+  if (debounceEl) {
+    debounceEl.innerHTML = troubleshootingDebounceTraceMarkup(state.overview?.message_debounce || {});
+  }
 }
 
 function troubleshootingReasonItems(checks, events, selected) {
@@ -2666,6 +2685,9 @@ function troubleshootingDebounceTraceMarkup(data) {
       ? "消息收口开启，智能文本收口未开启"
       : "消息收口未开启";
   const provider = data.provider_id || "跟随默认模型";
+  const limitText = data.enabled
+    ? `最长 ${Number(data.max_wait || 0).toFixed(1)}s · 最多 ${Number(data.max_merge || 0)} 条`
+    : "";
   const logMarkup = logs.length ? logs.slice(0, 8).map((item) => {
     const tone = item.outcome === "wait" || item.outcome === "extend_wait"
       ? "warn"
@@ -2711,6 +2733,7 @@ function troubleshootingDebounceTraceMarkup(data) {
   return `
     <div class="debounce-status">
       <span>${escapeHtml(status)}</span>
+      ${limitText ? `<span>${escapeHtml(limitText)}</span>` : ""}
       <span>模型：${escapeHtml(provider)}</span>
     </div>
     <div class="debounce-log-list">${logMarkup}</div>
@@ -3683,14 +3706,7 @@ function renderUsers() {
       await renderUserDetail(true);
     });
   });
-  renderPrivateDebounceTrace();
   renderUserDetail();
-}
-
-function renderPrivateDebounceTrace() {
-  const root = $("#privateDebounceTrace");
-  if (!root) return;
-  root.innerHTML = troubleshootingDebounceTraceMarkup(state.overview?.message_debounce || {});
 }
 
 async function renderUserDetail(forceFetch = false) {
@@ -8340,9 +8356,9 @@ const featureDetailGuides = {
     disabled: "技能页不再增长，日程不受能力状态约束。",
   },
   enable_message_debounce: {
-    summary: "分别控制文本、图片和合并转发的补话等待；旧版语义收口等待已并入文本等待。",
+    summary: "分别控制文本、图片和合并转发的补话等待，并限制持续补话的最长等待和合并条数。",
     trigger: "私聊或群聊消息进入回复链前。",
-    enabled: "不同消息类型按各自秒数等待补充说明；智能文本收口开启后，完整文本本地快判放行，疑似半句才短等。",
+    enabled: "不同消息类型按各自秒数等待补充说明；智能文本收口开启后，完整文本本地快判放行，疑似半句才短等；达到最长等待或最大合并条数会立即收口。",
     disabled: "不等待用户补话，只保留重复上报去重。",
   },
   enable_smart_message_debounce: {

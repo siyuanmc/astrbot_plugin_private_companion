@@ -291,13 +291,6 @@ QQ空间 = 公开札记
           <label>身份别名归并 <textarea name="private_user_aliases" rows="3" placeholder="临时ID=主QQ&#10;机器人侧ID=主QQ"></textarea></label>
           <button type="submit">保存归并规则</button>
         </form>
-        <article class="private-debounce-panel">
-          <div>
-            <h2>消息收口追踪</h2>
-            <span class="muted">查看文本、图片、转发补话为什么等待或放行；这里属于私聊消息策略，不再塞进排障中心</span>
-          </div>
-          <div id="privateDebounceTrace" class="troubleshooting-debounce-trace"></div>
-        </article>
         <div class="table-wrap">
           <table class="private-user-table">
             <thead>
@@ -657,6 +650,13 @@ QQ空间 = 公开札记
                 <span class="muted">最近 5 条主链与请求级提示词实际注入内容，用于排查污染、错时、TTS 规则和上下文串线</span>
             </div>
             <div id="troubleshootingPromptInjections" class="troubleshooting-prompt-injections"></div>
+          </article>
+          <article class="troubleshooting-debounce-panel">
+            <div>
+              <h2>消息收口追踪</h2>
+              <span class="muted">查看文本、图片、转发补话为什么等待或放行，方便定位防抖和收口策略问题</span>
+            </div>
+            <div id="troubleshootingDebounceTrace" class="troubleshooting-debounce-trace"></div>
           </article>
           <div class="troubleshooting-toolbar">
             <div class="troubleshooting-filter" role="group" aria-label="问题筛选">

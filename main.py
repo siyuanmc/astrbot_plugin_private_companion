@@ -303,7 +303,7 @@ _PLATFORM_DISPLAY_NAMES = {
     PLUGIN_NAME,
     "menglimi",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "4.0.12",
+    "4.0.13",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, TtsEnhancementMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -497,6 +497,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.text_message_debounce_seconds = self._cfg_float(c, "text_message_debounce_seconds", text_debounce_default, 0.0)
         self.image_message_debounce_seconds = self._cfg_float(c, "image_message_debounce_seconds", 8.0, 0.0)
         self.forward_message_debounce_seconds = self._cfg_float(c, "forward_message_debounce_seconds", 0.0, 0.0)
+        self.text_message_debounce_max_wait_seconds = self._cfg_float(c, "text_message_debounce_max_wait_seconds", 12.0, 0.0)
+        self.message_debounce_max_merge_messages = self._cfg_int(c, "message_debounce_max_merge_messages", 8, 0, 30)
         self.semantic_message_debounce_seconds = self.text_message_debounce_seconds
         self.private_image_vision_wait_seconds = self._cfg_float(c, "private_image_vision_wait_seconds", 30.0, 0.0)
         self.enable_private_image_self_recognition = self._cfg_bool(c, "enable_private_image_self_recognition", True)
@@ -811,6 +813,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.group_high_intensity_wakeup_threshold = self._cfg_int(c, "group_high_intensity_wakeup_threshold", 3, 2, 20)
         self.group_high_intensity_cooldown_seconds = self._cfg_int(c, "group_high_intensity_cooldown_seconds", 150, 30, 1800)
         self.group_high_intensity_merge_seconds = self._cfg_int(c, "group_high_intensity_merge_seconds", 8, 1, 30)
+        self.group_high_intensity_max_merge_messages = self._cfg_int(c, "group_high_intensity_max_merge_messages", 8, 0, 50)
         self.enable_group_interjection = self._cfg_bool(c, "enable_group_interjection", False)
         self.enable_group_repeat_follow = self._cfg_bool(c, "enable_group_repeat_follow", True)
         self.group_repeat_trigger_threshold = self._cfg_int(c, "group_repeat_trigger_threshold", 4, 3, 20)
@@ -3663,6 +3666,15 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             return
         if self._message_debounce_command_text(event, text):
             return
+        existing_reply_preview = self._event_existing_reply_result_preview(event)
+        if existing_reply_preview:
+            logger.info(
+                "[PrivateCompanion] 已有其他链路回复,跳过私聊被动接管: user=%s text=%s result=%s",
+                user_id,
+                _single_line(text, 80),
+                _single_line(existing_reply_preview, 120),
+            )
+            return
         if self.enable_proactive_only_mode:
             await self._record_proactive_only_private_feedback(
                 event,
@@ -3724,6 +3736,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 logger.info("[PrivateCompanion] 忽略 poke 回流事件,不计入用户新消息: %s", user_id)
                 return
             if self._is_duplicate_inbound_message(event, scope=f"private:{user_id}", sender_id=user_id, text=text):
+                event.stop_event()
                 return
             fast_user["umo"] = event.unified_msg_origin
             self._note_private_display_name_observation(fast_user, user_id, sender_display_name, now=received_ts)
@@ -3760,6 +3773,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 return
             if self._is_duplicate_inbound_message(event, scope=f"private:{user_id}", sender_id=user_id, text=text):
                 self._schedule_data_save()
+                event.stop_event()
                 return
             if is_target_user and text and not forward_only_prompt and not reference_media_with_text:
                 self._maybe_record_smart_message_debounce_followup(
@@ -4065,6 +4079,14 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             return
         if self._message_debounce_command_text(event, text):
             return
+        existing_reply_preview = self._event_existing_reply_result_preview(event)
+        if existing_reply_preview:
+            logger.info(
+                "[PrivateCompanion] 已有其他链路回复,跳过群聊被动观察: text=%s result=%s",
+                _single_line(text, 80),
+                _single_line(existing_reply_preview, 120),
+            )
+            return
         if self.enable_proactive_only_mode:
             logger.debug("[PrivateCompanion] 主动消息专用模式已跳过群聊被动观察")
             return
@@ -4088,6 +4110,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         async with self._data_lock:
             if self._is_duplicate_inbound_message(event, scope=f"group:{group_id}", sender_id=sender_id, text=text):
                 self._save_data_sync()
+                event.stop_event()
                 return
             group = self._get_group(group_id)
             _, resting_mention_notice = self._group_resting_mention_notice(
@@ -4385,7 +4408,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             group_smart_result = getattr(event, "private_companion_smart_message_debounce_result", None)
             group_smart_decision = str(group_smart_result.get("decision") or "") if isinstance(group_smart_result, dict) else ""
             group_smart_handled = group_smart_decision in {"complete", "incomplete"}
-            short_wait = self._group_short_wakeup_wait_seconds(event, text, smart_result=group_smart_result)
+            short_wait = 0.0
+            if not high_intensity_state.get("active"):
+                short_wait = self._group_short_wakeup_wait_seconds(event, text, smart_result=group_smart_result)
             if short_wait > 0:
                 group_smart_wait = max(group_smart_wait, short_wait)
                 group_smart_decision = "incomplete"

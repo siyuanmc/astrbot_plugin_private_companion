@@ -389,6 +389,35 @@ class EventDispatchMixin:
         except Exception:
             return ""
 
+    def _event_existing_reply_result_preview(self, event: AstrMessageEvent) -> str:
+        getter = getattr(event, "get_result", None)
+        if not callable(getter):
+            return ""
+        try:
+            result = getter()
+        except Exception:
+            return ""
+        chain = list(getattr(result, "chain", []) or []) if result is not None else []
+        if not chain:
+            return ""
+        parts: list[str] = []
+        for comp in chain[:4]:
+            text = _single_line(
+                getattr(comp, "text", "")
+                or getattr(comp, "message", "")
+                or getattr(comp, "content", ""),
+                80,
+            )
+            if text:
+                parts.append(text)
+                continue
+            if comp.__class__.__name__.lower() != "plain":
+                parts.append(comp.__class__.__name__)
+        return " / ".join(part for part in parts if part)
+
+    def _event_has_existing_reply_result(self, event: AstrMessageEvent) -> bool:
+        return bool(self._event_existing_reply_result_preview(event))
+
     def _event_self_id(self, event: AstrMessageEvent) -> str:
         raw = self._event_raw_payload(event)
         self_id = _single_line(raw.get("self_id"), 80)
@@ -1328,6 +1357,16 @@ class EventDispatchMixin:
     def _group_high_intensity_merge_wait_seconds(self) -> float:
         return max(1.0, min(30.0, float(getattr(self, "group_high_intensity_merge_seconds", 8) or 8)))
 
+    def _message_debounce_max_wait_seconds(self, kind: str = "text") -> float:
+        if kind not in {"text", "group_text"}:
+            return 0.0
+        return max(0.0, _safe_float(getattr(self, "text_message_debounce_max_wait_seconds", 12.0), 12.0, 0.0))
+
+    def _message_debounce_max_merge_messages(self, kind: str = "text") -> int:
+        if kind == "group_high_intensity":
+            return max(0, _safe_int(getattr(self, "group_high_intensity_max_merge_messages", 8), 8, 0))
+        return max(0, _safe_int(getattr(self, "message_debounce_max_merge_messages", 8), 8, 0))
+
     def _semantic_buffer_active_snapshot(self, key: str, *, wait_seconds: float | None = None, force: bool = False) -> dict[str, Any]:
         default_wait = self._message_debounce_seconds("text") if hasattr(self, "_message_debounce_seconds") else getattr(self, "semantic_message_debounce_seconds", 0.0)
         wait = max(0.0, float(wait_seconds if wait_seconds is not None else default_wait or 0.0))
@@ -1343,7 +1382,11 @@ class EventDispatchMixin:
         now = _now_ts()
         first_ts = _safe_float(buffer.get("first_ts"), 0.0, 0.0)
         updated_ts = _safe_float(buffer.get("updated_ts"), first_ts, first_ts)
-        if first_ts <= 0 or now - updated_ts > wait + 0.8:
+        max_deadline_ts = _safe_float(buffer.get("max_deadline_ts"), 0.0, 0.0)
+        target_ts = updated_ts + wait
+        if max_deadline_ts > 0:
+            target_ts = min(target_ts, max_deadline_ts)
+        if first_ts <= 0 or now - target_ts > 0.8:
             return {}
         messages = buffer.get("messages") if isinstance(buffer.get("messages"), list) else []
         texts = []
@@ -1356,7 +1399,7 @@ class EventDispatchMixin:
             "active": True,
             "first_ts": first_ts,
             "updated_ts": updated_ts,
-            "remaining": max(0.0, updated_ts + wait - now),
+            "remaining": max(0.0, target_ts - now),
             "texts": texts,
         }
 
@@ -1393,12 +1436,55 @@ class EventDispatchMixin:
         scope, sender_id = self._semantic_buffer_identity(key)
         debounce_mode = "smart" if isinstance(smart_debounce, dict) and smart_debounce.get("enabled") else "fixed"
         buffer_kind = _single_line(kind, 40) or "text"
+        max_merge_messages = self._message_debounce_max_merge_messages(buffer_kind)
+        max_wait_seconds = self._message_debounce_max_wait_seconds(buffer_kind)
         if isinstance(current, dict) and now - _safe_float(current.get("updated_ts"), current.get("first_ts"), 0) <= wait + 0.8:
+            current_deadline_ts = _safe_float(current.get("deadline_ts"), 0.0, 0.0)
+            if current_deadline_ts > 0 and now >= current_deadline_ts:
+                messages = current.setdefault("messages", [])
+                if not isinstance(messages, list):
+                    messages = []
+                    current["messages"] = messages
+                if cleaned not in [_single_line(item.get("text"), 260) for item in messages if isinstance(item, dict)]:
+                    messages.append({"ts": now, "text": cleaned, "sender_name": _single_line(sender_name, 40)})
+                current["deadline_ts"] = now
+                logger.info(
+                    "[PrivateCompanion] 消息收口固定窗口已到,准备立刻收口: kind=%s scope=%s sender=%s count=%s text=%s",
+                    buffer_kind,
+                    scope,
+                    sender_id,
+                    len(messages),
+                    _single_line(cleaned, 80),
+                )
+                return True
+            current_max_deadline_ts = _safe_float(current.get("max_deadline_ts"), 0.0, 0.0)
+            if current_max_deadline_ts > 0 and now >= current_max_deadline_ts:
+                messages = current.setdefault("messages", [])
+                if not isinstance(messages, list):
+                    messages = []
+                    current["messages"] = messages
+                if cleaned not in [_single_line(item.get("text"), 260) for item in messages if isinstance(item, dict)]:
+                    messages.append({"ts": now, "text": cleaned, "sender_name": _single_line(sender_name, 40)})
+                current["deadline_ts"] = now
+                current["max_wait_reached"] = True
+                logger.info(
+                    "[PrivateCompanion] 消息收口达到最长等待,准备立刻收口: kind=%s scope=%s sender=%s max_wait=%.1fs count=%s text=%s",
+                    buffer_kind,
+                    scope,
+                    sender_id,
+                    max_wait_seconds,
+                    len(messages),
+                    _single_line(cleaned, 80),
+                )
+                return True
             current["wait_seconds"] = wait
             current["kind"] = buffer_kind
             if buffer_kind in {"image", "forward", "group_high_intensity", "group_short_wakeup"} and _safe_float(current.get("deadline_ts"), 0) <= 0:
                 first_ts = _safe_float(current.get("first_ts"), now, now)
                 current["deadline_ts"] = first_ts + wait
+            if max_wait_seconds > 0 and _safe_float(current.get("max_deadline_ts"), 0.0) <= 0:
+                first_ts = _safe_float(current.get("first_ts"), now, now)
+                current["max_deadline_ts"] = first_ts + max_wait_seconds
             if smart_debounce:
                 current["smart_debounce"] = dict(smart_debounce)
             messages = current.setdefault("messages", [])
@@ -1411,6 +1497,17 @@ class EventDispatchMixin:
                 appended = True
             if appended:
                 current["updated_ts"] = now
+            if max_merge_messages > 0 and len(messages) >= max_merge_messages:
+                current["deadline_ts"] = now
+                current["max_merge_reached"] = True
+                logger.info(
+                    "[PrivateCompanion] 消息收口达到最大合并条数,准备立刻收口: kind=%s scope=%s sender=%s max=%s text=%s",
+                    buffer_kind,
+                    scope,
+                    sender_id,
+                    max_merge_messages,
+                    _single_line(cleaned, 80),
+                )
             logger.info(
                 "[PrivateCompanion] 消息收口合并补话: kind=%s mode=%s scope=%s sender=%s wait=%.1fs count=%s appended=%s text=%s",
                 buffer_kind,
@@ -1434,6 +1531,8 @@ class EventDispatchMixin:
             buffer["deadline_ts"] = now + wait
         if buffer_kind in {"image", "forward"}:
             buffer["deadline_ts"] = now + wait
+        if max_wait_seconds > 0:
+            buffer["max_deadline_ts"] = now + max_wait_seconds
         buffers[key] = buffer
         if smart_debounce:
             buffers[key]["smart_debounce"] = dict(smart_debounce)
@@ -1662,7 +1761,12 @@ class EventDispatchMixin:
         compact = re.sub(r"[?？。.!！~～…]+$", "", compact)
         bot_name = re.sub(r"\s+", "", str(getattr(self, "bot_name", "") or ""))
         if bot_name and compact.startswith(bot_name) and len(compact) > len(bot_name):
-            compact = compact[len(bot_name):]
+            addressed_tail = compact[len(bot_name):].lstrip("，,、:： ")
+            if re.fullmatch(r"(你)?知道(吗|嘛|么|不|吧)?", addressed_tail):
+                return ""
+            if re.fullmatch(r"(你)?(懂|明白|晓得|听懂)(吗|嘛|么|不)?", addressed_tail):
+                return ""
+            compact = addressed_tail
         if not compact or len(compact) > 10:
             return ""
         if re.fullmatch(r"(你)?知道(吗|嘛|么|不|吧)?", compact):

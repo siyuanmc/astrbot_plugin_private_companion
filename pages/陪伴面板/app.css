@@ -4090,17 +4090,6 @@ input[type="search"] {
   box-shadow: var(--shadow-ring);
 }
 
-.private-debounce-panel {
-  display: grid;
-  gap: 12px;
-  margin: 12px 0;
-  border: 1px solid rgba(222, 217, 206, 0.72);
-  border-radius: var(--radius);
-  padding: 14px;
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: var(--shadow-ring);
-}
-
 .troubleshooting-injection-panel {
   display: grid;
   gap: 12px;

@@ -1678,8 +1678,11 @@ class PrivateImageMixin:
         buffer_kind = _single_line(buffer.get("kind"), 40) or ("group_high_intensity" if force_consume else "text")
         initial_messages = buffer.get("messages") if isinstance(buffer.get("messages"), list) else []
         deadline_ts = _safe_float(buffer.get("deadline_ts"), 0.0, 0.0)
+        max_deadline_ts = _safe_float(buffer.get("max_deadline_ts"), 0.0, 0.0)
         updated_ts = _safe_float(buffer.get("updated_ts"), buffer.get("first_ts"), 0.0)
         initial_target_ts = deadline_ts if deadline_ts > 0 else updated_ts + wait
+        if max_deadline_ts > 0:
+            initial_target_ts = min(initial_target_ts, max_deadline_ts)
         already_due = initial_target_ts > 0 and _now_ts() >= initial_target_ts
         logger.info(
             "[PrivateCompanion] 消息收口等待开始: kind=%s scope=%s sender=%s wait=%.1fs count=%s deadline=%s",
@@ -1697,7 +1700,10 @@ class PrivateImageMixin:
                 return ""
             updated_ts = _safe_float(buffer.get("updated_ts"), buffer.get("first_ts"), _now_ts())
             deadline_ts = _safe_float(buffer.get("deadline_ts"), deadline_ts, deadline_ts)
+            max_deadline_ts = _safe_float(buffer.get("max_deadline_ts"), max_deadline_ts, max_deadline_ts)
             target_ts = deadline_ts if deadline_ts > 0 else updated_ts + wait
+            if max_deadline_ts > 0:
+                target_ts = min(target_ts, max_deadline_ts)
             remaining = max(0.0, target_ts - _now_ts())
             if remaining <= 0:
                 break
