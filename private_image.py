@@ -1777,9 +1777,17 @@ class PrivateImageMixin:
             scope = f"group:{group_id}"
             high_intensity = getattr(event, "private_companion_group_high_intensity", None)
             buffers = getattr(self, "_semantic_message_buffers", None)
-            high_key = self._group_high_intensity_buffer_key(group_id)
-            if isinstance(high_intensity, dict) and high_intensity.get("active") and isinstance(buffers, dict) and isinstance(buffers.get(high_key), dict):
-                key = high_key
+            high_key = self._group_high_intensity_buffer_key(group_id, sender_id)
+            legacy_high_key = self._group_high_intensity_buffer_key(group_id)
+            active_high_key = high_key
+            if (
+                isinstance(buffers, dict)
+                and not isinstance(buffers.get(active_high_key), dict)
+                and isinstance(buffers.get(legacy_high_key), dict)
+            ):
+                active_high_key = legacy_high_key
+            if isinstance(high_intensity, dict) and high_intensity.get("active") and isinstance(buffers, dict) and isinstance(buffers.get(active_high_key), dict):
+                key = active_high_key
                 force_consume = True
             else:
                 key = self._semantic_buffer_key(scope, sender_id)

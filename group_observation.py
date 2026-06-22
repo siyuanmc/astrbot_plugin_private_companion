@@ -280,7 +280,7 @@ class GroupObservationMixin:
                 "wakeup_word": _single_line(scene.get("wakeup_word"), 60),
                 "wakeup_strength": _single_line(scene.get("wakeup_strength"), 24),
                 "wakeup_strength_label": _single_line(scene.get("wakeup_strength_label"), 24),
-                "wakeup_instruction": _single_line(scene.get("wakeup_instruction"), 180),
+                "wakeup_note": _single_line(scene.get("wakeup_note") or scene.get("wakeup_instruction"), 180),
                 "wakeup_topic_weight": scene.get("wakeup_topic_weight") if isinstance(scene.get("wakeup_topic_weight"), dict) else {},
                 "reply_to_id": _single_line(scene.get("reply_to_id"), 40),
                 "at_targets": scene.get("at_targets") if isinstance(scene.get("at_targets"), list) else [],
@@ -1204,7 +1204,7 @@ class GroupObservationMixin:
         intensity = self._group_high_intensity_state(group, mutate=False)
         if intensity.get("active"):
             lines.append(
-                "当前群聊负载：高强度收口。短时间内 Bot 被频繁叫到；多条消息会被合并为同一轮处理。请集中回应共同重点,回复更短、更直接,不要逐条扩展。"
+                "当前群聊负载：高强度收口。短时间内 Bot 被频繁叫到；多条消息会被合并为同一轮处理。"
             )
         scene_text = self._format_group_scene_awareness_for_prompt(group, sender_id, text)
         if scene_text:
@@ -1283,6 +1283,80 @@ class GroupObservationMixin:
             lines.append(livingmemory_guidance)
         return "\n".join(lines)
 
+    def _format_group_passive_reply_context_for_prompt(self, group: dict[str, Any], sender_id: str = "", text: str = "") -> str:
+        """普通群聊回复只补触发与边界；群聊历史上下文交给 AstrBot 主链。"""
+        atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
+        lines = ["【群聊回复补充】"]
+        details = []
+        pace = _single_line(atmosphere.get("pace"), 20)
+        mood = _single_line(atmosphere.get("mood"), 20)
+        if pace or mood:
+            details.append(f"群聊{pace or '节奏不明'}，气氛偏{mood or '平稳'}")
+        intensity = self._group_high_intensity_state(group, mutate=False)
+        if intensity.get("active"):
+            details.append("刚刚频繁叫到 Bot")
+
+        recent = group.get("recent_messages") if isinstance(group.get("recent_messages"), list) else []
+        current = None
+        cleaned = _single_line(text, 260)
+        sender_id = str(sender_id or "").strip()
+        for item in reversed(recent):
+            if not isinstance(item, dict):
+                continue
+            if sender_id and str(item.get("sender_id") or "") != sender_id:
+                continue
+            if cleaned and _single_line(item.get("text"), 260) != cleaned:
+                continue
+            current = item
+            break
+        if not isinstance(current, dict):
+            current = recent[-1] if recent and isinstance(recent[-1], dict) else {}
+        if isinstance(current, dict) and current:
+            scene = {
+                "talking_to": current.get("talking_to") or "group",
+                "talking_to_name": current.get("talking_to_name") or "",
+                "trigger": current.get("scene_trigger") or "group_message",
+                "reason": current.get("scene_reason") or "",
+            }
+            sender_label = self._group_member_identity_label(
+                str(current.get("sender_id") or sender_id),
+                current.get("identity_name") or current.get("name"),
+                limit=24,
+            )
+            talking_to_text = self._scene_talking_to_text(scene)
+            parts = []
+            if sender_label:
+                parts.append(sender_label)
+            parts.append(talking_to_text)
+            reason = _single_line(scene.get("reason"), 60)
+            if reason:
+                parts.append(reason)
+            details.append("刚才" + "、".join(parts))
+            wakeup_note = _single_line(current.get("wakeup_note") or current.get("wakeup_instruction"), 120)
+            if wakeup_note:
+                strength = _single_line(current.get("wakeup_strength_label"), 24)
+                details.append((f"{strength}，" if strength else "") + wakeup_note)
+
+        meaning_text = self._format_group_slang_meanings_for_prompt(group)
+        if meaning_text:
+            meaning_pairs = []
+            for line in meaning_text.splitlines():
+                if not line:
+                    continue
+                match = re.match(r"^-\s*([^：:]{1,24})[：:]\s*([^｜\n]{1,80})", line)
+                if not match:
+                    continue
+                term = _single_line(match.group(1), 20)
+                meaning = _single_line(match.group(2), 42)
+                if term and meaning and term in cleaned:
+                    meaning_pairs.append(f"“{term}”在本群语境里大概是“{meaning}”")
+            if meaning_pairs:
+                details.extend(meaning_pairs[:2])
+
+        if details:
+            lines.append("；".join(details) + "。")
+        return "\n".join(lines)
+
     def _format_group_scene_awareness_for_prompt(self, group: dict[str, Any], sender_id: str = "", text: str = "") -> str:
         if not self.enable_group_scene_awareness:
             return ""
@@ -1320,7 +1394,7 @@ class GroupObservationMixin:
             "talking_to_name": current.get("talking_to_name") or "",
             "trigger": current.get("scene_trigger") or "group_message",
             "reason": current.get("scene_reason") or "",
-            "wakeup_instruction": current.get("wakeup_instruction") or "",
+            "wakeup_note": current.get("wakeup_note") or current.get("wakeup_instruction") or "",
             "wakeup_word": current.get("wakeup_word") or "",
             "wakeup_strength_label": current.get("wakeup_strength_label") or "",
             "wakeup_topic_weight": current.get("wakeup_topic_weight") if isinstance(current.get("wakeup_topic_weight"), dict) else {},
@@ -1336,15 +1410,15 @@ class GroupObservationMixin:
             f"    <talking_to>{self._scene_talking_to_text(scene)}</talking_to>",
             f"    <content>{_single_line(current.get('text'), 100)}</content>",
             "  </current_message>",
-            f"  <instruction>{self._scene_instruction_text(scene)}</instruction>",
+            f"  <scene_note>{self._scene_note_text(scene)}</scene_note>",
         ]
-        wakeup_instruction = _single_line(scene.get("wakeup_instruction"), 180)
-        if wakeup_instruction:
+        wakeup_note = _single_line(scene.get("wakeup_note") or scene.get("wakeup_instruction"), 180)
+        if wakeup_note:
             strength_label = _single_line(scene.get("wakeup_strength_label"), 24)
             attrs = f'word="{_single_line(scene.get("wakeup_word"), 40)}"'
             if strength_label:
                 attrs += f' strength="{strength_label}"'
-            lines.append(f"  <wakeup_note {attrs}>{wakeup_instruction}</wakeup_note>")
+            lines.append(f"  <wakeup_note {attrs}>{wakeup_note}</wakeup_note>")
         topic_weight = scene.get("wakeup_topic_weight") if isinstance(scene.get("wakeup_topic_weight"), dict) else {}
         if str(scene.get("trigger") or "") == "group_wakeup_interest":
             reason = _single_line(topic_weight.get("reason"), 80)
@@ -1789,7 +1863,7 @@ class GroupObservationMixin:
 你在一个群聊里,系统认为现在也许可以非常轻地接一句,但你必须先判断这句会不会显得硬插话。
 只输出要发到群里的正文,不要解释。
 
-【群聊上下文】
+【主动插话判断上下文】
 {self._format_group_context_for_prompt(group)}
 
 【刚刚触发的消息】

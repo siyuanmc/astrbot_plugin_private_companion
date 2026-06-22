@@ -1529,7 +1529,9 @@ class EventDispatchMixin:
                 return ""
             return fixed
         if scene_name in {"group_reply", "group_interjection"}:
-            if not self.enable_group_companion:
+            checker = getattr(self, "_feature_enabled_or_temp_unlocked", None)
+            group_enabled = checker("enable_group_companion") if callable(checker) else self.enable_group_companion
+            if not group_enabled:
                 return ""
             if not self._extract_group_id_from_event(event):
                 return ""
@@ -1753,7 +1755,10 @@ class EventDispatchMixin:
         scope, sender_id = cleaned.rsplit(":", 1)
         return scope, sender_id
 
-    def _group_high_intensity_buffer_key(self, group_id: str) -> str:
+    def _group_high_intensity_buffer_key(self, group_id: str, sender_id: str = "") -> str:
+        scope = str(getattr(self, "group_high_intensity_merge_scope", "group") or "group").lower()
+        if scope == "same_user" and sender_id:
+            return self._semantic_buffer_key(f"group:{group_id}:__high_intensity_sender__", str(sender_id))
         return self._semantic_buffer_key(f"group:{group_id}", "__high_intensity__")
 
     def _group_high_intensity_merge_wait_seconds(self) -> float:
@@ -2799,7 +2804,9 @@ class EventDispatchMixin:
         )
 
     async def _mark_group_conversation_from_llm_request(self, event: AstrMessageEvent) -> None:
-        if not self.enable_group_companion:
+        checker = getattr(self, "_feature_enabled_or_temp_unlocked", None)
+        group_enabled = checker("enable_group_companion") if callable(checker) else self.enable_group_companion
+        if not group_enabled:
             return
         if bool(getattr(event, "is_private_chat", lambda: False)()):
             return
@@ -3169,7 +3176,11 @@ class EventDispatchMixin:
                 pass
         if disable_segmenting:
             return [normalized]
-        if not self.enable_segmented_proactive_reply:
+        checker = getattr(self, "_feature_enabled_or_temp_unlocked", None)
+        if callable(checker):
+            if not checker("enable_segmented_proactive_reply"):
+                return [normalized]
+        elif not self.enable_segmented_proactive_reply:
             return [normalized]
         if len(normalized) > self.segmented_proactive_threshold:
             return [normalized]

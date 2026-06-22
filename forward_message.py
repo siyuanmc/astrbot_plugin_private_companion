@@ -771,7 +771,11 @@ class ForwardMessageMixin:
         return rows[: self.forward_message_max_messages], image_urls[: max(0, self.forward_message_image_limit)], nested_count
 
     async def _format_forward_message_context_for_prompt(self, event: AstrMessageEvent, req: ProviderRequest) -> str:
-        if not self.enable_forward_message_adaptation:
+        checker = getattr(self, "_feature_enabled_or_temp_unlocked", None)
+        if callable(checker):
+            if not checker("enable_forward_message_adaptation"):
+                return ""
+        elif not self.enable_forward_message_adaptation:
             return ""
         cached = getattr(event, "_private_companion_forward_context", None)
         if isinstance(cached, str):
@@ -1305,9 +1309,10 @@ class ForwardMessageMixin:
     async def _append_forward_message_context_to_request(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
         marker = "<!-- private_companion_forward_message_v1 -->"
         current_prompt = req.system_prompt or ""
+        current_turn_prompt = str(getattr(req, "prompt", "") or "")
         message_text = _single_line(getattr(event, "message_str", ""), 180)
         should_log_probe = any(token in message_text for token in ("转发", "合并消息", "聊天记录"))
-        if marker in current_prompt:
+        if marker in current_prompt or marker in current_turn_prompt:
             if should_log_probe:
                 logger.info("[PrivateCompanion] 合并消息请求注入跳过: 已存在 marker text=%s", message_text or "(empty)")
             return
@@ -1319,7 +1324,15 @@ class ForwardMessageMixin:
                 setattr(event, "private_companion_forward_context_injected", True)
             except Exception:
                 pass
-            req.system_prompt = f"{current_prompt}\n\n{marker}\n{context}".strip()
+            placement = "system_prompt"
+            helper = getattr(self, "_append_turn_prompt_fragment_by_position", None)
+            if callable(helper):
+                try:
+                    placement = "prompt" if helper(req, marker, context, priority=65, source="forward_message") else "system_prompt"
+                except TypeError:
+                    placement = "prompt" if helper(req, marker, context) else "system_prompt"
+            if placement == "system_prompt":
+                req.system_prompt = f"{current_prompt}\n\n{marker}\n{context}".strip()
             recorder = getattr(self, "_record_request_prompt_fragment", None)
             if callable(recorder):
                 await recorder(
@@ -1329,11 +1342,20 @@ class ForwardMessageMixin:
                     text=context,
                     source="forward_message",
                     mode="forward",
+                    metadata={"注入位置": placement},
                 )
             return
         rich_card_context = await self._format_reply_rich_card_context_for_prompt(event)
         if rich_card_context:
-            req.system_prompt = f"{current_prompt}\n\n{marker}\n{rich_card_context}".strip()
+            placement = "system_prompt"
+            helper = getattr(self, "_append_turn_prompt_fragment_by_position", None)
+            if callable(helper):
+                try:
+                    placement = "prompt" if helper(req, marker, rich_card_context, priority=65, source="forward_message") else "system_prompt"
+                except TypeError:
+                    placement = "prompt" if helper(req, marker, rich_card_context) else "system_prompt"
+            if placement == "system_prompt":
+                req.system_prompt = f"{current_prompt}\n\n{marker}\n{rich_card_context}".strip()
             recorder = getattr(self, "_record_request_prompt_fragment", None)
             if callable(recorder):
                 await recorder(
@@ -1343,6 +1365,7 @@ class ForwardMessageMixin:
                     text=rich_card_context,
                     source="forward_message",
                     mode="rich_card",
+                    metadata={"注入位置": placement},
                 )
         elif should_log_probe:
             logger.info("[PrivateCompanion] 合并消息请求未生成上下文: text=%s", message_text or "(empty)")

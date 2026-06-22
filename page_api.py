@@ -3003,6 +3003,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 "remaining_seconds": self._float(high_intensity.get("remaining_seconds")) if isinstance(high_intensity, dict) else 0.0,
                 "merge_seconds": self._float(getattr(self.plugin, "group_high_intensity_merge_seconds", 8)),
                 "max_merge_messages": self._int(getattr(self.plugin, "group_high_intensity_max_merge_messages", 8)),
+                "merge_scope": self._single_line(getattr(self.plugin, "group_high_intensity_merge_scope", "group"), 20),
             },
         }
 
@@ -3022,6 +3023,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     "strength": self._single_line(raw.get("strength"), 24),
                     "strength_label": self._single_line(raw.get("strength_label"), 24),
                     "probability": round(self._float(raw.get("probability")), 3),
+                    "score": self._int(raw.get("score")),
+                    "threshold": self._int(raw.get("threshold")),
+                    "intensity": self._single_line(raw.get("intensity"), 20),
+                    "help_type": self._single_line(raw.get("help_type"), 30),
                     "reason": self._single_line(raw.get("reason"), 80),
                     "topic_weight": raw.get("topic_weight") if isinstance(raw.get("topic_weight"), dict) else {},
                     "note": self._single_line(raw.get("note"), 180),
@@ -3075,6 +3080,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 "type": self._single_line(last_wakeup.get("type"), 40),
                 "word": self._single_line(last_wakeup.get("word"), 60),
                 "strength_label": self._single_line(last_wakeup.get("strength_label"), 24),
+                "score": self._int(last_wakeup.get("score")),
+                "threshold": self._int(last_wakeup.get("threshold")),
+                "intensity": self._single_line(last_wakeup.get("intensity"), 20),
+                "help_type": self._single_line(last_wakeup.get("help_type"), 30),
                 "sender_name": self._single_line(last_wakeup.get("sender_name"), 40),
                 "text": self._display_message_text(last_wakeup.get("text"), 120),
             } if last_wakeup else {},
@@ -3324,6 +3333,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_group_scene_awareness",
             "enable_group_reality_promise_guard",
             "enable_group_wakeup_enhancement",
+            "enable_group_wakeup_question",
+            "enable_group_wakeup_cold_group",
             "enable_group_high_intensity_mode",
             "enable_private_image_self_recognition",
             "enable_private_image_gif_enhancement",
@@ -3599,6 +3610,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "worldview_adaptation_mode",
             "worldview_adaptation_prompt",
             "quiet_hours",
+            "framework_session_lock_mode",
             "passive_topic_memory_hours",
             "tts_generation_mode",
             "tts_voice_language",
@@ -3734,7 +3746,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "group_wakeup_context_words",
             "group_wakeup_interest_keywords",
             "group_wakeup_interest_probability",
+            "group_wakeup_question_threshold",
+            "group_wakeup_cold_group_threshold",
             "group_wakeup_cooldown_seconds",
+            "group_wakeup_cold_group_idle_minutes",
             "group_wakeup_generated_keyword_limit",
             "group_wakeup_topic_interest_max_boost",
             "group_wakeup_debounce_pending_penalty",
@@ -3747,6 +3762,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "group_high_intensity_cooldown_seconds",
             "group_high_intensity_merge_seconds",
             "group_high_intensity_max_merge_messages",
+            "group_high_intensity_merge_scope",
             "enable_forward_message_adaptation",
             "forward_message_mode",
             "forward_message_max_messages",
@@ -4796,7 +4812,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "group_wakeup_context_words",
             "group_wakeup_interest_keywords",
             "group_wakeup_interest_probability",
+            "group_wakeup_question_threshold",
+            "group_wakeup_cold_group_threshold",
             "group_wakeup_cooldown_seconds",
+            "group_wakeup_cold_group_idle_minutes",
             "group_wakeup_generated_keyword_limit",
             "group_wakeup_topic_interest_max_boost",
             "group_wakeup_debounce_pending_penalty",
@@ -4809,6 +4828,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "group_high_intensity_cooldown_seconds",
             "group_high_intensity_merge_seconds",
             "group_high_intensity_max_merge_messages",
+            "group_high_intensity_merge_scope",
             "enable_forward_message_adaptation",
             "forward_message_mode",
             "forward_message_max_messages",
@@ -4934,6 +4954,12 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 return normalizer(value)
             text = str(value or "prompt").strip().lower()
             return text if text in {"auto", "prompt", "system_prompt"} else "prompt"
+        if key == "framework_session_lock_mode":
+            normalizer = getattr(self.plugin, "_normalize_framework_session_lock_mode", None)
+            if callable(normalizer):
+                return normalizer(value)
+            text = str(value or "auto").strip().lower()
+            return text if text in {"auto", "always", "off"} else "auto"
         if key == "quote_target_strategy":
             text = str(value or "current").strip().lower()
             aliases = {
@@ -4947,6 +4973,18 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             }
             text = aliases.get(text, text)
             return text if text in {"current", "quoted", "auto"} else "current"
+        if key == "group_high_intensity_merge_scope":
+            text = str(value or "group").strip().lower()
+            aliases = {
+                "sender": "same_user",
+                "same_sender": "same_user",
+                "user": "same_user",
+                "同一用户": "same_user",
+                "同一发送者": "same_user",
+                "全群": "group",
+            }
+            text = aliases.get(text, text)
+            return text if text in {"group", "same_user"} else "group"
         if key == "private_user_aliases":
             return str(value or "").strip()[:4000]
         if key == "worldbook_config_paths":
@@ -5180,7 +5218,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 return max(0, min(100, int(round(raw * 100 if 0 <= raw <= 1 else raw))))
             except (TypeError, ValueError):
                 return -1
-        if key == "rest_reply_llm_threshold":
+        if key in {"rest_reply_llm_threshold", "group_wakeup_question_threshold", "group_wakeup_cold_group_threshold"}:
             try:
                 return max(0, min(100, int(value)))
             except (TypeError, ValueError):
@@ -5207,6 +5245,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "group_interject_max_daily",
             "group_scene_recent_limit",
             "group_wakeup_cooldown_seconds",
+            "group_wakeup_cold_group_idle_minutes",
             "group_wakeup_generated_keyword_limit",
             "group_wakeup_topic_interest_max_boost",
             "group_wakeup_debounce_pending_penalty",

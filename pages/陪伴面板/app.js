@@ -382,7 +382,7 @@ const featureMeta = {
   enable_group_scene_awareness: ["群聊场景感知", "推断当前消息是在对 Bot、某个群友还是整个群说话，减少误以为别人都在问自己。"],
   enable_group_reality_promise_guard: ["阻止群聊现实承诺", "群聊里避免承诺自己能拉人、修网、开房间或操作现实设备；私聊扮演不受影响。"],
   enable_group_wakeup_enhancement: ["群聊唤醒强化", "通过强唤醒词、弱相关唤醒词和兴趣关键词，让 Bot 在群里被自然叫到或碰到感兴趣话题时进入回复链。"],
-  enable_group_high_intensity_mode: ["群聊高强度收口", "短时间连续被 @、引用或增强唤醒后，自动合并同群后续唤醒消息，并暂停非必要群聊后台任务，减少 LLM 过载。"],
+  enable_group_high_intensity_mode: ["群聊高强度收口", "短时间连续被 @、引用或增强唤醒后，按配置合并后续唤醒消息，并暂停非必要群聊后台任务，减少 LLM 过载。"],
   enable_group_conversation_followup: ["连续对话保持", "群里叫过 Bot 后，短时间内判断同一用户没继续 @ 的话是否仍在对 Bot 说。"],
   enable_group_interjection: ["群主动插话", "允许 Bot 在群聊里主动插一句。谨慎开启。"],
   enable_group_repeat_follow: ["复读处理", "同一句话连续复读达到阈值时，可跟读一次或打断一次。"],
@@ -476,7 +476,6 @@ const featureGroups = [
       "enable_group_conversation_followup",
       "enable_group_slang_learning",
       "enable_group_slang_meanings",
-      "enable_group_slang_web_search",
       "enable_group_member_profiles",
       "enable_group_topic_threads",
       "enable_group_episode_memory",
@@ -700,6 +699,19 @@ const configLabels = {
   tts_voice_language: "TTS语音语种",
   tts_conversion_provider_id: "TTS文本转换模型",
   tts_extra_prompt: "TTS补充规则",
+  EMOTION_JUDGEMENT_PROVIDER_ID: "情绪变化判断模型",
+  enable_llm_emotion_judgement: "模型复核情绪变化",
+  emotion_judgement_mode: "情绪复核范围",
+  emotional_gate_hurt_threshold: "伤心触发阈值",
+  emotional_gate_refuse_threshold: "生气触发阈值",
+  emotional_gate_recovery_per_hour: "每小时缓和量",
+  emotional_gate_max_hurt_minutes: "最长收敛分钟",
+  enable_qzone_emotional_vent_publish: "公开心情动态",
+  qzone_emotional_vent_threshold: "心情动态触发阈值",
+  qzone_emotional_vent_cooldown_hours: "心情动态冷却小时",
+  qzone_emotional_vent_probability: "心情动态触发概率",
+  response_review_mode: "主动消息润色模式",
+  response_review_max_chars: "被动 full 模式长度阈值",
   tts_frequency_control_mode: "TTS频率控制模式",
   tts_constraint_mode: "TTS约束强度",
   tts_session_min_interval_seconds: "TTS会话最小间隔秒数",
@@ -800,6 +812,7 @@ const configLabels = {
   enable_humanized_states: "拟人身体状态",
   inject_passive_states: "被动状态注入",
   passive_injection_position: "动态提示词注入位置",
+  framework_session_lock_mode: "主链会话锁兼容模式",
   enable_rest_reply_simulation: "休息回复闸门",
   rest_reply_mode: "休息回复判定模式",
   rest_reply_probability: "休息中概率回复(%)",
@@ -849,6 +862,11 @@ const configLabels = {
   group_wakeup_context_words: "弱相关唤醒词",
   group_wakeup_interest_keywords: "手动兴趣关键词",
   group_wakeup_interest_probability: "兴趣唤醒概率",
+  enable_group_wakeup_question: "解惑唤醒",
+  group_wakeup_question_threshold: "解惑强度阈值",
+  enable_group_wakeup_cold_group: "冷群唤醒",
+  group_wakeup_cold_group_threshold: "冷群强度阈值",
+  group_wakeup_cold_group_idle_minutes: "冷群判定分钟",
   group_wakeup_cooldown_seconds: "唤醒冷却秒数",
   group_wakeup_generated_keyword_limit: "自动兴趣词上限",
   group_wakeup_topic_interest_max_boost: "话题兴趣权重上限",
@@ -863,6 +881,7 @@ const configLabels = {
   group_high_intensity_cooldown_seconds: "收口持续秒数",
   group_high_intensity_merge_seconds: "合并等待秒数",
   group_high_intensity_max_merge_messages: "高强度最大合并数",
+  group_high_intensity_merge_scope: "高强度合并范围",
   worldbook_auto_import: "启动时刷新关系网",
   worldbook_member_match_aliases: "允许别名辅助匹配",
   worldbook_self_registration: "允许群聊自登记",
@@ -965,7 +984,8 @@ const configDescriptions = {
   humanized_state_intensity: "控制睡眠不佳、健康、饥饿、周期等状态出现概率和能量影响强度，范围 0-100。",
   enable_humanized_states: "总开关。关闭后不再生成拟人身体/梦境状态，只保留基础平稳状态。",
   inject_passive_states: "开启后普通聊天会参考“当前扮演状态”；关闭后状态主要影响日程和主动行为。",
-  passive_injection_position: "选择被动状态、环境感知和 TTS 本轮频控等动态片段的注入位置。当前请求末尾更利于缓存；系统提示词约束更强但更容易降低缓存命中。若同时启用长期记忆/记忆召回，推荐使用当前请求末尾，让召回内容与动态状态在尾部自然结合。",
+  passive_injection_position: "选择被动状态、环境感知、TTS 本轮频控、转发/引用上下文等动态片段的注入位置。当前请求末尾会进入统一动态块并按稳定顺序排列，更利于缓存；系统提示词约束更强但更容易降低缓存命中。若同时启用长期记忆/记忆召回，推荐使用当前请求末尾，让召回内容与动态状态在尾部自然结合。",
+  framework_session_lock_mode: "旧版 AstrBot 会话库并发锁兼容项。新版本通常不需要，开启会让同一会话主链请求排队并增加回复延迟。auto 只在识别到受影响旧版本时启用；always 仅建议仍遇到 database is locked 的旧版用户使用。",
   enable_rest_reply_simulation: "开启后，日程处于睡眠、午休或休息段时，普通被动回复会先经过休息闸门；未放行时静默不回复。",
   rest_reply_mode: "仅概率醒来只按概率放行；模型判断会让模型按消息重要性、是否明确叫醒、情绪/安全需要等打分。",
   rest_reply_probability: "仅概率醒来模式使用。越低越不容易在睡眠/休息中被普通消息叫醒。",
@@ -993,9 +1013,9 @@ const configDescriptions = {
   max_daily_messages: "每个私聊对象每天最多收到多少条插件主动消息。",
   passive_topic_memory_hours: "记录最近被动回复主题的时间窗口，用来判断短时间内是否又在重复同类话题。",
   tts_generation_mode: "先决定语音从哪里来。快速标签模式追求低延迟：主模型可写 <pc_tts>，插件发送前轻处理。后处理模式追求稳定：主模型只写普通回复，发送前由 TTS 文本模型判断是否需要语音并完成翻译/改写。",
-  tts_voice_language: "控制真正送入 TTS 的语音正文语种。可让聊天文本保留中文，<tts> 内使用日语或英语朗读；日语模式会尽量避免明显非日语文本直接进入 TTS，并会给缺少说明的外语语音块补中文释义。",
+  tts_voice_language: "控制真正送入 TTS 的语音正文语种。可让聊天文本保留中文，<pc_tts> 内使用日语、中文或英语朗读；日语模式会尽量避免明显非日语文本直接进入 TTS，并会给缺少说明的外语语音块补中文释义。",
   tts_conversion_provider_id: "用于后处理判断+翻译、快速标签自动语音、语种修正和中文释义补全的文本模型，不是语音合成模型。转换时会参考当前 AstrBot 人格的语气、称呼和距离感；留空时后处理模式会保持纯文本，显式标签仍可由插件处理。",
-  tts_extra_prompt: "只填写本人格或声线的额外要求。基础格式、语种和 provider 自适应规则会自动生成，留空最稳。",
+  tts_extra_prompt: "只填写本人格或声线的额外要求。基础 <pc_tts> 格式、目标语种和 provider 情绪标签适配规则会自动生成，留空最稳。",
   tts_frequency_control_mode: "选择频率规则。全局频控：用概率影响快速标签模式下 LLM 是否倾向输出 TTS，并控制后处理模式是否进入判断+翻译；弱约束下显式 <pc_tts>/<tts> 不再被概率剥离，只受 provider 和会话间隔保护；强约束下按约束强度硬拦。",
   tts_constraint_mode: "仅快速标签模式 + 全局频控生效。弱约束用提示词引导模型默认少用语音；强约束会在概率未命中或冷却内反向提示本轮禁止语音，并在发送前阻止语音生成。后处理模式不使用该项。",
   tts_session_min_interval_seconds: "仅全局频控生效。私聊/群聊未单独覆盖时使用的默认最小间隔；0 表示不限制。",
@@ -1093,6 +1113,11 @@ const configDescriptions = {
   group_wakeup_context_words: "与 Bot 身份、称呼或设定弱相关的关键词。命中后不会直接回复，而是先结合群聊上下文、关系网和句式判断是否适合自然接话。适合填写“机器人”“bot”、外号、作品名、设定称呼或常被拿来指代 Bot 的梗；不适合填“你怎么看”“问问你”这类泛请求句。",
   group_wakeup_interest_keywords: "手动补充 Bot 感兴趣的话题关键词。命中后按概率唤醒，不会每次都抢话。",
   group_wakeup_interest_probability: "群聊出现兴趣关键词时进入回复链的基础概率，填写 0-100。",
+  enable_group_wakeup_question: "群里有人抛出开放疑问、求助或“有没有人懂”这类问题时，允许 Bot 低概率进入回复链。",
+  group_wakeup_question_threshold: "开放疑问或求助会先计算 0-100 的强度分，达到该阈值才进入回复链。越低越容易被求助问题叫到。",
+  enable_group_wakeup_cold_group: "群聊安静一段时间后有人重新开口时，按开场/问候/求助强度决定是否进入回复链。默认关闭，避免冷群突然冒泡。",
+  group_wakeup_cold_group_threshold: "冷群重新开口会先计算 0-100 的强度分，达到该阈值才进入回复链。越高越保守。",
+  group_wakeup_cold_group_idle_minutes: "距离上一条群消息超过多少分钟，才认为当前消息处于冷群重新开口场景。",
   group_wakeup_cooldown_seconds: "判断唤醒和兴趣唤醒的冷却时间，防止群聊里连续关键词刷屏。",
   group_wakeup_generated_keyword_limit: "自动从人格兴趣、技能、群话题和黑话中抽取多少个兴趣关键词参与判断。",
   group_wakeup_topic_interest_max_boost: "兴趣词如果同时出现在当前句、近几句或活跃话题线里，最多额外提高多少百分比的兴趣唤醒概率。",
@@ -1100,13 +1125,14 @@ const configDescriptions = {
   group_wakeup_fatigue_limit: "短时间多次唤醒累计到多少点后，Bot 会更保守、更省力。强唤醒词仍然能叫到它。",
   group_wakeup_fatigue_decay_minutes: "每隔多少分钟自然恢复 1 点唤醒疲劳。数值越大，越会保留“刚被频繁叫到”的感觉。",
   group_wakeup_log_limit: "每个群最多保留多少条唤醒命中、冷却拦截和兴趣未触发记录。",
-  group_wakeup_short_text_wait_seconds: "群聊里已经判定在叫 Bot、但内容只有 1-2 个字且不像完整短互动时，额外等待同一群友补充。设为 0 可关闭。",
-  enable_group_high_intensity_mode: "短时间连续被明确叫到后自动进入收口降载，合并同群后续唤醒消息，并暂停弱相关/兴趣唤醒、群片段整理、黑话释义刷新和主动插话。",
+  group_wakeup_short_text_wait_seconds: "群聊里已经判定在叫 Bot、但内容只有 1-2 个字且不像完整短互动时，复用消息收口缓冲等待同一群友补充。设为 0 可关闭。",
+  enable_group_high_intensity_mode: "短时间连续被明确叫到后自动进入收口降载，按配置合并后续唤醒消息，并暂停弱相关/兴趣唤醒、群片段整理、黑话释义刷新和主动插话。",
   group_high_intensity_wakeup_window_seconds: "统计连续唤醒的时间窗口。默认 60 秒，即一分钟内连续被叫到才进入高强度收口。",
   group_high_intensity_wakeup_threshold: "窗口内达到多少次唤醒后进入收口。默认 3 次，用于减少连续 @、连续引用造成的多次 LLM 调用。",
   group_high_intensity_cooldown_seconds: "进入收口降载后维持多久。期间明确 @ 或引用会被合并处理，非必要后台动作会让路。",
   group_high_intensity_merge_seconds: "高强度期间第一条明确叫到 Bot 的消息最多等待多久。这是固定合并窗口，不会因持续补话无限延长。",
   group_high_intensity_max_merge_messages: "高强度期间同一轮最多合并多少条叫 Bot 的消息。达到上限会立刻结束等待进入回复链；0 表示不限制。",
+  group_high_intensity_merge_scope: "高强度期间如何合并连续叫 Bot 的消息：按全群合并，或只合并同一发送者的补话。",
   forward_message_mode: "注入：把合并消息摘要塞进主模型上下文；转述：先用专门模型读一遍再交给主模型。",
   forward_message_max_messages: "合并消息最多读取多少条节点，过多会截断。",
   forward_message_max_chars: "注入模式下放进主模型上下文的最大字符数。",
@@ -1201,12 +1227,15 @@ const configDescriptions = {
   atrelay_sensitive_confirm: "敏感、私密或带情绪的转述是否先向用户确认。",
   atrelay_default_relay_style: "默认转述方式：persona 按人格改写，soft 委婉，original 原话。",
   atrelay_multi_target_limit: "一次转述最多允许几个目标，防止刷屏。",
+  response_review_mode: "控制主动消息发送前的润色/拦截范围。默认只处理高风险主动消息；full 会额外让较长被动回复参与模型改写，延迟更高。",
+  response_review_max_chars: "仅 full 模式使用。普通被动回复超过该长度才可能进入模型改写，避免短回复也被额外拖慢。",
   emotional_gate_hurt_threshold: "用户消息让 Bot 伤心、短期变安静的触发阈值；应低于生气触发阈值。",
   emotional_gate_refuse_threshold: "累计刺痛感让 Bot 生气、短暂回避的触发阈值；应高于伤心触发阈值。",
   emotional_gate_recovery_per_hour: "情绪余波每小时自然缓和多少分。",
   emotional_gate_max_hurt_minutes: "单次刺痛事件最长收敛/暂停主动的分钟数。",
   enable_llm_emotion_judgement: "可选使用模型异步复核用户消息是否会改变 Bot 自身短期情绪余波；本轮被动回复仍使用缓存状态。",
   emotion_judgement_mode: "模型复核范围：可疑项更省消耗，总是复核更细但更耗；结果主要影响后续轮次。",
+  EMOTION_JUDGEMENT_PROVIDER_ID: "用于异步复核用户消息是否会改变 Bot 自身短期情绪余波。建议选择便宜、低延迟、JSON 稳定、分类保守的小模型；留空会先回退到排障检查模型，再回退到关系站位/陪伴通用/主模型。",
   enable_qzone_emotional_vent_publish: "短期余波很重时是否允许低频发布公开心情说说。",
   qzone_emotional_vent_threshold: "触发公开心情动态所需的短期余波强度。",
   qzone_emotional_vent_cooldown_hours: "两次公开心情动态之间的最小间隔。",
@@ -1241,11 +1270,11 @@ const featureSettingGroups = {
   enable_response_self_review: ["response_review_mode", "response_review_max_chars"],
   enable_passive_topic_suppression: ["passive_topic_memory_hours"],
   enable_relationship_state_machine: ["proactive_unanswered_slowdown_start", "proactive_unanswered_max_interval_multiplier", "friend_unanswered_max_cooldown_hours"],
-  enable_emotion_simulation: ["enable_llm_emotion_judgement", "emotion_judgement_mode", "emotional_gate_hurt_threshold", "emotional_gate_refuse_threshold", "emotional_gate_recovery_per_hour", "emotional_gate_max_hurt_minutes", "enable_qzone_emotional_vent_publish", "qzone_emotional_vent_threshold", "qzone_emotional_vent_cooldown_hours", "qzone_emotional_vent_probability"],
+  enable_emotion_simulation: ["enable_llm_emotion_judgement", "emotion_judgement_mode", "EMOTION_JUDGEMENT_PROVIDER_ID", "emotional_gate_hurt_threshold", "emotional_gate_refuse_threshold", "emotional_gate_recovery_per_hour", "emotional_gate_max_hurt_minutes", "enable_qzone_emotional_vent_publish", "qzone_emotional_vent_threshold", "qzone_emotional_vent_cooldown_hours", "qzone_emotional_vent_probability"],
   enable_dialogue_episode_memory: ["episode_memory_refresh_messages", "episode_memory_refresh_minutes", "max_dialogue_episodes"],
   enable_open_loop_tracking: ["max_dialogue_episodes"],
   enable_user_habit_learning: ["user_habit_min_count", "user_habit_max_items"],
-  enable_proactive_only_mode: [],
+  enable_proactive_only_mode: ["framework_session_lock_mode"],
   enable_humanized_states: ["humanized_state_intensity", "inject_passive_states", "enable_rest_reply_simulation", "rest_reply_mode", "rest_reply_probability", "rest_reply_llm_threshold", "REST_WAKEUP_PROVIDER_ID", "enable_cycle_state"],
   enable_rest_reply_simulation: ["rest_reply_mode", "rest_reply_probability", "rest_reply_llm_threshold", "REST_WAKEUP_PROVIDER_ID"],
   enable_segmented_proactive_reply: ["segmented_proactive_scope", "segmented_proactive_chat_scope", "segmented_proactive_threshold", "segmented_proactive_min_segment_chars", "segmented_proactive_max_segments", "segmented_proactive_send_as_forward", "segmented_proactive_split_mode", "segmented_proactive_regex", "segmented_proactive_split_words", "enable_segmented_proactive_content_cleanup", "segmented_proactive_content_cleanup_scope", "segmented_proactive_content_cleanup_rule", "segmented_proactive_content_cleanup_words", "segmented_proactive_interval_method", "segmented_proactive_interval_min", "segmented_proactive_interval_max", "segmented_proactive_log_base"],
@@ -1284,6 +1313,11 @@ const featureSettingGroups = {
     "group_wakeup_context_words",
     "group_wakeup_interest_keywords",
     "group_wakeup_interest_probability",
+    "enable_group_wakeup_question",
+    "group_wakeup_question_threshold",
+    "enable_group_wakeup_cold_group",
+    "group_wakeup_cold_group_threshold",
+    "group_wakeup_cold_group_idle_minutes",
     "group_wakeup_cooldown_seconds",
     "group_wakeup_generated_keyword_limit",
     "group_wakeup_topic_interest_max_boost",
@@ -1298,6 +1332,7 @@ const featureSettingGroups = {
     "group_high_intensity_cooldown_seconds",
     "group_high_intensity_merge_seconds",
     "group_high_intensity_max_merge_messages",
+    "group_high_intensity_merge_scope",
     "enable_group_slang_learning",
     "enable_group_slang_meanings",
     "enable_group_member_profiles",
@@ -1313,10 +1348,10 @@ const featureSettingGroups = {
   enable_group_persona_denoise: [],
   enable_forward_message_adaptation: ["forward_message_mode", "forward_message_max_messages", "forward_message_max_chars", "forward_message_parse_nested", "forward_message_image_vision", "forward_message_image_limit"],
   enable_group_scene_awareness: ["group_scene_recent_limit", "enable_group_conversation_followup", "group_conversation_followup_seconds", "group_conversation_followup_max_turns"],
-  enable_group_wakeup_enhancement: ["group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_short_text_wait_seconds", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_high_intensity_max_merge_messages", "group_scene_recent_limit"],
-  enable_group_high_intensity_mode: ["group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_high_intensity_max_merge_messages"],
+  enable_group_wakeup_enhancement: ["group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "enable_group_wakeup_question", "group_wakeup_question_threshold", "enable_group_wakeup_cold_group", "group_wakeup_cold_group_threshold", "group_wakeup_cold_group_idle_minutes", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_short_text_wait_seconds", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_high_intensity_max_merge_messages", "group_high_intensity_merge_scope", "group_scene_recent_limit"],
+  enable_group_high_intensity_mode: ["group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_high_intensity_max_merge_messages", "group_high_intensity_merge_scope"],
   enable_group_conversation_followup: ["group_conversation_followup_seconds", "group_conversation_followup_max_turns"],
-  enable_group_slang_learning: ["max_group_slang_terms", "max_group_recent_messages", "enable_group_slang_meanings"],
+  enable_group_slang_learning: ["max_group_slang_terms", "max_group_recent_messages", "enable_group_slang_meanings", "enable_group_slang_web_search", "group_slang_web_search_terms", "group_slang_web_search_results"],
   enable_group_slang_meanings: ["max_group_slang_terms", "enable_group_slang_web_search"],
   enable_group_slang_web_search: ["group_slang_web_search_terms", "group_slang_web_search_results"],
   enable_group_member_profiles: ["max_group_recent_messages"],
@@ -1466,12 +1501,29 @@ const featureSettingSections = {
     {
       title: "唤醒与高强度",
       note: "控制被叫到、兴趣关键词和连续唤醒后的收口。",
-      keys: ["enable_group_wakeup_enhancement", "group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_high_intensity_max_merge_messages"],
+      keys: ["enable_group_wakeup_enhancement", "group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "group_wakeup_interest_probability", "enable_group_wakeup_question", "group_wakeup_question_threshold", "enable_group_wakeup_cold_group", "group_wakeup_cold_group_threshold", "group_wakeup_cold_group_idle_minutes", "group_wakeup_cooldown_seconds", "group_wakeup_generated_keyword_limit", "group_wakeup_topic_interest_max_boost", "group_wakeup_debounce_pending_penalty", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes", "group_wakeup_log_limit", "enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_high_intensity_max_merge_messages", "group_high_intensity_merge_scope"],
     },
     {
       title: "群记忆与互动",
       note: "黑话、成员画像、话题线、群片段、插话和复读。",
       keys: ["enable_group_slang_learning", "enable_group_slang_meanings", "enable_group_member_profiles", "enable_group_topic_threads", "enable_group_episode_memory", "enable_group_relationship_graph", "enable_group_interjection", "enable_group_interjection_feedback", "enable_group_repeat_follow"],
+    },
+  ],
+  enable_group_slang_learning: [
+    {
+      title: "学习范围",
+      note: "控制群内黑话候选的容量，以及用于判断上下文的最近消息量。",
+      keys: ["max_group_slang_terms", "max_group_recent_messages"],
+    },
+    {
+      title: "释义整理",
+      note: "把已记录的黑话、简称和梗整理成可读含义。",
+      keys: ["enable_group_slang_meanings"],
+    },
+    {
+      title: "联网参考",
+      note: "默认关闭；只为已有黑话候选查外部解释，再判断是否匹配本群用法。",
+      keys: ["enable_group_slang_web_search", "group_slang_web_search_terms", "group_slang_web_search_results"],
     },
   ],
   enable_news_integration: [
@@ -1514,7 +1566,7 @@ const featureSettingSections = {
     {
       title: "情绪余波",
       note: "控制被刺到后的收敛、缓和和主动暂停节奏。",
-      keys: ["enable_llm_emotion_judgement", "emotion_judgement_mode", "emotional_gate_hurt_threshold", "emotional_gate_refuse_threshold", "emotional_gate_recovery_per_hour", "emotional_gate_max_hurt_minutes"],
+      keys: ["enable_llm_emotion_judgement", "emotion_judgement_mode", "EMOTION_JUDGEMENT_PROVIDER_ID", "emotional_gate_hurt_threshold", "emotional_gate_refuse_threshold", "emotional_gate_recovery_per_hour", "emotional_gate_max_hurt_minutes"],
     },
     {
       title: "公开心情动态",
@@ -1575,14 +1627,19 @@ const featureSettingSections = {
       keys: ["group_wakeup_interest_keywords", "group_wakeup_interest_probability", "group_wakeup_topic_interest_max_boost", "group_wakeup_generated_keyword_limit"],
     },
     {
+      title: "解惑与冷群",
+      note: "开放疑问和冷群开场都会按强度阈值判断；冷群唤醒默认关闭，适合很安静的小群。",
+      keys: ["enable_group_wakeup_question", "group_wakeup_question_threshold", "enable_group_wakeup_cold_group", "group_wakeup_cold_group_threshold", "group_wakeup_cold_group_idle_minutes"],
+    },
+    {
       title: "节流与拟人感",
       note: "控制冷却、收口等待和被频繁叫到后的疲劳感。",
       keys: ["group_wakeup_cooldown_seconds", "group_wakeup_short_text_wait_seconds", "group_wakeup_debounce_pending_penalty", "group_wakeup_fatigue_limit", "group_wakeup_fatigue_decay_minutes"],
     },
     {
       title: "高强度收口",
-      note: "连续被叫到时，合并同群后续唤醒消息，减少多次 LLM 调用和后台成本。",
-      keys: ["enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_high_intensity_max_merge_messages"],
+      note: "连续被叫到时，按配置合并后续唤醒消息，减少多次 LLM 调用和后台成本。",
+      keys: ["enable_group_high_intensity_mode", "group_high_intensity_wakeup_window_seconds", "group_high_intensity_wakeup_threshold", "group_high_intensity_cooldown_seconds", "group_high_intensity_merge_seconds", "group_high_intensity_max_merge_messages", "group_high_intensity_merge_scope"],
     },
     {
       title: "记录与上下文",
@@ -1653,8 +1710,11 @@ const featureSettingTypes = {
   tts_constraint_mode: { type: "select", options: [["weak", "弱约束：提示词引导"], ["strong", "强约束：硬禁语音"]] },
   rest_reply_mode: { type: "select", options: [["probability", "仅概率醒来"], ["llm", "模型判断是否醒来"]] },
   passive_injection_position: { type: "select", options: [["prompt", "当前请求末尾"], ["system_prompt", "系统提示词"], ["auto", "自动（缓存优先）"]] },
+  framework_session_lock_mode: { type: "select", options: [["auto", "自动（仅旧版兼容）"], ["off", "关闭（新版本推荐）"], ["always", "始终启用（旧版排障）"]] },
   response_review_mode: { type: "select", options: [["severe_only", "主动高风险调用模型"], ["local_only", "仅本地识别并丢弃"], ["full", "含被动积极自检（延迟更高）"]] },
   emotion_judgement_mode: { type: "select", options: [["suspicious", "仅复核可疑项"], ["always", "总是复核普通文本"], ["off", "关闭复核"]] },
+  group_high_intensity_merge_scope: { type: "select", options: [["group", "全群连续叫 Bot 合并"], ["same_user", "只合并同一发送者补话"]] },
+  EMOTION_JUDGEMENT_PROVIDER_ID: { type: "provider" },
   quote_target_strategy: { type: "select", options: [["current", "引用当前触发消息"], ["quoted", "引用 Bot 被回复的旧消息"], ["auto", "自动：回复 Bot 旧消息时引用旧消息"]] },
   quote_skip_short_reply_chars: { type: "number", min: 0, max: 120, step: 1 },
   REST_WAKEUP_PROVIDER_ID: { type: "provider" },
@@ -1699,8 +1759,10 @@ const featureSettingTypes = {
   private_reading_default_keywords: { type: "textarea" },
   private_reading_blocked_tags: { type: "textarea" },
   group_repeat_trigger_threshold: { type: "number", min: 3, max: 20, step: 1 },
+  group_wakeup_question_threshold: { type: "number", min: 0, max: 100, step: 1 },
   group_repeat_interrupt_text: { type: "text" },
   group_repeat_interrupt_image_path: { type: "text" },
+  group_wakeup_cold_group_threshold: { type: "number", min: 0, max: 100, step: 1 },
 };
 
 const probabilitySettingKeys = new Set([
@@ -4229,7 +4291,7 @@ function groupWakeupPanel(detail) {
       <article>
         <span>记录数</span>
         <b>${escapeHtml(detail.wakeup_log_count || logs.length || 0)}</b>
-        <small>命中、冷却和概率未触发</small>
+        <small>命中、冷却、阈值未达和概率未触发</small>
       </article>
     </div>
     ${logs.length ? `
@@ -4263,6 +4325,8 @@ function groupWakeupLogItem(item) {
         <span>${escapeHtml(item.sender_name || item.sender_id || "-")}</span>
         <span>${escapeHtml(item.word ? `词：${item.word}` : item.reason || "")}</span>
         ${item.probability ? `<span>${escapeHtml(`概率 ${Math.round(Number(item.probability || 0) * 100)}%`)}</span>` : ""}
+        ${item.score ? `<span>${escapeHtml(`强度 ${item.score}/${item.threshold || "-"}`)}</span>` : ""}
+        ${item.help_type ? `<span>${escapeHtml(`类型 ${item.help_type}`)}</span>` : ""}
         ${weightText ? `<span>${escapeHtml(weightText)}</span>` : ""}
         ${item.fatigue_label ? `<span>${escapeHtml(`疲劳 ${item.fatigue_label}`)}</span>` : ""}
       </footer>
@@ -7972,7 +8036,7 @@ function renderFeatureSwitches() {
   if (embeddedFeatureParentByKey[state.selectedFeatureKey]) {
     state.selectedFeatureKey = embeddedFeatureParentByKey[state.selectedFeatureKey];
   }
-  if (state.selectedFeatureKey && !visibleFeatureSwitchKey(state.selectedFeatureKey)) {
+  if (state.selectedFeatureKey && state.selectedFeatureKey !== "enable_proactive_only_mode" && !visibleFeatureSwitchKey(state.selectedFeatureKey)) {
     state.selectedFeatureKey = "";
   }
   if (state.selectedFeatureKey && Object.prototype.hasOwnProperty.call(state.featureDraft, state.selectedFeatureKey)) {
@@ -8097,14 +8161,15 @@ function featureSwitchItem(key) {
   const checked = toBool(state.featureDraft[key]);
   const locked = featureLockedByProactiveOnlyMode(key);
   const tempUnlocked = featureTemporarilyUnlockedByProactiveOnly(key);
+  const displayOn = checked || tempUnlocked;
   const related = proactiveOnlyRelatedUnlocks(key);
   const stateText = locked ? (tempUnlocked ? "临时放行" : "已锁定") : checked ? "开启" : "关闭";
   const lockNote = tempUnlocked ? "已临时放行，关闭主动专用模式后清空" : "主动专用模式覆盖，原配置保留";
   const relatedText = related.length ? `建议同步：${related.map((item) => item.label || item.key).join("、")}` : "";
   return `
-    <section class="feature-switch-item ${checked ? "on" : "off"} ${locked ? "locked" : ""}" title="${escapeHtml(locked ? "主动消息专用模式开启时，此功能在普通被动链路中被锁定覆盖，原配置会保留。" : featureDescription(key))}">
+    <section class="feature-switch-item ${displayOn ? "on" : "off"} ${locked ? "locked" : ""}" title="${escapeHtml(locked ? "主动消息专用模式开启时，此功能在普通被动链路中被锁定覆盖，原配置会保留。" : featureDescription(key))}">
       <label class="feature-toggle-hit" aria-label="${escapeHtml(featureLabel(key))}">
-        <input type="checkbox" data-feature-key="${escapeHtml(key)}" ${checked ? "checked" : ""} ${locked ? "disabled" : ""}>
+        <input type="checkbox" data-feature-key="${escapeHtml(key)}" ${displayOn ? "checked" : ""} ${locked ? "disabled" : ""}>
         <span class="feature-toggle-visual"></span>
       </label>
       <div class="feature-switch-body">
@@ -8132,14 +8197,23 @@ function featureGroupForKey(key) {
 
 function featureRelatedSettings(key) {
   const settings = state.overview?.settings || {};
+  const providers = state.overview?.providers || {};
   const keys = featureSettingGroups[key] || [];
   return keys
     .filter((item) => visibleConfigKey(item))
     .filter((item) => featureSettingVisibleForCurrentMode(key, item, settings))
-    .filter((item) => Object.prototype.hasOwnProperty.call(settings, item) || Object.prototype.hasOwnProperty.call(state.featureDraft || {}, item))
+    .filter((item) => (
+      Object.prototype.hasOwnProperty.call(settings, item)
+      || Object.prototype.hasOwnProperty.call(providers, item)
+      || Object.prototype.hasOwnProperty.call(state.featureDraft || {}, item)
+    ))
     .map((item) => ({
       key: item,
-      value: Object.prototype.hasOwnProperty.call(settings, item) ? settings[item] : state.featureDraft[item],
+      value: Object.prototype.hasOwnProperty.call(settings, item)
+        ? settings[item]
+        : Object.prototype.hasOwnProperty.call(providers, item)
+          ? providers[item]
+          : state.featureDraft[item],
       feature: Object.prototype.hasOwnProperty.call(state.featureDraft || {}, item),
       description: configDescriptions[item] || "这个参数会影响该功能的触发频率、上下文范围或行为边界。",
     }));
@@ -8166,10 +8240,41 @@ function featureSettingVisibleForCurrentMode(featureKey, settingKey, settings = 
     if (settingKey === "text_message_debounce_seconds" && boolSetting("enable_smart_message_debounce")) return false;
     return true;
   }
+  if (featureKey === "enable_group_slang_learning") {
+    if (settingKey === "enable_group_slang_web_search") return boolSetting("enable_group_slang_meanings");
+    if (["group_slang_web_search_terms", "group_slang_web_search_results"].includes(settingKey)) {
+      return boolSetting("enable_group_slang_meanings") && boolSetting("enable_group_slang_web_search");
+    }
+    return true;
+  }
+  if (featureKey === "enable_group_wakeup_enhancement") {
+    if (settingKey === "group_wakeup_question_threshold") {
+      return boolSetting("enable_group_wakeup_question");
+    }
+    if (["group_wakeup_cold_group_threshold", "group_wakeup_cold_group_idle_minutes"].includes(settingKey)) {
+      return boolSetting("enable_group_wakeup_cold_group");
+    }
+    if ([
+      "group_high_intensity_wakeup_window_seconds",
+      "group_high_intensity_wakeup_threshold",
+      "group_high_intensity_cooldown_seconds",
+      "group_high_intensity_merge_seconds",
+      "group_high_intensity_max_merge_messages",
+      "group_high_intensity_merge_scope",
+    ].includes(settingKey)) {
+      return boolSetting("enable_group_high_intensity_mode");
+    }
+    return true;
+  }
   if (featureKey === "enable_response_self_review") {
     if (settingKey === "response_review_max_chars") {
       return String(valueSetting("response_review_mode", "severe_only")) === "full";
     }
+    return true;
+  }
+  if (featureKey === "enable_emotion_simulation") {
+    if (settingKey === "emotion_judgement_mode") return boolSetting("enable_llm_emotion_judgement");
+    if (settingKey === "EMOTION_JUDGEMENT_PROVIDER_ID") return boolSetting("enable_llm_emotion_judgement") && String(valueSetting("emotion_judgement_mode", "suspicious")) !== "off";
     return true;
   }
   if (featureKey !== "enable_tts_enhancement") return true;
@@ -8483,8 +8588,14 @@ const featureDetailGuides = {
   passive_injection_position: {
     summary: "选择动态提示词注入到当前请求末尾还是系统提示词。",
     trigger: "被动状态注入或请求级环境感知生效时。",
-    enabled: "当前请求末尾更利于服务端缓存，也更适合与长期记忆/记忆召回在尾部结合；系统提示词约束更强；自动目前按缓存优先处理。",
+    enabled: "当前请求末尾会把动态片段收进统一动态块，并按稳定顺序排列，更利于服务端缓存，也更适合与长期记忆/记忆召回在尾部结合；系统提示词约束更强；自动目前按缓存优先处理。",
     disabled: "不影响被动状态总开关，只决定注入位置。",
+  },
+  framework_session_lock_mode: {
+    summary: "旧版 AstrBot 会话库并发锁兼容保护。",
+    trigger: "同一会话可能同时进入多个主链请求时。",
+    enabled: "auto 只在识别到受影响旧版本时启用；always 会强制排队，适合旧版仍遇到 database is locked 的用户；off 适合新版本。",
+    disabled: "新版本默认不额外串行化，减少回复延迟。",
   },
   enable_cycle_state: {
     summary: "作为拟人身体状态的一部分，偶尔生成生理期前、处于生理期或生理期后的状态底色。",
@@ -8625,7 +8736,7 @@ const featureDetailGuides = {
     disabled: "短唤醒会按普通智能收口规则处理，可能更快，但更容易漏掉后续补话。",
   },
   enable_group_high_intensity_mode: {
-    summary: "自动识别连续唤醒的热闹群聊，把同群后续唤醒消息合并成一轮回复。",
+    summary: "自动识别连续唤醒的热闹群聊，按配置把后续唤醒消息合并成一轮回复。",
     trigger: "统计窗口内多次 @、引用 Bot 或增强唤醒时。",
     enabled: "按合并等待秒数收口，减少多次 LLM 调用，并暂停弱相关/兴趣唤醒、群片段整理、黑话释义刷新和主动插话。",
     disabled: "群聊仍按普通收口、续接和后台刷新流程运行。",
@@ -8897,6 +9008,7 @@ function featureDetailPage(key) {
   const enabled = toBool(state.featureDraft[key]);
   const locked = featureLockedByProactiveOnlyMode(key);
   const tempUnlocked = featureTemporarilyUnlockedByProactiveOnly(key);
+  const displayEnabled = enabled || tempUnlocked;
   const relatedUnlocks = proactiveOnlyRelatedUnlocks(key);
   const related = featureRelatedSettings(key);
   const relatedMap = Object.fromEntries(related.map((item) => [item.key, item]));
@@ -8947,12 +9059,12 @@ function featureDetailPage(key) {
     : `<div><dt>-</dt><dd>无额外依赖</dd></div>`;
   const impactRows = impacts.map(([name, value]) => `<div><dt>${escapeHtml(name)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("");
   return `
-    <section class="feature-detail-page ${enabled ? "on" : "off"} ${locked ? "locked" : ""}">
+    <section class="feature-detail-page ${displayEnabled ? "on" : "off"} ${locked ? "locked" : ""}">
       <nav class="feature-detail-breadcrumb">
         <button type="button" data-feature-back>功能开关</button>
         <span>/ ${escapeHtml(featureGroupForKey(key))}</span>
       </nav>
-      <div class="feature-state-strip ${enabled ? "on" : "off"}">
+      <div class="feature-state-strip ${displayEnabled ? "on" : "off"}">
         <b>${escapeHtml(locked ? (tempUnlocked ? "临时放行" : "已锁定") : enabled ? "开启" : "关闭")}</b>
         ${locked ? `<span>${escapeHtml(tempUnlocked ? "主动消息专用模式仍开启，但此功能已被临时放行；关闭主动专用模式后放行项会清空。" : "主动消息专用模式正在覆盖这个功能；保存的原始开关值不会被修改。")}</span>` : ""}
       </div>
@@ -8963,7 +9075,7 @@ function featureDetailPage(key) {
           <p>${escapeHtml(featureDetailExplanation(key))}</p>
         </div>
         <label class="feature-detail-toggle">
-          <input type="checkbox" data-feature-detail-toggle="${escapeHtml(key)}" ${enabled ? "checked" : ""} ${locked ? "disabled" : ""}>
+          <input type="checkbox" data-feature-detail-toggle="${escapeHtml(key)}" ${displayEnabled ? "checked" : ""} ${locked ? "disabled" : ""}>
           <span class="feature-toggle-visual"></span>
           <b>${escapeHtml(locked ? (tempUnlocked ? "临时放行" : "已锁定") : enabled ? "开启" : "关闭")}</b>
         </label>
@@ -9052,6 +9164,35 @@ function bindFeatureDetailActions() {
             state.overview.settings[input.dataset.featureParam] = input.checked;
             renderFeatureSwitches();
           }
+          if (state.selectedFeatureKey === "enable_emotion_simulation" && input.dataset.featureParam === "enable_llm_emotion_judgement") {
+            state.overview.settings = state.overview.settings || {};
+            state.overview.settings.enable_llm_emotion_judgement = input.checked;
+            renderFeatureSwitches();
+          }
+          if (
+            state.selectedFeatureKey === "enable_group_slang_learning"
+            && ["enable_group_slang_meanings", "enable_group_slang_web_search"].includes(input.dataset.featureParam)
+          ) {
+            state.overview.settings = state.overview.settings || {};
+            state.overview.settings[input.dataset.featureParam] = input.checked;
+            renderFeatureSwitches();
+          }
+          if (
+            state.selectedFeatureKey === "enable_group_wakeup_enhancement"
+            && ["enable_group_wakeup_question", "enable_group_wakeup_cold_group", "enable_group_high_intensity_mode"].includes(input.dataset.featureParam)
+          ) {
+            state.featureDraft[input.dataset.featureParam] = input.checked;
+            state.overview.settings = state.overview.settings || {};
+            state.overview.settings[input.dataset.featureParam] = input.checked;
+            renderFeatureSwitches();
+          }
+        });
+      }
+      if (state.selectedFeatureKey === "enable_emotion_simulation" && input.dataset.featureParam === "emotion_judgement_mode") {
+        input.addEventListener("change", () => {
+          state.overview.settings = state.overview.settings || {};
+          state.overview.settings.emotion_judgement_mode = input.value || "suspicious";
+          renderFeatureSwitches();
         });
       }
       if (state.selectedFeatureKey === "enable_tts_enhancement" && input.dataset.featureParam === "tts_frequency_control_mode") {
@@ -9107,9 +9248,17 @@ function bindProactiveOnlyTempUnlockActions(root = document) {
       setActionBusy(button, true);
       showToast("正在处理...");
       try {
+        if (modeWasEnabled && !toBool(state.overview?.proactive_only?.enabled)) {
+          const saved = await postJson("/settings/update", { features: { enable_proactive_only_mode: true } });
+          state.overview = { ...(state.overview || {}), ...(saved || {}) };
+          if (Object.prototype.hasOwnProperty.call(state.featureDraft || {}, "enable_proactive_only_mode")) {
+            state.featureDraft.enable_proactive_only_mode = true;
+          }
+        }
         const result = await postJson("/proactive_only/unlock", { key, action, sync_related: syncRelated });
         state.overview = state.overview || {};
-        state.overview.proactive_only = result.proactive_only || state.overview.proactive_only || {};
+        const proactiveOnly = result?.proactive_only || result?.data?.proactive_only || {};
+        state.overview.proactive_only = Object.keys(proactiveOnly).length ? proactiveOnly : (state.overview.proactive_only || {});
         if (modeWasEnabled && Object.prototype.hasOwnProperty.call(state.featureDraft || {}, "enable_proactive_only_mode")) {
           state.featureDraft.enable_proactive_only_mode = true;
         }

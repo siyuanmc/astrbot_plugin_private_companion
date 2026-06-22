@@ -1403,6 +1403,16 @@ class ProactiveMessageMixin:
                     break
         return lock
 
+    def _framework_session_lock_required(self) -> bool:
+        checker = getattr(self, "_framework_session_lock_enabled", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] 主链会话锁模式判断失败,默认不启用: %s", _single_line(exc, 120))
+                return False
+        return False
+
     def _framework_session_key_from_event(self, event: AstrMessageEvent) -> str:
         umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
         if umo:
@@ -1423,6 +1433,8 @@ class ProactiveMessageMixin:
         label: str = "llm",
         private_only: bool = True,
     ) -> None:
+        if not self._framework_session_lock_required():
+            return
         if bool(getattr(event, "private_companion_framework_session_lock_acquired", False)):
             return
         if bool(getattr(event, "private_companion_proactive_framework", False)):
@@ -1624,8 +1636,8 @@ class ProactiveMessageMixin:
 
         captured_tool_sends: list[Any] = []
         result = None
-        session_lock = self._framework_session_lock(umo)
-        async with session_lock:
+        async def _run_with_retries() -> None:
+            nonlocal result, captured_tool_sends
             for attempt in range(3):
                 try:
                     conv = await self._get_current_conversation_safely(umo, label=f"{label}_framework_read")
@@ -1658,6 +1670,12 @@ class ProactiveMessageMixin:
                         await asyncio.sleep(wait_seconds)
                         continue
                     raise
+        session_lock = self._framework_session_lock(umo) if self._framework_session_lock_required() else None
+        if isinstance(session_lock, asyncio.Lock):
+            async with session_lock:
+                await _run_with_retries()
+        else:
+            await _run_with_retries()
         runner = getattr(result, "agent_runner", None) if result else None
         llm_resp = runner.get_final_llm_resp() if runner else None
         text = str(getattr(llm_resp, "completion_text", "") or "").strip()

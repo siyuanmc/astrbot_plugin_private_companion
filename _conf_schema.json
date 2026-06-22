@@ -2226,6 +2226,66 @@
       "enable_group_wakeup_enhancement": true
     }
   },
+  "enable_group_wakeup_question": {
+    "description": "启用解惑唤醒",
+    "type": "bool",
+    "hint": "群里有人抛出开放疑问、求助或“有没有人懂”这类问题时，按求助强度评分决定是否进入回复链。受冷却、高强度收口和唤醒疲劳影响。",
+    "default": true,
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_wakeup_question_threshold": {
+    "description": "解惑强度阈值",
+    "type": "int",
+    "hint": "群聊开放疑问或求助会先计算 0-100 的强度分，达到该阈值才进入回复链。分数会参考求助词、报错/排障信号、群气氛、休息状态和唤醒疲劳。",
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 1
+    },
+    "default": 65,
+    "condition": {
+      "enable_group_wakeup_question": true
+    }
+  },
+  "enable_group_wakeup_cold_group": {
+    "description": "启用冷群唤醒",
+    "type": "bool",
+    "hint": "群聊安静一段时间后有人重新开口时，按开场、问候或求助强度决定是否进入回复链。默认关闭，避免冷群时突然冒泡打扰。",
+    "default": false,
+    "condition": {
+      "enable_group_wakeup_enhancement": true
+    }
+  },
+  "group_wakeup_cold_group_threshold": {
+    "description": "冷群强度阈值",
+    "type": "int",
+    "hint": "冷群重新开口会先计算 0-100 的强度分，达到该阈值才进入回复链。分数会参考问候、开场、求助信号、休息状态和能量状态。",
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 1
+    },
+    "default": 65,
+    "condition": {
+      "enable_group_wakeup_cold_group": true
+    }
+  },
+  "group_wakeup_cold_group_idle_minutes": {
+    "description": "冷群判定分钟",
+    "type": "int",
+    "hint": "距离上一条群消息超过这么久，才认为当前消息处于冷群重新开口场景。",
+    "slider": {
+      "min": 3,
+      "max": 720,
+      "step": 1
+    },
+    "default": 25,
+    "condition": {
+      "enable_group_wakeup_cold_group": true
+    }
+  },
   "group_wakeup_cooldown_seconds": {
     "description": "唤醒冷却秒数",
     "type": "int",
@@ -2327,7 +2387,7 @@
   "group_wakeup_short_text_wait_seconds": {
     "description": "短唤醒补话等待秒数",
     "type": "float",
-    "hint": "群聊里已经判定在叫 Bot、但内容只有 1-2 个字且不像完整短互动时，额外等待同一群友补充。用于避免“瓦”这类碎片先触发回复，后续真正内容才发出来。设为 0 可关闭。",
+    "hint": "群聊里已经判定在叫 Bot、但内容只有 1-2 个字且不像完整短互动时，复用消息收口缓冲等待同一群友补充。用于避免“瓦”这类碎片先触发回复，后续真正内容才发出来。设为 0 可关闭。",
     "slider": {
       "min": 0,
       "max": 30,
@@ -2392,7 +2452,7 @@
   "group_high_intensity_merge_seconds": {
     "description": "高强度合并等待秒数",
     "type": "int",
-    "hint": "高强度收口期间的固定合并窗口。第一条明确叫到 Bot 的消息最多等待这么久，把同一群后续叫 Bot 的消息合并进同一轮回复，减少多次 LLM 调用。",
+    "hint": "高强度收口期间的固定合并窗口。第一条明确叫到 Bot 的消息最多等待这么久，并按合并范围配置把后续叫 Bot 的消息并入同一轮，减少多次 LLM 调用。",
     "slider": {
       "min": 1,
       "max": 30,
@@ -2413,6 +2473,23 @@
       "step": 1
     },
     "default": 8,
+    "condition": {
+      "enable_group_high_intensity_mode": true
+    }
+  },
+  "group_high_intensity_merge_scope": {
+    "description": "高强度合并范围",
+    "type": "string",
+    "hint": "高强度期间如何合并连续叫 Bot 的消息。group 表示全群连续叫 Bot 合并为一轮；same_user 表示只合并同一发送者的补话。",
+    "options": [
+      "group",
+      "same_user"
+    ],
+    "labels": [
+      "全群连续叫 Bot 合并",
+      "只合并同一发送者补话"
+    ],
+    "default": "group",
     "condition": {
       "enable_group_high_intensity_mode": true
     }
@@ -3041,7 +3118,7 @@
   "passive_injection_position": {
     "description": "动态提示词注入位置",
     "type": "string",
-    "hint": "控制被动状态、请求级环境感知和 TTS 本轮频控等动态片段注入到哪里。当前请求末尾更利于服务端缓存；系统提示词约束更强但更容易降低缓存命中；自动当前等同当前请求末尾。若同时启用长期记忆/记忆召回，推荐使用当前请求末尾，让召回内容与动态状态在尾部自然结合。",
+    "hint": "控制被动状态、请求级环境感知、TTS 本轮频控、转发/引用上下文等动态片段注入到哪里。当前请求末尾会进入统一动态块，并按稳定顺序排列，更利于服务端缓存；系统提示词约束更强但更容易降低缓存命中；自动当前等同当前请求末尾。若同时启用长期记忆/记忆召回，推荐使用当前请求末尾，让召回内容与动态状态在尾部自然结合。",
     "options": [
       "prompt",
       "system_prompt",
@@ -3056,6 +3133,22 @@
     "condition": {
       "inject_passive_states": true
     }
+  },
+  "framework_session_lock_mode": {
+    "description": "主链会话锁兼容模式",
+    "type": "string",
+    "hint": "用于兼容旧版 AstrBot 会话库并发锁问题。新版本通常不需要，开启会让同一会话主链请求排队，可能增加回复延迟。auto 只在识别到受影响的旧版本时启用；always 仅建议仍遇到 database is locked 的旧版用户使用。",
+    "options": [
+      "auto",
+      "off",
+      "always"
+    ],
+    "labels": [
+      "自动（仅旧版兼容）",
+      "关闭（新版本推荐）",
+      "始终启用（旧版排障）"
+    ],
+    "default": "auto"
   },
   "enable_cycle_state": {
     "description": "启用生理期模拟",
@@ -3518,7 +3611,7 @@
     "description": "TTS补充规则",
     "type": "text",
     "default": "",
-    "hint": "只填写本人格或声线的额外要求。基础 <tts> 格式、语种和 provider 情绪标签适配规则会自动生成，留空最稳。",
+    "hint": "只填写本人格或声线的额外要求。基础 <pc_tts> 格式、目标语种和 provider 情绪标签适配规则会自动生成，留空最稳。",
     "condition": {
       "enable_tts_enhancement": true
     }

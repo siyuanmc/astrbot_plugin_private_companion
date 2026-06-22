@@ -695,7 +695,11 @@ class IntegrationStatusMixin:
         return "\n".join(lines)
 
     async def _format_environment_perception(self, event: AstrMessageEvent) -> str:
-        if not self.enable_environment_perception:
+        checker = getattr(self, "_feature_enabled_or_temp_unlocked", None)
+        if callable(checker):
+            if not checker("enable_environment_perception"):
+                return ""
+        elif not self.enable_environment_perception:
             return ""
         current = self._environment_now()
         lines = [

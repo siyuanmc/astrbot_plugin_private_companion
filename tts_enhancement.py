@@ -201,6 +201,22 @@ class TtsEnhancementMixin:
             return "volcengine"
         return "generic"
 
+    def _tts_provider_kind_for_event(self, event: Any, *, config: dict[str, Any] | None = None) -> str:
+        tts_provider = None
+        provider_settings: dict[str, Any] = {}
+        try:
+            if config is None:
+                config = self.context.get_config(str(getattr(event, "unified_msg_origin", "") or "")) or {}
+            provider_settings = dict((config or {}).get("provider_tts_settings", {}) or {})
+        except Exception:
+            provider_settings = {}
+        try:
+            if event is not None:
+                tts_provider = self.context.get_using_tts_provider(str(getattr(event, "unified_msg_origin", "") or ""))
+        except Exception:
+            tts_provider = None
+        return self._tts_provider_kind(tts_provider, provider_settings)
+
     def _tts_provider_allows_emotion_tags(self, kind: str) -> bool:
         return kind in {"fishaudio", "gsv"}
 
@@ -810,76 +826,71 @@ TTS 朗读文本：
         lang = self._tts_language_label()
         mode = getattr(self, "tts_generation_mode", "fast_tag")
         frequency_mode = getattr(self, "tts_frequency_control_mode", "global")
-        bilingual_rule = (
-            f"当语音正文目标语种不是中文时，每个 <pc_tts>...</pc_tts> 语音块后面都必须紧跟一句自然中文含义，方便用户看到语音对应中文；不要只输出外语语音块，也不要只在语音块前放一句无关中文。中文可见文本必须是完整自然句，不能以“还/还是/或者/要不要/因为/所以/但是/然后/和/对/从/到/让”等连接词或半个问题结尾；如果有多句中文含义，用换行分开。目标语种为日语时，<pc_tts> 内除极短语气词外必须包含假名，不要只写“喜欢/大丈夫”这类容易混淆的汉字词。"
-            if getattr(self, "tts_voice_language", "ja") != "zh"
-            else ""
-        )
+        voice_lang = getattr(self, "tts_voice_language", "ja")
+        supports_emotion = self._tts_provider_allows_emotion_tags(provider_kind)
         if mode == "fast_tag":
             if frequency_mode == "legacy":
-                tag_rule = (
-                    "可以使用 <pc_tts>...</pc_tts> 标出真正需要朗读的内容；标签外文本会作为普通聊天文字保留。"
-                    "适合采用“中文显示文本 + 外语语音块”的表达：标签外中文自然聊天，标签内按目标语种朗读。"
-                    "不要直接写 <tts>，请使用插件私有的 <pc_tts> 标签，避免绕过语种修正和中文释义补全。"
-                    "由你根据当前回复是否适合被听见、情绪是否更贴近、用户是否明显期待语音来自行判断；不要为了格式而滥用。"
-                )
+                usage_rule = "由你根据当前回复是否适合被听见、情绪是否更贴近、用户是否明显期待语音来自行判断；不要为了格式而滥用。"
             else:
-                tag_rule = (
-                    "可以使用 <pc_tts>...</pc_tts> 标出真正需要朗读的内容；标签外文本会作为普通聊天文字保留。"
-                    "可以采用“中文显示文本 + 外语语音块”的表达：标签外中文自然聊天，标签内按目标语种朗读。"
-                    "不要直接写 <tts>，请使用插件私有的 <pc_tts> 标签，避免绕过语种修正和中文释义补全。"
-                    "不要刻意使用语音；只有在一句话更适合被听见、情绪更贴近或用户明显期待语音时才写 <pc_tts>。"
-                )
+                usage_rule = "不要刻意使用语音；只有在一句话更适合被听见、情绪更贴近或用户明显期待语音时才写 <pc_tts>。"
         else:
-            tag_rule = "本轮主模型可以正常回复，不需要主动写 <pc_tts> 或 <tts>；后处理会生成语音格式。"
+            usage_rule = "本轮主模型可以正常回复，不需要主动写 <pc_tts> 或 <tts>；后处理会生成语音格式。"
         emotion_rule = (
-            "当前 TTS provider 适合保留 [happy]、[sad] 这类方括号情绪标签。"
-            if self._tts_provider_allows_emotion_tags(provider_kind)
+            "3.可以在语音块内插入方括号情绪标签，如 [happy]、[sad]。"
+            if supports_emotion
             else ""
         )
-        position_rule = (
-            "语音块可以出现在回复的开头、中间或结尾，只要读起来像自然聊天即可；不要为了使用语音而把整句都塞到结尾。"
-            if mode == "fast_tag"
-            else ""
-        )
+        language_rule = ""
+        if voice_lang == "zh":
+            language_rule = "当前语音正文目标语种是中文，<pc_tts> 内也用自然中文；语音块后不强制再写重复翻译。"
+        elif voice_lang == "en":
+            language_rule = "当前语音正文目标语种是英语，<pc_tts> 内必须是自然英语；每个语音块后补上对应中文含义。"
+        else:
+            language_rule = "当前语音正文目标语种是日语，<pc_tts> 内必须是自然日语，除极短语气词外要包含假名；每个语音块后补上对应中文含义。"
         examples = ""
         if mode == "fast_tag":
-            if getattr(self, "tts_voice_language", "ja") == "zh":
+            if voice_lang == "zh":
                 examples = (
-                    "参考格式：\n"
+                    "示例：\n"
                     "例1：嗯，我在听。你慢慢说。\n"
                     "例2：<pc_tts>嗯，我在听。</pc_tts>你慢慢说。\n"
-                    "例3：先别急，<pc_tts>我陪你想一下。</pc_tts>这件事可以一点点拆开。\n"
-                    "例4：这句普通发文字就好，不需要语音。"
+                    f"例3：先别急，<pc_tts>{'[happy]' if supports_emotion else ''}我陪你想一下。</pc_tts>这件事可以一点点拆开。"
                 )
-            elif getattr(self, "tts_voice_language", "ja") == "en":
+            elif voice_lang == "en":
                 examples = (
-                    "参考格式：\n"
+                    "示例：\n"
                     "例1：我在听。你慢慢说。\n"
                     "例2：<pc_tts>I am listening.</pc_tts>我在听。你慢慢说。\n"
-                    "例3：先别急，<pc_tts>Let me stay with you for a moment.</pc_tts>让我陪你待一会儿。我们一点点想。\n"
-                    "例4：普通说明直接用中文文字，不要为了凑语音硬写 <pc_tts>。"
+                    f"例3：先别急，<pc_tts>{'[sad]' if supports_emotion else ''}Let me stay with you for a moment.</pc_tts>我先在你旁边待一会儿。我们一点点想。"
                 )
             else:
                 examples = (
-                    "参考格式：\n"
+                    "示例：\n"
                     "例1：我有在好好听哦。你慢慢说。\n"
                     "例2：<pc_tts>ちゃんと聞いてるよ。</pc_tts>我有在好好听哦。你慢慢说。\n"
-                    "例3：先别急，<pc_tts>少しだけ、そばにいるね。</pc_tts>我先在你旁边待一会儿。我们一点点想。\n"
-                    "例4：这句只发中文文字就好，不要为了表现语音而硬加 <pc_tts>。"
+                    f"例3：先别急，<pc_tts>{'[sad]' if supports_emotion else ''}少しだけ、そばにいるね。</pc_tts>我先在你旁边待一会儿。我们一点点想。"
                 )
         extra = _single_line(getattr(self, "tts_extra_prompt", ""), 800)
         if not extra:
             extra = self._legacy_nondefault_tts_prompt()
+        if voice_lang == "zh":
+            first_rule = "1.自然聊天时用中文文字推进对话，把适合朗读的中文部分用一对<pc_tts>包起来；"
+        else:
+            first_rule = "1.自然聊天时用中文文字推进对话，把适合朗读的外语部分用一对<pc_tts>包起来，并在后面补上对应的中文含义；"
+        rules = [
+            "【语音消息规则】",
+            first_rule,
+            "2.语音块可以出现在回复的开头、中间或结尾，只要读起来像自然聊天即可；",
+        ]
+        if emotion_rule:
+            rules.append(emotion_rule)
         return "\n".join(
             item
             for item in [
-                "【TTS强化】",
+                "\n".join(rules),
                 f"当前语音正文目标语种：{lang}。",
-                tag_rule,
-                bilingual_rule,
-                position_rule,
-                emotion_rule,
+                language_rule,
+                usage_rule,
                 examples,
                 "如果写错成 <tts>、<ttts>、<tttts> 等标签，系统会尝试规范化，但你应优先输出标准 <pc_tts>...</pc_tts>。",
                 f"补充规则：{extra}" if extra else "",
@@ -933,7 +944,9 @@ TTS 朗读文本：
         )
 
     async def apply_tts_enhancement_request(self, event: Any, req: Any) -> None:
-        if not getattr(self, "enabled", False) or not getattr(self, "enable_tts_enhancement", False):
+        feature_enabled = getattr(self, "_feature_enabled_or_temp_unlocked", None)
+        tts_enabled = feature_enabled("enable_tts_enhancement") if callable(feature_enabled) else getattr(self, "enable_tts_enhancement", False)
+        if not getattr(self, "enabled", False) or not tts_enabled:
             return
         if not hasattr(req, "system_prompt"):
             return
@@ -941,15 +954,17 @@ TTS 朗读文本：
             config = self.context.get_config(str(getattr(event, "unified_msg_origin", "") or "")) or {}
         except Exception:
             config = getattr(self, "config", {}) or {}
-        provider_settings = dict(config.get("provider_tts_settings", {}) or {})
-        provider_kind = self._tts_provider_kind(provider_settings=provider_settings)
+        provider_kind = self._tts_provider_kind_for_event(event, config=config)
         marker = "<!-- private_companion_tts_enhancement_v1 -->"
         prompt = str(getattr(req, "system_prompt", "") or "")
 
-        def append_dynamic_tts_fragment(fragment_marker: str, text: str) -> str:
+        def append_dynamic_tts_fragment(fragment_marker: str, text: str, *, priority: int = 55) -> str:
             helper = getattr(self, "_append_turn_prompt_fragment_by_position", None)
             if callable(helper):
                 try:
+                    if helper(req, fragment_marker, text, priority=priority, source="tts"):
+                        return "prompt"
+                except TypeError:
                     if helper(req, fragment_marker, text):
                         return "prompt"
                 except Exception as exc:
@@ -1016,7 +1031,7 @@ TTS 朗读文本：
                 "请只输出普通文字回复，不要包含 <pc_tts>...</pc_tts>、<tts>...</tts>、语音、朗读、音频、发声、Record 或任何等价语音内容。"
                 "如果用户要求语音，也先用文字自然回应当前内容，不要承诺已经发送语音。"
             )
-            placement = append_dynamic_tts_fragment("<!-- private_companion_tts_block_v1 -->", reverse_prompt)
+            placement = append_dynamic_tts_fragment("<!-- private_companion_tts_block_v1 -->", reverse_prompt, priority=22)
             await record_tts_fragment("TTS 强约束禁用注入", "tts.block", reverse_prompt, mode="strong_block", placement=placement)
         elif (
             not user_requested_tts
@@ -1031,7 +1046,7 @@ TTS 朗读文本：
                 "这条频率控制优先级高于前面的 TTS 基础规则、示例和主用户倾向；没有用户明确要求时，即使语气很适合语音，也不要使用语音。"
                 "如果用户本轮明确要求语音，仍应以回应用户需求为主，可以使用 <pc_tts>。"
             )
-            placement = append_dynamic_tts_fragment("<!-- private_companion_tts_frequency_v1 -->", frequency_prompt)
+            placement = append_dynamic_tts_fragment("<!-- private_companion_tts_frequency_v1 -->", frequency_prompt, priority=52)
             await record_tts_fragment("TTS 频率控制注入", "tts.frequency", frequency_prompt, mode="frequency", placement=placement)
         if mode == "fast_tag" and self._should_force_tts_for_main_user_event(event) and not strong_block_reason:
             frequency_mode = getattr(self, "tts_frequency_control_mode", "global")
@@ -1040,7 +1055,7 @@ TTS 朗读文本：
             else:
                 force_rule = "这轮消息来自主用户或明确 @ 到主用户。如果语音比纯文字更自然，可以采用一段 <pc_tts>...</pc_tts>；不要刻意使用语音，仍需遵守目标语种、中文释义和会话最小间隔。"
             force_prompt = f"【本轮 TTS 强化触发】\n{force_rule}"
-            placement = append_dynamic_tts_fragment("<!-- private_companion_tts_force_v1 -->", force_prompt)
+            placement = append_dynamic_tts_fragment("<!-- private_companion_tts_force_v1 -->", force_prompt, priority=54)
             await record_tts_fragment("TTS 主用户倾向注入", "tts.force", force_prompt, mode="main_user", placement=placement)
         if user_requested_tts and mode == "fast_tag" and not strong_block_reason:
             user_request_prompt = (
@@ -1048,11 +1063,13 @@ TTS 朗读文本：
                 "用户本轮明确希望听到语音或你的声音。请以回应用户需求为主：如果当前回复适合用语音表达，可以直接写一段 <pc_tts>...</pc_tts>；"
                 "这类顺应用户请求的语音不受自动语音触发概率限制，但仍需自然克制、遵守目标语种和中文释义，不要为了格式而硬加。"
             )
-            placement = append_dynamic_tts_fragment("<!-- private_companion_tts_user_request_v1 -->", user_request_prompt)
+            placement = append_dynamic_tts_fragment("<!-- private_companion_tts_user_request_v1 -->", user_request_prompt, priority=54)
             await record_tts_fragment("用户语音请求注入", "tts.user_request", user_request_prompt, mode="user_request", placement=placement)
 
     async def protect_tts_enhancement_response_blocks(self, event: Any, resp: Any) -> None:
-        if not getattr(self, "enable_tts_enhancement", False):
+        feature_enabled = getattr(self, "_feature_enabled_or_temp_unlocked", None)
+        tts_enabled = feature_enabled("enable_tts_enhancement") if callable(feature_enabled) else getattr(self, "enable_tts_enhancement", False)
+        if not tts_enabled:
             text = str(getattr(resp, "completion_text", "") or "")
             if re.search(r"</?(?:pc[_-]?tts|t{2,}s)\b", text, flags=re.IGNORECASE):
                 resp.completion_text = self._strip_any_tts_markup(text)
@@ -1088,7 +1105,9 @@ TTS 朗读文本：
             resp.completion_text = text
 
     async def apply_tts_enhancement_before_send(self, event: Any) -> None:
-        if not getattr(self, "enabled", False) or not getattr(self, "enable_tts_enhancement", False):
+        feature_enabled = getattr(self, "_feature_enabled_or_temp_unlocked", None)
+        tts_enabled = feature_enabled("enable_tts_enhancement") if callable(feature_enabled) else getattr(self, "enable_tts_enhancement", False)
+        if not getattr(self, "enabled", False) or not tts_enabled:
             return
         result = event.get_result()
         chain = list(getattr(result, "chain", []) or []) if result is not None else []
@@ -1449,21 +1468,31 @@ TTS 朗读文本：
         if not source:
             return ""
         provider = await self._get_tts_conversion_provider(event)
-        provider_kind = self._tts_provider_kind(provider_settings={})
+        provider_kind = self._tts_provider_kind_for_event(event)
         lang = self._tts_language_label()
+        voice_lang = getattr(self, "tts_voice_language", "ja")
         mode = getattr(self, "tts_generation_mode", "fast_tag")
         if mode == "postprocess":
             return await self._postprocess_text_to_tts_markup(source, event, provider_kind=provider_kind)
         extra = _single_line(getattr(self, "main_user_mention_voice_prompt", ""), 500) if self._event_mentions_main_user_with_keyword(event) else ""
         persona_context = await self._format_tts_persona_voice_context(event)
-        if getattr(self, "tts_voice_language", "ja") == "zh":
-            output_rule = "必须包含一个 <tts>...</tts> 语音块"
-            display_rule = "语音和显示文本同为中文时，不需要额外翻译。"
+        emotion_rule = (
+            "可在 <pc_tts> 内保留少量方括号情绪标签，如 [happy]、[sad]。"
+            if self._tts_provider_allows_emotion_tags(provider_kind)
+            else "不要加入方括号情绪标签。"
+        )
+        if voice_lang == "zh":
+            output_rule = "必须包含一个 <pc_tts>...</pc_tts> 语音块"
+            display_rule = "语音和显示文本同为中文时，不需要额外翻译，标签外仍可保留自然中文聊天文本。"
             language_rule = "语音块内必须是自然中文。"
+        elif voice_lang == "en":
+            output_rule = "必须包含一个 <pc_tts>...</pc_tts> 英语语音块，且语音块后必须补一句自然中文含义"
+            display_rule = "不要只输出 <pc_tts>...</pc_tts>；最终格式建议为：<pc_tts>English voice text</pc_tts>\\n中文含义。中文含义必须完整收口。"
+            language_rule = "语音块内必须完全使用自然英语，不要夹中文评价、中文语气词或中文说明。"
         else:
-            output_rule = "必须包含一个 <tts>...</tts> 语音块，且语音块后必须补一句自然中文含义"
-            display_rule = "不要只输出 <tts>...</tts>；最终格式建议为：<tts>目标语种朗读文本</tts>\\n中文含义。中文含义必须完整收口，不能停在“还/还是/或者/要不要/因为/所以/但是/然后/和/对/从/到/让”等连接词后；如果原回复有多个短句，就用换行拆成多句完整中文，不要用空格硬连。"
-            language_rule = "语音块内必须完全使用目标语种，不要夹中文评价、中文语气词或中文说明。目标语种为日语时，除极短语气词外必须包含假名，不要只输出汉字词。"
+            output_rule = "必须包含一个 <pc_tts>...</pc_tts> 日语语音块，且语音块后必须补一句自然中文含义"
+            display_rule = "不要只输出 <pc_tts>...</pc_tts>；最终格式建议为：<pc_tts>日本語の朗読文</pc_tts>\\n中文含义。中文含义必须完整收口。"
+            language_rule = "语音块内必须完全使用自然日语，不要夹中文评价、中文语气词或中文说明；除极短语气词外必须包含假名，不要只输出汉字词。"
         prompt = f"""
 请把下面这条回复转换成适合 TTS 朗读的最终输出。
 
@@ -1471,7 +1500,7 @@ TTS 朗读文本：
 输出格式：{output_rule}
 显示文本规则：{display_rule}
 语种规则：{language_rule}
-Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_allows_emotion_tags(provider_kind) else "按普通朗读文本处理"}
+Provider 规则：{emotion_rule}
 补充要求：{extra or "无"}
 {persona_context}
 
@@ -1502,11 +1531,26 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
         if provider is None:
             return ""
         lang = self._tts_language_label()
+        voice_lang = getattr(self, "tts_voice_language", "ja")
         tts_signal, tts_signal_match, user_text = self._event_tts_request_signal(event)
         extra = _single_line(getattr(self, "tts_extra_prompt", ""), 800)
         if not extra:
             extra = self._legacy_nondefault_tts_prompt()
         persona_context = await self._format_tts_persona_voice_context(event)
+        if voice_lang == "zh":
+            language_rule = "voice_text 必须是自然中文。"
+            visible_rule = "visible_text 仍是最终可见中文文本；如果和 voice_text 一样，可以保持同一句。"
+        elif voice_lang == "en":
+            language_rule = "voice_text 必须是自然英语，不要夹中文说明。"
+            visible_rule = "visible_text 必须保留完整中文含义，让用户能看懂这段语音对应什么。"
+        else:
+            language_rule = "voice_text 必须是自然日语，不要夹中文说明；除极短语气词外必须包含假名。"
+            visible_rule = "visible_text 必须保留完整中文含义，让用户能看懂这段语音对应什么。"
+        emotion_rule = (
+            "voice_text 可以少量使用 [happy]、[sad] 这类方括号情绪标签。"
+            if self._tts_provider_allows_emotion_tags(provider_kind)
+            else "voice_text 不要使用方括号情绪标签。"
+        )
         probability_allowed = getattr(event, "_private_companion_tts_postprocess_probability_allowed", None)
         if isinstance(probability_allowed, bool):
             probability_hint = "命中，正常判断是否适合语音" if probability_allowed else "未命中，除非你判断用户本轮确实在要求语音，否则应保持纯文本"
@@ -1530,8 +1574,9 @@ Provider 规则：{"可保留少量方括号情绪标签" if self._tts_provider_
 - 如果用户没有明确要求，只有在非常适合被听见、情绪很贴近、短句更有表现力时才使用语音。
 - 不要为了展示功能而使用语音；普通说明、长解释、信息密集回复应保持纯文字。
 - 只选择一小段最适合朗读的内容，不要把整条长回复都转成语音。
-- visible_text 是最终聊天可见中文文本。若 use_tts=true，visible_text 仍要包含完整中文含义。
-- voice_text 是送入 TTS 的朗读文本。目标语种不是中文时，voice_text 必须是自然目标语种；日语除极短语气词外必须包含假名。
+- {visible_rule}
+- voice_text 是送入 TTS 的朗读文本。{language_rule}
+- {emotion_rule}
 - voice_text 和 visible_text 都要保持当前人格的说话方式、称呼和距离感。
 - 不要添加原回复没有的新信息。
 

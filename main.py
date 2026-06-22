@@ -396,7 +396,7 @@ _PROACTIVE_ONLY_TEMP_UNLOCK_RELATED = {
     PLUGIN_NAME,
     "menglimi",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "4.3.0",
+    "4.3.1",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, TtsEnhancementMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -698,6 +698,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.passive_injection_position = self._normalize_passive_injection_position(
             self._cfg_str(c, "passive_injection_position", "prompt")
         )
+        self.framework_session_lock_mode = self._normalize_framework_session_lock_mode(
+            self._cfg_str(c, "framework_session_lock_mode", "auto", "auto")
+        )
         self.proactive_share_probability = self._cfg_int(c, "proactive_share_probability", 45, 0, 100) / 100
         self.enable_daily_greetings = self._cfg_bool(c, "enable_daily_greetings", True)
         self.greeting_idle_minutes = self._cfg_int(c, "greeting_idle_minutes", 30, 0, 240)
@@ -922,6 +925,11 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             self.group_wakeup_context_words = ["机器人", "bot"]
         self.group_wakeup_interest_keywords = self._parse_text_list_config(c.get("group_wakeup_interest_keywords", []))
         self.group_wakeup_interest_probability = self._cfg_int(c, "group_wakeup_interest_probability", 18, 0, 100) / 100
+        self.enable_group_wakeup_question = self._cfg_bool(c, "enable_group_wakeup_question", True)
+        self.group_wakeup_question_threshold = self._cfg_int(c, "group_wakeup_question_threshold", 65, 0, 100)
+        self.enable_group_wakeup_cold_group = self._cfg_bool(c, "enable_group_wakeup_cold_group", False)
+        self.group_wakeup_cold_group_threshold = self._cfg_int(c, "group_wakeup_cold_group_threshold", 65, 0, 100)
+        self.group_wakeup_cold_group_idle_minutes = self._cfg_int(c, "group_wakeup_cold_group_idle_minutes", 25, 3, 720)
         self.group_wakeup_cooldown_seconds = self._cfg_int(c, "group_wakeup_cooldown_seconds", 90, 0, 3600)
         self.group_wakeup_generated_keyword_limit = self._cfg_int(c, "group_wakeup_generated_keyword_limit", 24, 4, 80)
         self.group_wakeup_topic_interest_max_boost = self._cfg_int(c, "group_wakeup_topic_interest_max_boost", 45, 0, 150) / 100
@@ -936,6 +944,11 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.group_high_intensity_cooldown_seconds = self._cfg_int(c, "group_high_intensity_cooldown_seconds", 150, 30, 1800)
         self.group_high_intensity_merge_seconds = self._cfg_int(c, "group_high_intensity_merge_seconds", 8, 1, 30)
         self.group_high_intensity_max_merge_messages = self._cfg_int(c, "group_high_intensity_max_merge_messages", 8, 0, 50)
+        self.group_high_intensity_merge_scope = self._cfg_str(c, "group_high_intensity_merge_scope", "group", "group").lower()
+        if self.group_high_intensity_merge_scope in {"sender", "same_sender", "same_user", "user"}:
+            self.group_high_intensity_merge_scope = "same_user"
+        elif self.group_high_intensity_merge_scope not in {"group", "same_user"}:
+            self.group_high_intensity_merge_scope = "group"
         self.enable_group_interjection = self._cfg_bool(c, "enable_group_interjection", False)
         self.enable_group_repeat_follow = self._cfg_bool(c, "enable_group_repeat_follow", True)
         self.group_repeat_trigger_threshold = self._cfg_int(c, "group_repeat_trigger_threshold", 4, 3, 20)
@@ -1605,7 +1618,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             return
         if self._proactive_only_blocks_passive_event(event, "enable_group_companion"):
             return
-        if not self.enable_group_companion:
+        if not self._feature_enabled_or_temp_unlocked("enable_group_companion"):
             return
         if not self._extract_group_id_from_event(event):
             return
@@ -1631,7 +1644,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             return
         if self._proactive_only_blocks_passive_event(event, "enable_group_companion"):
             return
-        if not self.enable_group_companion:
+        if not self._feature_enabled_or_temp_unlocked("enable_group_companion"):
             return
         if not self._extract_group_id_from_event(event):
             return
@@ -1658,7 +1671,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             return
         if self._proactive_only_blocks_passive_event(event, "enable_segmented_proactive_reply"):
             return
-        if not self.enable_segmented_proactive_reply:
+        if not self._feature_enabled_or_temp_unlocked("enable_segmented_proactive_reply"):
             return
         if self.segmented_proactive_scope != "all_llm":
             return
@@ -2219,7 +2232,13 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             return
         environment_injection = await self._format_environment_perception(event)
         if environment_injection:
-            placement = "prompt" if self._append_turn_prompt_fragment_by_position(req, marker, environment_injection) else "system_prompt"
+            placement = "prompt" if self._append_turn_prompt_fragment_by_position(
+                req,
+                marker,
+                environment_injection,
+                priority=30,
+                source="environment",
+            ) else "system_prompt"
             if placement == "system_prompt":
                 req.system_prompt = f"{current_prompt}\n\n{marker}\n{environment_injection}".strip()
             await self._record_request_prompt_fragment(
@@ -2258,7 +2277,94 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         }
         return aliases.get(text, text if text in {"auto", "prompt", "system_prompt"} else "prompt")
 
-    def _append_turn_prompt_fragment_by_position(self, req: ProviderRequest, marker: str, text: str) -> bool:
+    @staticmethod
+    def _normalize_framework_session_lock_mode(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        aliases = {
+            "auto": "auto",
+            "自动": "auto",
+            "compat": "auto",
+            "compatibility": "auto",
+            "兼容": "auto",
+            "legacy": "auto",
+            "旧版": "auto",
+            "always": "always",
+            "on": "always",
+            "true": "always",
+            "enable": "always",
+            "enabled": "always",
+            "开启": "always",
+            "始终": "always",
+            "off": "off",
+            "false": "off",
+            "disable": "off",
+            "disabled": "off",
+            "关闭": "off",
+        }
+        return aliases.get(text, text if text in {"auto", "always", "off"} else "auto")
+
+    def _detect_astrbot_version(self) -> str:
+        candidates: list[Any] = []
+        for obj in (
+            getattr(self, "context", None),
+            getattr(getattr(self, "context", None), "core_lifecycle", None),
+            getattr(getattr(self, "context", None), "metadata", None),
+        ):
+            if obj is None:
+                continue
+            for attr in ("version", "astrbot_version", "__version__", "VERSION"):
+                try:
+                    candidates.append(getattr(obj, attr, ""))
+                except Exception:
+                    pass
+        for module_name in ("astrbot", "astrbot.core", "astrbot.api"):
+            try:
+                module = importlib.import_module(module_name)
+            except Exception:
+                continue
+            for attr in ("__version__", "VERSION", "version"):
+                try:
+                    candidates.append(getattr(module, attr, ""))
+                except Exception:
+                    pass
+        for candidate in candidates:
+            text = _single_line(candidate, 40)
+            if re.search(r"\d+\.\d+(?:\.\d+)?", text):
+                return text
+        return ""
+
+    @staticmethod
+    def _parse_version_tuple(value: Any) -> tuple[int, int, int] | None:
+        match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", str(value or ""))
+        if not match:
+            return None
+        return (
+            int(match.group(1)),
+            int(match.group(2)),
+            int(match.group(3) or 0),
+        )
+
+    def _framework_session_lock_enabled(self) -> bool:
+        mode = self._normalize_framework_session_lock_mode(getattr(self, "framework_session_lock_mode", "auto"))
+        if mode == "always":
+            return True
+        if mode == "off":
+            return False
+        version = self._parse_version_tuple(self._detect_astrbot_version())
+        if version is None:
+            return False
+        # AstrBot 4.25.x 曾出现主链/会话库并发锁问题；新版本默认不再额外串行化。
+        return (4, 25, 0) <= version <= (4, 25, 2)
+
+    def _append_turn_prompt_fragment_by_position(
+        self,
+        req: ProviderRequest,
+        marker: str,
+        text: str,
+        *,
+        priority: int = 50,
+        source: str = "",
+    ) -> bool:
         position = self._normalize_passive_injection_position(getattr(self, "passive_injection_position", "prompt"))
         if position == "system_prompt":
             return False
@@ -2266,14 +2372,64 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         if not content:
             return False
         try:
+            marker = _single_line(marker, 120) or "<!-- private_companion_turn_fragment -->"
             current = str(getattr(req, "prompt", "") or "")
-            if marker in current:
+            fragments = getattr(req, "_private_companion_turn_prompt_fragments", None)
+            if not isinstance(fragments, list):
+                fragments = []
+                setattr(req, "_private_companion_turn_prompt_fragments", fragments)
+            if marker in current or any(isinstance(item, dict) and item.get("marker") == marker for item in fragments):
                 return True
-            setattr(req, "prompt", f"{current}\n\n{marker}\n{content}".strip())
+            fragments.append(
+                {
+                    "marker": marker,
+                    "content": content,
+                    "priority": int(priority),
+                    "source": _single_line(source, 80),
+                    "index": len(fragments),
+                }
+            )
+            self._render_turn_prompt_fragments(req)
             return True
         except Exception as exc:
             logger.debug("[PrivateCompanion] 指定位置 prompt 注入失败,回退 system_prompt: %s", _single_line(exc, 120))
             return False
+
+    def _render_turn_prompt_fragments(self, req: ProviderRequest) -> None:
+        start_marker = "<!-- private_companion_turn_fragments_start -->"
+        end_marker = "<!-- private_companion_turn_fragments_end -->"
+        current = str(getattr(req, "prompt", "") or "")
+        base = re.sub(
+            rf"\n*\s*{re.escape(start_marker)}.*?{re.escape(end_marker)}\s*",
+            "\n\n",
+            current,
+            flags=re.DOTALL,
+        ).strip()
+        fragments = getattr(req, "_private_companion_turn_prompt_fragments", None)
+        if not isinstance(fragments, list) or not fragments:
+            setattr(req, "prompt", base)
+            return
+        seen_markers: set[str] = set()
+        seen_content: set[str] = set()
+        rendered_parts: list[str] = []
+        for item in sorted(
+            (frag for frag in fragments if isinstance(frag, dict)),
+            key=lambda frag: (_safe_int(frag.get("priority"), 50), _safe_int(frag.get("index"), 0)),
+        ):
+            marker = _single_line(item.get("marker"), 120)
+            content = str(item.get("content") or "").strip()
+            if not marker or not content:
+                continue
+            if marker in seen_markers or content in seen_content:
+                continue
+            seen_markers.add(marker)
+            seen_content.add(content)
+            rendered_parts.append(f"{marker}\n{content}")
+        if not rendered_parts:
+            setattr(req, "prompt", base)
+            return
+        managed = f"{start_marker}\n" + "\n\n".join(rendered_parts) + f"\n{end_marker}"
+        setattr(req, "prompt", f"{base}\n\n{managed}".strip() if base else managed)
 
     async def _record_request_prompt_fragment(
         self,
@@ -2316,7 +2472,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
     async def _format_passive_environment_fragment(self, event: AstrMessageEvent, *, lightweight: bool = False) -> str:
         if not lightweight:
             return await self._format_environment_perception(event)
-        if not self.enable_environment_perception:
+        if not self._feature_enabled_or_temp_unlocked("enable_environment_perception"):
             return ""
         current = self._environment_now()
         lines = [
@@ -2354,14 +2510,24 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         message_text = str(getattr(event, "message_str", "") or "")
         current_prompt = req.system_prompt or ""
         atrelay_instruction = self._atrelay_tool_instruction()
-        if atrelay_instruction and "<!-- private_companion_atrelay_tools_v1 -->" not in current_prompt:
+        current_turn_prompt = str(getattr(req, "prompt", "") or "")
+        atrelay_marker = "<!-- private_companion_atrelay_tools_v1 -->"
+        if atrelay_instruction and atrelay_marker not in current_prompt and atrelay_marker not in current_turn_prompt:
             if any(token in message_text for token in (
                 "发到", "发给", "告诉", "转告", "转达", "带话", "捎话", "通知", "私聊",
                 "帮我", "替我", "你去", "跟他说", "和他说", "跟她说", "和她说", "说一声",
                 "@", "艾特", "群友", "群里", "群聊", "出现", "冒泡", "上线",
             )):
-                current_prompt = f"{current_prompt}\n\n<!-- private_companion_atrelay_tools_v1 -->\n{atrelay_instruction}".strip()
-                req.system_prompt = current_prompt
+                placement = "prompt" if self._append_turn_prompt_fragment_by_position(
+                    req,
+                    atrelay_marker,
+                    atrelay_instruction,
+                    priority=88,
+                    source="tools",
+                ) else "system_prompt"
+                if placement == "system_prompt":
+                    current_prompt = f"{current_prompt}\n\n{atrelay_marker}\n{atrelay_instruction}".strip()
+                    req.system_prompt = current_prompt
                 await self._record_request_prompt_fragment(
                     event,
                     title="跨群转述工具注入",
@@ -2369,13 +2535,24 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     text=atrelay_instruction,
                     source="tools",
                     mode="conditional",
+                    metadata={"注入位置": placement},
                 )
         qzone_instruction = self._qzone_tool_instruction()
         current_prompt = req.system_prompt or ""
-        if qzone_instruction and "<!-- private_companion_qzone_tools_v1 -->" not in current_prompt:
+        current_turn_prompt = str(getattr(req, "prompt", "") or "")
+        qzone_marker = "<!-- private_companion_qzone_tools_v1 -->"
+        if qzone_instruction and qzone_marker not in current_prompt and qzone_marker not in current_turn_prompt:
             if any(token in message_text for token in ("说说", "空间", "QQ空间", "动态", "点赞", "评论")):
-                current_prompt = f"{current_prompt}\n\n<!-- private_companion_qzone_tools_v1 -->\n{qzone_instruction}".strip()
-                req.system_prompt = current_prompt
+                placement = "prompt" if self._append_turn_prompt_fragment_by_position(
+                    req,
+                    qzone_marker,
+                    qzone_instruction,
+                    priority=88,
+                    source="tools",
+                ) else "system_prompt"
+                if placement == "system_prompt":
+                    current_prompt = f"{current_prompt}\n\n{qzone_marker}\n{qzone_instruction}".strip()
+                    req.system_prompt = current_prompt
                 await self._record_request_prompt_fragment(
                     event,
                     title="QQ 空间工具注入",
@@ -2383,6 +2560,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     text=qzone_instruction,
                     source="tools",
                     mode="conditional",
+                    metadata={"注入位置": placement},
                 )
 
     def _is_lightweight_private_passive_inbound(self, text: str) -> bool:
@@ -2430,9 +2608,18 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             return
         marker = "<!-- private_companion_group_persona_denoise_v1 -->"
         current_prompt = req.system_prompt or ""
-        if marker in current_prompt:
+        current_turn_prompt = str(getattr(req, "prompt", "") or "")
+        if marker in current_prompt or marker in current_turn_prompt:
             return
-        req.system_prompt = f"{current_prompt}\n\n{marker}\n{denoise_text}".strip()
+        placement = "prompt" if self._append_turn_prompt_fragment_by_position(
+            req,
+            marker,
+            denoise_text,
+            priority=32,
+            source="group",
+        ) else "system_prompt"
+        if placement == "system_prompt":
+            req.system_prompt = f"{current_prompt}\n\n{marker}\n{denoise_text}".strip()
         await self._record_request_prompt_fragment(
             event,
             title="群聊人格降噪注入",
@@ -2440,6 +2627,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             text=denoise_text,
             source="group",
             mode="group",
+            metadata={"注入位置": placement},
         )
 
     async def _append_non_target_private_identity_guard_to_request(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
@@ -2754,6 +2942,14 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         group = _PROACTIVE_ONLY_TEMP_UNLOCK_GROUPS.get(feature, set())
         return bool(group and (group & unlocks))
 
+    def _feature_enabled_or_temp_unlocked(self, feature: str, default: bool = False) -> bool:
+        if bool(getattr(self, feature, default)):
+            return True
+        return bool(
+            getattr(self, "enable_proactive_only_mode", False)
+            and self._proactive_only_temp_unlock_allows(feature)
+        )
+
     def _proactive_only_limited_passive_event(self, event: AstrMessageEvent | None) -> bool:
         return bool(
             getattr(self, "enable_proactive_only_mode", False)
@@ -2921,7 +3117,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             )
         self._trim_passive_request_context_if_needed(event, req, is_private_chat=is_private_chat)
         group_id_for_lock = ""
-        if not is_private_chat and self.enable_group_companion:
+        if not is_private_chat and self._feature_enabled_or_temp_unlocked("enable_group_companion"):
             group_id_for_lock = self._extract_group_id_from_event(event)
             if group_id_for_lock and self._group_enabled_for_event(group_id_for_lock):
                 await self._acquire_framework_session_lock_for_event(
@@ -2949,13 +3145,13 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             await self._append_group_persona_denoise_to_request(event, req)
         else:
             await self._append_non_target_private_identity_guard_to_request(event, req)
-        if not self.inject_passive_states:
+        if not self._feature_enabled_or_temp_unlocked("inject_passive_states"):
             await self._append_conditional_tool_instructions_to_request(event, req)
             await self._append_environment_perception_to_request(event, req)
             return
 
         if not is_private_chat:
-            group_id = self._extract_group_id_from_event(event) if self.enable_group_companion else ""
+            group_id = self._extract_group_id_from_event(event) if self._feature_enabled_or_temp_unlocked("enable_group_companion") else ""
             group: dict[str, Any] | None = None
             sender_id = ""
             if group_id and self._group_enabled_for_event(group_id):
@@ -2964,7 +3160,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 except Exception:
                     sender_id = ""
                 group = self._get_group(group_id)
-            if self.enable_group_context_injection and self.enable_group_companion:
+            if self.enable_group_context_injection and self._feature_enabled_or_temp_unlocked("enable_group_companion"):
                 if group_id and self._group_enabled_for_event(group_id):
                     if not isinstance(group, dict):
                         group = self._get_group(group_id)
@@ -2974,7 +3170,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     )
                     marker = "<!-- private_companion_group_context_v1 -->"
                     current_prompt = req.system_prompt or ""
-                    if marker not in current_prompt:
+                    current_turn_prompt = str(getattr(req, "prompt", "") or "")
+                    if marker not in current_prompt and marker not in current_turn_prompt:
                         combined_text = await self._consume_semantic_message_buffer_for_event(event, private_chat=False)
                         extra = ""
                         if combined_text:
@@ -2982,7 +3179,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                             if isinstance(high_intensity, dict) and high_intensity.get("active"):
                                 extra = (
                                     "\n\n【本轮高强度合并消息】\n"
-                                    "群里刚刚短时间内多次叫到你,下面这些消息已合并为同一轮处理。请集中回应共同重点,不要逐条分别回复,也不要扩展太多旁支：\n"
+                                    "群里刚刚短时间内多次叫到你，下面这些消息已合并为同一轮：\n"
                                     f"{combined_text}"
                                 )
                             else:
@@ -3003,10 +3200,23 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                             recall_context = self._format_recalled_messages_for_natural_query(event, limit=5)
                             if recall_context:
                                 extra = f"{extra}\n\n{recall_context}" if extra else f"\n\n{recall_context}"
-                        group_context_text = f"{self._format_group_context_for_prompt(group, sender_id, str(event.message_str or ''))}{wakeup_state_text}{extra}"
-                        req.system_prompt = (
-                            f"{current_prompt}\n\n{marker}\n{group_context_text}"
-                        ).strip()
+                        passive_group_formatter = getattr(self, "_format_group_passive_reply_context_for_prompt", None)
+                        if callable(passive_group_formatter):
+                            group_context_text = passive_group_formatter(group, sender_id, str(event.message_str or ""))
+                        else:
+                            group_context_text = self._format_group_context_for_prompt(group, sender_id, str(event.message_str or ""))
+                        group_context_text = f"{group_context_text}{wakeup_state_text}{extra}"
+                        placement = "prompt" if self._append_turn_prompt_fragment_by_position(
+                            req,
+                            marker,
+                            group_context_text,
+                            priority=60,
+                            source="group",
+                        ) else "system_prompt"
+                        if placement == "system_prompt":
+                            req.system_prompt = (
+                                f"{current_prompt}\n\n{marker}\n{group_context_text}"
+                            ).strip()
                         await self._record_request_prompt_fragment(
                             event,
                             title="群聊上下文注入",
@@ -3014,16 +3224,29 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                             text=group_context_text,
                             source="group",
                             mode="group",
+                            metadata={"注入位置": placement},
                         )
             group_recall_text = _single_line(
                 getattr(event, "private_companion_group_text", "") or getattr(event, "message_str", ""),
                 260,
             )
             recall_marker = "<!-- private_companion_recall_query_v1 -->"
-            if self._user_asks_recalled_messages(group_recall_text) and recall_marker not in (req.system_prompt or ""):
+            if (
+                self._user_asks_recalled_messages(group_recall_text)
+                and recall_marker not in (req.system_prompt or "")
+                and recall_marker not in str(getattr(req, "prompt", "") or "")
+            ):
                 recall_context = self._format_recalled_messages_for_natural_query(event, limit=5)
                 if recall_context:
-                    req.system_prompt = f"{req.system_prompt or ''}\n\n{recall_marker}\n{recall_context}".strip()
+                    placement = "prompt" if self._append_turn_prompt_fragment_by_position(
+                        req,
+                        recall_marker,
+                        recall_context,
+                        priority=66,
+                        source="recall",
+                    ) else "system_prompt"
+                    if placement == "system_prompt":
+                        req.system_prompt = f"{req.system_prompt or ''}\n\n{recall_marker}\n{recall_context}".strip()
                     await self._record_request_prompt_fragment(
                         event,
                         title="历史召回查询注入",
@@ -3031,6 +3254,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                         text=recall_context,
                         source="recall",
                         mode="group",
+                        metadata={"注入位置": placement},
                     )
             await self._append_conditional_tool_instructions_to_request(event, req)
             await self._append_environment_perception_to_request(event, req)
@@ -3073,7 +3297,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 prompt_surface.add("important.dates", important_dates, priority=14, source="daily_state")
             worldview_context = (
                 self._format_worldview_adaptation_prompt()
-                if self.enable_environment_perception and self.enable_worldview_perception
+                if self._feature_enabled_or_temp_unlocked("enable_environment_perception") and self.enable_worldview_perception
                 else ""
             )
             if worldview_context:
@@ -3408,7 +3632,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             news_context = self._format_recent_news_context_for_reply(inbound_text)
             if news_context:
                 prompt_surface.add("news.recent", news_context, priority=76, source="news")
-            if self.enable_skill_growth_passive_injection:
+            if self._feature_enabled_or_temp_unlocked("enable_skill_growth_passive_injection"):
                 skill_context = self._format_skill_growth_for_prompt()
                 if skill_context:
                     prompt_surface.add("skill.growth", skill_context, priority=78, source="skill")
@@ -3450,7 +3674,13 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             logger.debug("[PrivateCompanion] 被动状态提示词片段为空,跳过状态 marker 注入")
             await self._append_conditional_tool_instructions_to_request(event, req)
             return
-        injection_placement = "prompt" if self._append_turn_prompt_fragment_by_position(req, marker, injection) else "system_prompt"
+        injection_placement = "prompt" if self._append_turn_prompt_fragment_by_position(
+            req,
+            marker,
+            injection,
+            priority=40,
+            source="passive_state",
+        ) else "system_prompt"
         if injection_placement == "system_prompt":
             req.system_prompt = f"{current_prompt}\n\n{marker}\n{injection}".strip()
         await self._append_conditional_tool_instructions_to_request(event, req)
@@ -4072,7 +4302,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         if receipt_text and await self._maybe_handle_atrelay_private_receipt_reply(event, user_id, sender_display_name, receipt_text):
             return
         forward_only_prompt = ""
-        if self.enable_forward_message_adaptation and not text:
+        if self._feature_enabled_or_temp_unlocked("enable_forward_message_adaptation") and not text:
             try:
                 forward_id, forward_payload = await self._find_forward_descriptor_for_event(event)
             except Exception as exc:
@@ -4463,7 +4693,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
     async def on_group_message(self, event: AstrMessageEvent):
         """观察群聊消息，维护群上下文并判断是否自然唤醒 Bot。"""
         self._qzone_note_event_bot(event)
-        if not self.enable_group_companion:
+        if not self._feature_enabled_or_temp_unlocked("enable_group_companion"):
             return
         received_ts = _now_ts()
         text = _single_line(event.message_str, 260)
@@ -4602,7 +4832,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                         "wakeup_strength": strength,
                         "wakeup_strength_label": self._group_wakeup_strength_label(strength),
                         "wakeup_fatigue": dict(fatigue),
-                        "wakeup_instruction": "群友提到了你的名字；这不一定是正式提问,要像群聊里被自然叫到一样接话。",
+                        "wakeup_note": "群友提到了 Bot 名字。",
                     }
                 )
                 group["last_group_wakeup_at"] = _now_ts()
@@ -4628,7 +4858,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     result="woke",
                     strength=strength,
                     fatigue=fatigue,
-                    note=_single_line(scene.get("wakeup_instruction"), 180),
+                    note=_single_line(scene.get("wakeup_note"), 180),
                 )
             else:
                 wakeup = self._evaluate_group_wakeup(
@@ -4654,7 +4884,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                             "wakeup_strength": strength,
                             "wakeup_strength_label": self._group_wakeup_strength_label(strength),
                             "wakeup_fatigue": dict(fatigue),
-                            "wakeup_instruction": _single_line(wakeup.get("instruction"), 180),
+                            "wakeup_note": _single_line(wakeup.get("note"), 180),
                             "wakeup_topic_weight": wakeup.get("topic_weight") if isinstance(wakeup.get("topic_weight"), dict) else {},
                         }
                     )
@@ -4667,6 +4897,10 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                         "strength_label": self._group_wakeup_strength_label(strength),
                         "fatigue": dict(fatigue),
                         "probability": wakeup.get("probability"),
+                        "score": wakeup.get("score"),
+                        "threshold": wakeup.get("threshold"),
+                        "intensity": wakeup.get("intensity"),
+                        "help_type": wakeup.get("help_type"),
                         "topic_weight": wakeup.get("topic_weight") if isinstance(wakeup.get("topic_weight"), dict) else {},
                         "sender_id": sender_id,
                         "sender_name": _single_line(sender_name, 40),
@@ -4683,7 +4917,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                         result="woke",
                         strength=strength,
                         fatigue=fatigue,
-                        note=_single_line(wakeup.get("instruction"), 180),
+                        note=_single_line(wakeup.get("note"), 180),
                     )
                     logger.info(
                         "[PrivateCompanion] 群聊增强唤醒命中: group=%s sender=%s type=%s word=%s strength=%s fatigue=%s",
@@ -4753,7 +4987,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                         _single_line(text, 80),
                     )
             if high_intensity_state.get("active") and talking_to_bot and not group_reference_media_with_text:
-                high_key = self._group_high_intensity_buffer_key(group_id)
+                high_key = self._group_high_intensity_buffer_key(group_id, sender_id)
                 if self._note_semantic_message_buffer(
                     high_key,
                     text,
@@ -4773,9 +5007,10 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     )
                     self._save_data_sync()
                     logger.info(
-                        "[PrivateCompanion] 群聊高强度消息已合并等待: group=%s sender=%s recent_wakeups=%s wait=%ss text=%s",
+                        "[PrivateCompanion] 群聊高强度消息已合并等待: group=%s sender=%s scope=%s recent_wakeups=%s wait=%ss text=%s",
                         group_id,
                         sender_id,
+                        getattr(self, "group_high_intensity_merge_scope", "group"),
                         high_intensity_state.get("recent_wakeups"),
                         self._group_high_intensity_merge_wait_seconds(),
                         _single_line(text, 80),
@@ -4866,11 +5101,12 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             await self._maybe_group_interject(event, group_snapshot, text)
         else:
             logger.info(
-                "[PrivateCompanion] 群聊高强度收口生效: group=%s recent_wakeups=%s threshold=%s reason=%s merge_wait=%ss skip=followup-refresh/interject",
+                "[PrivateCompanion] 群聊高强度收口生效: group=%s recent_wakeups=%s threshold=%s reason=%s merge_scope=%s merge_wait=%ss skip=followup-refresh/interject",
                 group_id,
                 group_snapshot_high_intensity.get("recent_wakeups"),
                 group_snapshot_high_intensity.get("threshold"),
                 group_snapshot_high_intensity.get("reason"),
+                getattr(self, "group_high_intensity_merge_scope", "group"),
                 self._group_high_intensity_merge_wait_seconds(),
             )
         original_interject_at = _safe_float(group.get("last_interject_at"), 0) if isinstance(group, dict) else 0

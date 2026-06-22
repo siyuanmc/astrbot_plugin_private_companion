@@ -424,6 +424,10 @@ class GroupWakeupMixin:
             return "strong"
         if wakeup_type == "context_word":
             return "normal"
+        if wakeup_type == "question":
+            return "normal"
+        if wakeup_type == "cold_group":
+            return "light"
         return "normal" if level == "none" and str(scene.get("trigger") or "") == "quiet_flow" else "light"
 
     @staticmethod
@@ -465,9 +469,13 @@ class GroupWakeupMixin:
                 "strength": strength,
                 "strength_label": self._group_wakeup_strength_label(strength),
                 "probability": _safe_float(wakeup.get("probability"), 0.0, 0.0),
+                "score": _safe_int(wakeup.get("score"), 0, 0),
+                "threshold": _safe_int(wakeup.get("threshold"), 0, 0),
+                "intensity": _single_line(wakeup.get("intensity"), 20),
+                "help_type": _single_line(wakeup.get("help_type"), 30),
                 "reason": _single_line(wakeup.get("reason"), 80),
                 "topic_weight": wakeup.get("topic_weight") if isinstance(wakeup.get("topic_weight"), dict) else {},
-                "note": _single_line(note or wakeup.get("instruction"), 180),
+                "note": _single_line(note or wakeup.get("note"), 180),
                 "sender_id": _single_line(sender_id, 40),
                 "sender_name": _single_line(sender_name, 40),
                 "text": _single_line(text, 160),
@@ -640,6 +648,159 @@ class GroupWakeupMixin:
             "topic_texts": list(context.get("topic_texts") or [])[-4:],
         }
 
+    def _group_wakeup_probability_context(
+        self,
+        group: dict[str, Any],
+        scene: dict[str, Any],
+        probability: float,
+        wakeup_type: str,
+    ) -> tuple[float, dict[str, Any]]:
+        probability = max(0.0, min(1.0, float(probability or 0.0)))
+        atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
+        pace = str(atmosphere.get("pace") or "")
+        mood = str(atmosphere.get("mood") or "")
+        if pace == "热闹":
+            probability *= 0.55 if wakeup_type != "question" else 0.72
+        elif pace == "安静" and wakeup_type in {"question", "cold_group"}:
+            probability *= 1.15
+        if mood == "求助" and wakeup_type == "question":
+            probability *= 1.35
+        if str(scene.get("trigger") or "") in {"reply_in_flow", "quick_follow"}:
+            probability *= 0.65
+        state = self.data.get("daily_state") if isinstance(getattr(self, "data", None), dict) else {}
+        runtime = state.get("sleep_runtime") if isinstance(state, dict) and isinstance(state.get("sleep_runtime"), dict) else {}
+        phase = str(runtime.get("phase") or "")
+        energy = _safe_int(state.get("energy") if isinstance(state, dict) else 70, 70, 0, 100)
+        mood_bias = str(state.get("mood_bias") or "") if isinstance(state, dict) else ""
+        if phase in {"falling_asleep", "light_sleep", "sleeping_again", "woken"}:
+            probability *= 0.18
+        if energy <= 35:
+            probability *= 0.55
+        elif energy >= 82:
+            probability *= 1.12
+        if any(token in mood_bias for token in ("无聊", "烦闷", "好奇", "兴奋")):
+            probability *= 1.15
+        fatigue = self._group_wakeup_fatigue(group)
+        if str(fatigue.get("level") or "") == "medium":
+            probability *= 0.65
+        elif str(fatigue.get("level") or "") == "high":
+            probability *= 0.35
+        return min(0.95, max(0.0, probability)), fatigue
+
+    def _group_wakeup_question_signal(self, text: str) -> dict[str, Any]:
+        cleaned = _single_line(text, 260)
+        if len(cleaned) < 4:
+            return {}
+        if re.search(r"(https?://|www\.|```|\[图片\]|\[语音\]|\[视频\]|\[转发消息\])", cleaned, flags=re.I):
+            return {}
+        if re.search(r"(哈哈|草|笑死|绷不住|乐|乐死|不是吧|不会吧).{0,8}[?？]?$", cleaned):
+            return {}
+        score = 0
+        reason = ""
+        help_type = "解释"
+        if re.search(r"(救命|急|急急|在线等|崩了|寄了|炸了|跑不起来|过不去|卡住|报错|异常|失败|error|traceback|bug)", cleaned, flags=re.I):
+            score += 18
+            help_type = "排障"
+        if re.search(r"(报错|异常|失败|error|traceback|bug|日志|堆栈|闪退|崩溃|跑不起来)", cleaned, flags=re.I):
+            help_type = "排障"
+        elif re.search(r"(怎么弄|怎么做|怎么搞|如何|教程|步骤|配置|安装|使用)", cleaned):
+            help_type = "操作"
+        elif re.search(r"(这是什么|这个是什么|看得懂|识别|图里|截图)", cleaned):
+            help_type = "识别"
+        elif re.search(r"(啥意思|什么意思|为什么|为啥|咋回事|怎么回事|什么情况|啥情况)", cleaned):
+            help_type = "解释"
+        strong_patterns = (
+            (r"(有没有|有无|有没有人|有人|谁|哪位|大佬).{0,12}(懂|知道|会|看得懂|能解释|能帮|帮忙)", 76, "open_help"),
+            (r"(求问|请教|救命|咋办|怎么办|怎么弄|怎么解决|怎么处理|怎么搞)", 80, "help_request"),
+            (r"(为什么|为啥|咋回事|怎么回事|什么情况|啥情况|啥意思|什么意思)", 68, "explain_question"),
+            (r"(这是什么|这个是什么|这个咋|这个怎么|这个为啥|这个能不能|这能不能)", 64, "identify_question"),
+        )
+        for pattern, base_score, base_reason in strong_patterns:
+            if re.search(pattern, cleaned):
+                score = max(score, base_score)
+                reason = base_reason
+                break
+        if re.search(r"[?？]$", cleaned) and re.search(r"(怎么|为什么|为啥|什么|啥|哪|谁|能不能|可以吗|行吗|会不会|是不是|有没有)", cleaned):
+            score = max(score, 54)
+            reason = reason or "question_mark"
+        if score <= 0:
+            return {}
+        intensity = "高" if score >= 85 else ("中" if score >= 70 else "低")
+        return {"word": "疑问", "reason": reason or "question", "score": min(100, score), "intensity": intensity, "help_type": help_type}
+
+    def _group_wakeup_question_score_context(
+        self,
+        group: dict[str, Any],
+        scene: dict[str, Any],
+        signal: dict[str, Any],
+    ) -> tuple[int, dict[str, Any], list[str]]:
+        score = max(0, min(100, _safe_int(signal.get("score"), 0, 0)))
+        notes: list[str] = []
+        atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
+        pace = str(atmosphere.get("pace") or "")
+        mood = str(atmosphere.get("mood") or "")
+        if pace == "热闹":
+            score -= 8
+            notes.append("热闹降权")
+        elif pace == "安静":
+            score += 4
+            notes.append("安静加权")
+        if mood == "求助":
+            score += 10
+            notes.append("求助气氛")
+        if str(scene.get("trigger") or "") in {"reply_in_flow", "quick_follow"}:
+            score -= 10
+            notes.append("疑似接别人话")
+        state = self.data.get("daily_state") if isinstance(getattr(self, "data", None), dict) else {}
+        runtime = state.get("sleep_runtime") if isinstance(state, dict) and isinstance(state.get("sleep_runtime"), dict) else {}
+        phase = str(runtime.get("phase") or "")
+        energy = _safe_int(state.get("energy") if isinstance(state, dict) else 70, 70, 0, 100)
+        if phase in {"falling_asleep", "light_sleep", "sleeping_again", "woken"}:
+            score -= 35
+            notes.append("休息降权")
+        if energy <= 35:
+            score -= 8
+            notes.append("低能量降权")
+        fatigue = self._group_wakeup_fatigue(group)
+        if str(fatigue.get("level") or "") == "medium":
+            score -= 10
+            notes.append("疲劳降权")
+        elif str(fatigue.get("level") or "") == "high":
+            score -= 22
+            notes.append("高疲劳降权")
+        return max(0, min(100, score)), fatigue, notes
+
+    def _group_wakeup_cold_group_signal(self, group: dict[str, Any], text: str, now: float) -> dict[str, Any]:
+        if not bool(getattr(self, "enable_group_wakeup_cold_group", False)):
+            return {}
+        idle_minutes = max(3, _safe_int(getattr(self, "group_wakeup_cold_group_idle_minutes", 25), 25, 3))
+        last_seen = _safe_float(group.get("last_seen"), 0)
+        if last_seen <= 0 or now - last_seen < idle_minutes * 60:
+            return {}
+        cleaned = _single_line(text, 260)
+        if not (3 <= len(cleaned) <= 120):
+            return {}
+        if re.search(r"^(?:[/!！#]|签到|打卡|菜单|帮助|help\b)", cleaned, flags=re.I):
+            return {}
+        if re.search(r"(https?://|www\.|```|\[图片\]|\[语音\]|\[视频\]|\[转发消息\])", cleaned, flags=re.I):
+            return {}
+        state = self.data.get("daily_state") if isinstance(getattr(self, "data", None), dict) else {}
+        runtime = state.get("sleep_runtime") if isinstance(state, dict) and isinstance(state.get("sleep_runtime"), dict) else {}
+        phase = str(runtime.get("phase") or "")
+        energy = _safe_int(state.get("energy") if isinstance(state, dict) else 70, 70, 0, 100)
+        if phase in {"falling_asleep", "light_sleep", "sleeping_again", "woken"} or energy <= 35:
+            return {}
+        direct = re.search(r"(有人吗|在吗|还在吗|睡了吗|怎么没人|好安静|冷群|冒泡|路过|诈尸|开门|醒醒)", cleaned)
+        if direct:
+            return {"word": "冷群", "reason": "cold_group_opening", "score": 86, "idle_seconds": round(now - last_seen, 1)}
+        if re.search(r"(早|早上好|上午好|中午好|下午好|晚上好|晚好|嗨|hello|hi|哈喽|冒个泡|有人不|人呢)", cleaned, flags=re.I):
+            return {"word": "冷群", "reason": "cold_group_greeting", "score": 72, "idle_seconds": round(now - last_seen, 1)}
+        if re.search(r"(救命|急|求问|请教|有没有人|有人懂|谁会|帮忙|咋办|怎么办|怎么弄|报错|失败|崩了|卡住)", cleaned, flags=re.I):
+            return {"word": "冷群", "reason": "cold_group_help", "score": 78, "idle_seconds": round(now - last_seen, 1)}
+        if re.search(r"[?？]$", cleaned):
+            return {}
+        return {}
+
     def _evaluate_group_wakeup(
         self,
         group: dict[str, Any],
@@ -668,13 +829,19 @@ class GroupWakeupMixin:
                     "type": "direct_word",
                     "word": word,
                     "strength": strength,
-                    "probability": 1.0,
                     "reason": "direct_wakeup_word",
-                    "instruction": "群友提到了你的名字或强唤醒词；这不一定是正式提问,要像群聊里被自然叫到一样接话。",
+                    "note": "群友提到了 Bot 名字或强唤醒词。",
                 }
+        question_signal = self._group_wakeup_question_signal(cleaned) if bool(getattr(self, "enable_group_wakeup_question", True)) else {}
+        cold_group_signal = self._group_wakeup_cold_group_signal(group, cleaned, now)
+        soft_signal_hit = bool(
+            question_signal
+            or cold_group_signal
+            or any(self._text_contains_wakeup_word(cleaned, word) for word in list(self.group_wakeup_context_words or []) + self._group_wakeup_interest_words(group))
+        )
         high_intensity = self._group_high_intensity_state(group)
         if high_intensity.get("active"):
-            if any(self._text_contains_wakeup_word(cleaned, word) for word in list(self.group_wakeup_context_words or []) + self._group_wakeup_interest_words(group)):
+            if soft_signal_hit:
                 self._record_group_wakeup_log(
                     group,
                     scene=scene,
@@ -684,11 +851,11 @@ class GroupWakeupMixin:
                     wakeup={"type": "high_intensity", "word": "", "reason": "high_intensity", "probability": 0.0},
                     result="blocked",
                     strength="",
-                    note="群聊处于高强度收口模式,暂停弱相关和兴趣唤醒,优先合并处理明确叫到 Bot 的消息。",
+                    note="群聊处于高强度收口模式,暂停弱相关、解惑、冷群和兴趣唤醒,优先合并处理明确叫到 Bot 的消息。",
                 )
             return {}
         if self.group_wakeup_cooldown_seconds > 0 and now - _safe_float(group.get("last_group_wakeup_at"), 0) < self.group_wakeup_cooldown_seconds:
-            if any(self._text_contains_wakeup_word(cleaned, word) for word in list(self.group_wakeup_context_words or []) + self._group_wakeup_interest_words(group)):
+            if soft_signal_hit:
                 self._record_group_wakeup_log(
                     group,
                     scene=scene,
@@ -717,39 +884,85 @@ class GroupWakeupMixin:
                     "type": "context_word",
                     "word": word,
                     "strength": strength,
-                    "probability": 1.0,
                     "reason": "contextual_wakeup_word",
-                    "instruction": "群友提到了可能需要你接话的唤醒词；先看清来龙去脉,再自然回应,不要表现得像只是在执行关键词触发。",
+                    "note": "群友提到了可能和 Bot 有关的唤醒词。",
                 }
+        if question_signal:
+            threshold = max(0, min(100, _safe_int(getattr(self, "group_wakeup_question_threshold", 65), 65, 0)))
+            score, fatigue, score_notes = self._group_wakeup_question_score_context(group, scene, question_signal)
+            if score >= threshold:
+                strength = self._group_wakeup_strength("question", group, scene)
+                final_intensity = "高" if score >= 85 else ("中" if score >= threshold else "低")
+                return {
+                    "type": "question",
+                    "word": _single_line(question_signal.get("word"), 60) or "疑问",
+                    "strength": strength,
+                    "score": score,
+                    "threshold": threshold,
+                    "intensity": final_intensity,
+                    "help_type": _single_line(question_signal.get("help_type"), 24) or "解释",
+                    "reason": _single_line(question_signal.get("reason"), 60) or "open_question",
+                    "note": f"群里有人提出求助问题，强度：{final_intensity}，类型：{_single_line(question_signal.get('help_type'), 24) or '解释'}。",
+                }
+            self._record_group_wakeup_log(
+                group,
+                scene=scene,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                text=cleaned,
+                wakeup={
+                    "type": "question",
+                    "word": _single_line(question_signal.get("word"), 60) or "疑问",
+                    "reason": question_signal.get("reason"),
+                    "score": score,
+                    "threshold": threshold,
+                    "intensity": question_signal.get("intensity"),
+                    "help_type": question_signal.get("help_type"),
+                },
+                result="missed",
+                strength="",
+                fatigue=fatigue,
+                note=f"解惑强度 {score}/{threshold} 未达阈值" + (f"（{'、'.join(score_notes[:3])}）" if score_notes else ""),
+            )
+        if cold_group_signal:
+            threshold = max(0, min(100, _safe_int(getattr(self, "group_wakeup_cold_group_threshold", 65), 65, 0)))
+            score = max(0, min(100, _safe_int(cold_group_signal.get("score"), 0, 0)))
+            fatigue = self._group_wakeup_fatigue(group)
+            if score >= threshold:
+                strength = self._group_wakeup_strength("cold_group", group, scene)
+                return {
+                    "type": "cold_group",
+                    "word": _single_line(cold_group_signal.get("word"), 60) or "冷群",
+                    "strength": strength,
+                    "score": score,
+                    "threshold": threshold,
+                    "reason": _single_line(cold_group_signal.get("reason"), 60) or "cold_group",
+                    "note": "群聊安静后有人重新开口。",
+                }
+            self._record_group_wakeup_log(
+                group,
+                scene=scene,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                text=cleaned,
+                wakeup={
+                    "type": "cold_group",
+                    "word": _single_line(cold_group_signal.get("word"), 60) or "冷群",
+                    "reason": cold_group_signal.get("reason"),
+                    "score": score,
+                    "threshold": threshold,
+                },
+                result="missed",
+                strength="",
+                fatigue=fatigue,
+                note=f"冷群强度 {score}/{threshold} 未达阈值",
+            )
         if self.group_wakeup_interest_probability <= 0:
             return {}
         for word in self._group_wakeup_interest_words(group):
             if not self._text_contains_wakeup_word(cleaned, word):
                 continue
-            probability = min(1.0, max(0.0, self.group_wakeup_interest_probability))
-            atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
-            if str(atmosphere.get("pace") or "") == "热闹":
-                probability *= 0.55
-            if str(scene.get("trigger") or "") in {"reply_in_flow", "quick_follow"}:
-                probability *= 0.65
-            state = self.data.get("daily_state") if isinstance(getattr(self, "data", None), dict) else {}
-            runtime = state.get("sleep_runtime") if isinstance(state, dict) and isinstance(state.get("sleep_runtime"), dict) else {}
-            phase = str(runtime.get("phase") or "")
-            energy = _safe_int(state.get("energy") if isinstance(state, dict) else 70, 70, 0, 100)
-            mood = str(state.get("mood_bias") or "") if isinstance(state, dict) else ""
-            if phase in {"falling_asleep", "light_sleep", "sleeping_again", "woken"}:
-                probability *= 0.18
-            if energy <= 35:
-                probability *= 0.55
-            elif energy >= 82:
-                probability *= 1.15
-            if any(token in mood for token in ("无聊", "烦闷", "好奇", "兴奋")):
-                probability *= 1.2
-            fatigue = self._group_wakeup_fatigue(group)
-            if str(fatigue.get("level") or "") == "medium":
-                probability *= 0.65
-            elif str(fatigue.get("level") or "") == "high":
-                probability *= 0.35
+            probability, fatigue = self._group_wakeup_probability_context(group, scene, self.group_wakeup_interest_probability, "interest")
             topic_weight = self._group_wakeup_topic_interest_weight(
                 group,
                 word,
@@ -768,7 +981,7 @@ class GroupWakeupMixin:
                     "probability": round(probability, 3),
                     "reason": "interest_keyword",
                     "topic_weight": topic_weight,
-                    "instruction": "群聊碰到了你感兴趣的话题；这是兴趣驱动的自然接话,要短、轻,不要抢走原本话题。",
+                    "note": f"群聊出现了兴趣词：{word}。",
                 }
             self._record_group_wakeup_log(
                 group,
@@ -884,18 +1097,18 @@ class GroupWakeupMixin:
             return "群里所有人（非特定对象）"
         return name or target
 
-    def _scene_instruction_text(self, scene: dict[str, Any]) -> str:
+    def _scene_note_text(self, scene: dict[str, Any]) -> str:
         target = str(scene.get("talking_to") or "group")
         trigger = str(scene.get("trigger") or "")
         if target == "bot":
             if trigger.startswith("group_wakeup_"):
-                return "当前消息不是直接发给你的私聊式提问,而是在群聊里提到了你或碰到你感兴趣的话题；先看清上下文和关系网,再像群友自然接话,短一点。"
-            return "当前消息在和你对话,可以正常回应。"
+                return "本轮由群聊唤醒触发：群里提到 Bot 或相关话题。"
+            return "当前消息在和 Bot 对话。"
         if target != "group":
-            return f"当前消息主要在和{self._scene_talking_to_text(scene)}说话,不要误以为是在问你；除非你被明确叫到,否则只把它当群聊背景。"
+            return f"当前消息主要在和{self._scene_talking_to_text(scene)}说话。"
         if trigger == "at_all":
-            return "当前消息 @ 全体,包含你但不是只对你说话；回应要保守。"
-        return "当前消息主要面向整个群；只有被明确叫到或确实需要接话时才回应。"
+            return "当前消息 @ 全体，包含 Bot。"
+        return "当前消息主要面向整个群。"
 
     def _record_group_wakeup_state_adjustment(
         self,
