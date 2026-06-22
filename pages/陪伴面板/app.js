@@ -367,17 +367,17 @@ const featureMeta = {
   enable_environment_perception: ["环境感知", "注入当前时间、日期语境、平台、群聊/私聊和消息媒介信息。"],
   enable_holiday_perception: ["节假日感知", "识别工作日、周末、节假日和调休，影响生活节奏判断。"],
   enable_platform_perception: ["平台感知", "识别 QQ/平台、私聊/群聊、群号群名以及图片语音视频消息。"],
-  enable_model_perception: ["模型感知", "识别当前会话 LLM、插件任务模型覆盖和视觉转述模型配置。"],
+  enable_model_perception: ["模型感知", "识别当前会话 LLM 和视觉转述模型配置。"],
   enable_worldview_perception: ["世界观适配感知", "把插件能力和生活语境转换成当前人设世界观说法，默认关闭，避免和 AstrBot 人设重复。"],
   enable_lunar_perception: ["农历感知", "可用时注入农历日期，辅助节日、生活氛围和日记语境。"],
   enable_solar_term_perception: ["节气感知", "注入当天或临近节气，让日程和表达更贴合时令。"],
   enable_almanac_perception: ["轻量黄历", "生成宜/忌氛围标签，默认关闭，避免玄学感太强。"],
   enable_yesterday_screen_diary_context: ["昨日屏幕日记", "每天只读取 screen_companion 的昨日观察日记脱敏摘要，作为今日状态和日程背景，不读取实时屏幕。"],
-  enable_group_companion: ["群聊总开关", "控制是否处理群聊观察、画像、黑话和上下文注入。"],
+  enable_group_companion: ["群聊总开关", "控制是否处理群聊观察、黑话和上下文注入。"],
   enable_group_slang_learning: ["群黑话学习", "记录群内常用梗、简称和特殊表达。"],
-  enable_group_member_profiles: ["群成员画像", "记录成员发言习惯和群内角色，帮助判断气氛。"],
+  enable_group_member_profiles: ["群内成员观察", "记录成员在当前群里的近期发言、短句和活跃痕迹。"],
   enable_group_context_injection: ["群上下文注入", "在群聊回复时加入群氛围、话题和成员信息。"],
-  enable_group_persona_denoise: ["群聊人格降噪", "降低群聊里的私聊腔、状态汇报和关系画像外溢。"],
+  enable_group_persona_denoise: ["群聊人格降噪", "降低群聊里的私聊腔、状态汇报和私聊关系外溢。"],
   enable_forward_message_adaptation: ["合并消息阅读", "读取合并转发节点并整理成自然聊天记录，让 Bot 能理解转发里的发言顺序、人物和话题。"],
   enable_group_scene_awareness: ["群聊场景感知", "推断当前消息是在对 Bot、某个群友还是整个群说话，减少误以为别人都在问自己。"],
   enable_group_reality_promise_guard: ["阻止群聊现实承诺", "群聊里避免承诺自己能拉人、修网、开房间或操作现实设备；私聊扮演不受影响。"],
@@ -391,9 +391,10 @@ const featureMeta = {
   enable_group_interjection_feedback: ["插话反馈", "记录群友对主动插话的反应，后续调整频率。"],
   enable_group_slang_meanings: ["黑话释义", "解释群内黑话。"],
   enable_group_slang_web_search: ["黑话联网参考", "为已有黑话候选搜索外部解释，并判断是否匹配本群用法。默认关闭。"],
-  enable_group_relationship_graph: ["群关系网", "记录成员之间的互动关系和常见组合。"],
+  enable_group_relationship_graph: ["群友互动图", "记录成员之间近期谁常互相接话、玩梗或争论。"],
   enable_group_privacy_guard: ["群隐私保护", "保护私聊信息。"],
-  enable_worldbook_member_recognition: ["群聊关系网", "以 QQ 号确认成员身份，昵称和别名只作辅助线索。"],
+  enable_worldbook_member_recognition: ["群聊关系网", "以 QQ 号确认稳定身份，关系备注和重要记忆都放在这里。"],
+  enable_cross_user_memory_bridge: ["跨用户记忆互通", "主人可在私聊中查询 Bot 与某个用户或群聊的近期互动摘要；只读，不发送消息。"],
   enable_atrelay_tools: ["跨群转述与 @ 群友", "整合艾特群友能力，可让模型查询群成员、按关系网解析 @ 对象并发送群聊/私聊消息。"],
   enable_livingmemory_integration: ["LivingMemory 协同", "引导模型按需调用长期记忆工具，避免重复造轮子。"],
   enable_bilibili_integration: ["B 站联动", "读取 B 站 Bot 观看日志，并在合适节点私聊分享。"],
@@ -506,6 +507,7 @@ const featureGroups = [
     note: "QQ 关系网、外部长期记忆和身份稳定识别。",
     keys: [
       "enable_worldbook_member_recognition",
+      "enable_cross_user_memory_bridge",
       "enable_atrelay_tools",
       "enable_livingmemory_integration",
     ],
@@ -679,6 +681,7 @@ const safeFeatureKeys = [
   "enable_private_image_self_recognition",
   "enable_environment_perception",
   "enable_worldbook_member_recognition",
+  "enable_cross_user_memory_bridge",
   "enable_atrelay_tools",
 ];
 
@@ -996,7 +999,7 @@ const configDescriptions = {
   holiday_country: "节假日识别地区。目前主要用于 CN，未安装依赖时会自动退化为周末/工作日。",
   enable_holiday_perception: "开启后会把节假日、调休和工作日判断注入环境感知。",
   enable_platform_perception: "开启后会识别平台、私聊/群聊和消息媒介类型。",
-  enable_model_perception: "开启后会把当前会话 LLM、插件分项模型和视觉转述模型作为环境信息注入；只供 Bot 判断能力边界，不要求主动报告模型名。",
+  enable_model_perception: "开启后会把当前会话 LLM 和视觉转述模型作为环境信息注入；只供 Bot 判断能力边界，不要求主动报告模型名。",
   enable_worldview_perception: "开启后才会把世界观适配片段注入被动回复。若 AstrBot 人设已经写了世界观，建议关闭以避免重复。",
   enable_lunar_perception: "开启后在依赖可用时注入农历日期。",
   enable_solar_term_perception: "开启后注入当天或近三天节气提示。",
@@ -1154,17 +1157,17 @@ const configDescriptions = {
   skill_growth_rate: "技能经验增长倍率。1 为默认速度，越高升级越快。",
   skill_growth_custom_skills: "手动补充技能名，可用逗号、换行或 JSON 列表表达。",
   enable_skill_growth_passive_injection: "开启后普通聊天会注入 Bot 当前能力状态和自我认知。默认关闭；关闭时技能成长仍会结算，并可继续影响日程和能力边界。",
-  enable_skill_growth_schedule_influence: "开启后能力状态会约束日程表现，例如已经顺手的物理不再被常规物理题难住。",
+  enable_skill_growth_schedule_influence: "开启后能力状态会约束日程表现，例如基本熟练的物理不再被常规物理题难住。",
   skill_growth_schedule_influence_strength: "能力状态影响日程生成的强度，0 表示只记录不约束。",
   bilibili_boredom_min_interval_hours: "Bot 无聊刷 B 站的最小间隔。",
-  bilibili_share_probability: "看完视频后主动分享给用户的概率，0-1。",
+  bilibili_share_probability: "看完视频后主动分享给用户的概率，按百分比填写。",
   bilibili_share_min_score: "视频评分达到多少才考虑分享。",
   enable_news_daily_hot_read: "每日随日程生成或后台检查读取一次热点，形成新闻见闻。",
   enable_news_boredom_read: "开启后 Bot 空闲或无聊时会低频读取新闻。",
   news_min_interval_hours: "无聊看新闻的最小间隔。",
-  news_share_probability: "新闻阅读后主动私聊分享的概率，0-1。",
+  news_share_probability: "新闻阅读后主动私聊分享的概率，按百分比填写。",
   enable_external_event_self_link: "开启后，Bot 会把新闻和搜索结果先与自己的模型、能力、兴趣、创作、日程或关系做关联判断，再决定是否产生主动分享欲。不是关键词硬触发。",
-  external_event_self_link_probability: "自我关联判断通过后进入主动候选的概率倍率，0-1。越高越容易因为与自己有关的新鲜事来找用户。",
+  external_event_self_link_probability: "自我关联判断通过后进入主动候选的概率倍率，按百分比填写。越高越容易因为与自己有关的新鲜事来找用户。",
   external_event_self_link_cooldown_hours: "同一用户两次因外界信息自我关联而主动找人的最小间隔。",
   news_max_items_per_source: "每个新闻源最多读取多少条候选。",
   news_sources: "新闻源地址。可填 RSS/Atom、B 站空间链接、bilibili:UID、bvid:BV... 或单条 B 站视频链接。AI 日报/早报建议使用定时来源，避免普通新闻阅读反复访问 UP 空间。",
@@ -1179,13 +1182,13 @@ const configDescriptions = {
   web_exploration_interests: "主动搜索时的兴趣倾向。不是硬名单，Bot 会结合人格、日程和最近聊天自行决定。",
   enable_web_exploration_boredom_search: "开启后 Bot 空闲或无聊时会自己决定搜索主题并调用网页搜索。",
   web_exploration_min_interval_hours: "两次自主搜索之间的最小间隔。",
-  web_exploration_share_probability: "完成探索后，主动私聊分享的概率，0-1。",
+  web_exploration_share_probability: "完成探索后，主动私聊分享的概率，按百分比填写。",
   web_exploration_max_results: "每次调用 AstrBot 网页搜索时最多读取多少条结果。",
   QZONE_COOKIE: "可填写浏览器 QQ 空间 Cookie，作为查看、点赞、评论和发布说说的优先凭据；留空时仍使用 OneBot 自动 Cookie。",
   qzone_life_publish_min_interval_hours: "两次低频生活说说之间的最小间隔。",
-  qzone_life_publish_probability: "满足条件时发布生活说说的概率，0-1。",
+  qzone_life_publish_probability: "满足条件时发布生活说说的概率，按百分比填写。",
   enable_qzone_generated_image_publish: "开启后，生活说说或情绪说说发布前可按概率调用主动生图能力生成一张配图。需要同时启用 QQ 空间动态和可用的主动生图后端。",
-  qzone_generated_image_probability: "满足发说说条件后尝试生成配图的概率，0-1。",
+  qzone_generated_image_probability: "满足发说说条件后尝试生成配图的概率，按百分比填写。",
   photo_action_max_daily: "每个私聊对象每天最多生成几张主动图片。真实生成成功就消耗额度，避免失败重试时反复生图。",
   photo_generation_backend: "auto 优先本地 ComfyUI；电脑高负荷且在线图片 API 可用时会绕开本地。comfyui 只用本地，external 只用在线。",
   COMFYUI_TEXT2IMG_WORKFLOW_NAME: "用于普通随手拍、风景、桌面小物等 photo_text 的 ComfyUI 工作流名。",
@@ -1203,17 +1206,17 @@ const configDescriptions = {
   photo_generation_style_custom_prompt: "当风格为“其他”时，把这里作为额外风格要求注入生图提示词。",
   private_reading_min_interval_hours: "两次私下阅读之间的最小间隔。",
   private_reading_max_photo_count: "只阅读页数不超过该值的素材，避免视觉理解成本过高。",
-  private_reading_share_probability: "读完后主动提起阅读体验的概率，0-1。",
+  private_reading_share_probability: "读完后主动提起阅读体验的概率，按百分比填写。",
   private_reading_default_keywords: "私下阅读时默认搜索关键词。多个词可用逗号或换行分隔。",
   private_reading_blocked_tags: "过滤标签。匹配到这些标签时跳过对应素材。",
-  private_reading_ask_probability: "无聊时向用户征求推荐的概率，0-1。",
+  private_reading_ask_probability: "无聊时向用户征求推荐的概率，按百分比填写。",
   enable_private_reading_preference_influence: "开启后，夹层阅读评分样本足够时会把稳定偏好作为私聊私密互动的弱背景；关闭后评分只用于素材挑选。",
   private_reading_preference_min_ratings: "累计评分达到这个数量后，偏好画像才会影响私聊私密互动。",
   private_reading_preference_max_terms: "每次注入最多参考多少个稳定偏好词，避免上下文太长或风格偏移。",
   unanswered_screen_peek_after_minutes: "主动消息发出后，用户沉默多久才允许尝试识屏观察。",
   unanswered_screen_peek_cooldown_minutes: "沉默识屏触发后的冷却时间。",
-  creative_inspiration_probability: "从生活小事、梦境或日记里长出创作灵感的概率，0-1。",
-  creative_share_probability: "创作达到节点后自然透露给用户的概率，0-1。",
+  creative_inspiration_probability: "从生活小事、梦境或日记里长出创作灵感的概率，按百分比填写。",
+  creative_share_probability: "创作达到节点后自然透露给用户的概率，按百分比填写。",
   creative_chars_per_session: "每次闲暇创作行为大约写多少字；实际字数会受人格和当天能量影响。",
   creative_max_active_projects: "同时保留多少个进行中的创作项目。",
   worldbook_auto_import: "启动或打开页面时自动从关系网资料源刷新用户/群资料。",
@@ -1239,7 +1242,7 @@ const configDescriptions = {
   enable_qzone_emotional_vent_publish: "短期余波很重时是否允许低频发布公开心情说说。",
   qzone_emotional_vent_threshold: "触发公开心情动态所需的短期余波强度。",
   qzone_emotional_vent_cooldown_hours: "两次公开心情动态之间的最小间隔。",
-  qzone_emotional_vent_probability: "达到条件后实际尝试公开心情动态的概率。",
+  qzone_emotional_vent_probability: "达到条件后实际尝试公开心情动态的概率，按百分比填写。",
 };
 
 const featureSettingGroups = {
@@ -1363,6 +1366,7 @@ const featureSettingGroups = {
   enable_group_interjection_feedback: ["group_interject_min_interval_minutes", "group_interject_max_daily"],
   enable_group_privacy_guard: [],
   enable_worldbook_member_recognition: ["worldbook_auto_import", "worldbook_member_match_aliases", "worldbook_self_registration", "worldbook_auto_pending_observations", "worldbook_member_inject_limit", "worldbook_config_paths"],
+  enable_cross_user_memory_bridge: ["cross_user_memory_owner_only"],
   enable_atrelay_tools: ["atrelay_require_worldbook_first", "atrelay_member_cache_minutes", "atrelay_sensitive_confirm", "atrelay_default_relay_style", "atrelay_multi_target_limit"],
   enable_livingmemory_integration: [],
   enable_bilibili_integration: ["enable_bilibili_boredom_watch", "bilibili_boredom_min_interval_hours", "bilibili_share_probability", "bilibili_share_min_score"],
@@ -1505,7 +1509,7 @@ const featureSettingSections = {
     },
     {
       title: "群记忆与互动",
-      note: "黑话、成员画像、话题线、群片段、插话和复读。",
+      note: "黑话、成员观察、话题线、群片段、插话和复读。",
       keys: ["enable_group_slang_learning", "enable_group_slang_meanings", "enable_group_member_profiles", "enable_group_topic_threads", "enable_group_episode_memory", "enable_group_relationship_graph", "enable_group_interjection", "enable_group_interjection_feedback", "enable_group_repeat_follow"],
     },
   ],
@@ -1766,17 +1770,47 @@ const featureSettingTypes = {
 };
 
 const probabilitySettingKeys = new Set([
+  "share_probability",
   "bilibili_share_probability",
   "news_share_probability",
   "external_event_self_link_probability",
   "web_exploration_share_probability",
   "qzone_life_publish_probability",
+  "qzone_generated_image_probability",
+  "qzone_emotional_vent_probability",
   "private_reading_share_probability",
   "private_reading_ask_probability",
   "creative_inspiration_probability",
   "creative_share_probability",
   "skill_growth_schedule_influence_strength",
 ]);
+
+function isFractionalPercentSetting(key) {
+  return probabilitySettingKeys.has(key);
+}
+
+function displaySettingValue(key, value) {
+  if (isFractionalPercentSetting(key)) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return value ?? "";
+    const percent = numeric * 100;
+    return Number.isInteger(percent) ? String(percent) : String(Number(percent.toFixed(2)));
+  }
+  return value ?? "";
+}
+
+function collectSettingValue(key, input) {
+  if (!input) return "";
+  if (input.type === "checkbox") return input.checked;
+  if (input.type === "number") {
+    const raw = input.value === "" ? 0 : Number(input.value);
+    if (isFractionalPercentSetting(key)) {
+      return Math.max(0, Math.min(1, raw / 100));
+    }
+    return raw;
+  }
+  return input.value;
+}
 
 const percentSettingKeys = new Set([
   "group_repeat_follow_probability",
@@ -1811,7 +1845,7 @@ const presetCatalog = {
   },
   group_observer: {
     label: "群聊观察优先",
-    desc: "强化群画像、黑话、话题线和关系网，默认不主动插话。",
+    desc: "强化群内观察、黑话、话题线和互动图，默认不主动插话。",
   },
 };
 
@@ -4913,7 +4947,7 @@ function renderSkillGrowth() {
       ${growth.hidden_count ? `<span>隐藏 ${escapeHtml(growth.hidden_count)}</span>` : ""}
       ${growth.frozen_count ? `<span>冻结 ${escapeHtml(growth.frozen_count)}</span>` : ""}
       <span>成长倍率 ${escapeHtml(growth.rate || 1)}</span>
-      <span>${growth.schedule_influence ? `影响日程 ${escapeHtml(growth.schedule_influence_strength ?? "-")}` : "不影响日程"}</span>
+      <span>${growth.schedule_influence ? `影响日程 ${escapeHtml(formatPercent(growth.schedule_influence_strength))}` : "不影响日程"}</span>
       <span>更新 ${escapeHtml(growth.updated || "-")}</span>
     </div>
     <div class="skill-category-list">
@@ -5016,12 +5050,12 @@ function skillExpFloor(level) {
 
 function skillLevelLabel(level) {
   return {
-    1: "还不太熟",
-    2: "能慢慢试",
-    3: "能自己做",
-    4: "已经顺手",
-    5: "很拿手",
-    6: "有自己的办法",
+    1: "一窍不通",
+    2: "会一点点",
+    3: "勉强能做",
+    4: "基本熟练",
+    5: "很熟练",
+    6: "很有心得",
   }[Number(level || 1)] || "能力状态";
 }
 
@@ -6730,7 +6764,7 @@ function renderExternalAbilities() {
         </div>
         <form class="external-ability-form" data-external-ability-form="${escapeHtml(item.name)}">
           <label class="toggle-row"><input name="enabled" type="checkbox" ${item.enabled ? "checked" : ""} ${item.available ? "" : "disabled"} /> <span>加入主动候选</span></label>
-          <label>触发权重 <input name="share_probability" type="number" min="0" max="1" step="0.05" value="${escapeHtml(item.share_probability ?? 0)}" /></label>
+          <label>触发权重（%）<input name="share_probability" type="number" min="0" max="100" step="1" value="${escapeHtml(displaySettingValue('share_probability', Number(item.share_probability ?? 0)))}" /></label>
           <label>最小间隔小时 <input name="min_interval_hours" type="number" min="0" step="0.5" value="${escapeHtml(item.min_interval_hours ?? 0)}" /></label>
           <label class="wide-field">自定义配置 <textarea name="config" rows="5">${escapeHtml(configText)}</textarea></label>
           ${schemaRows ? `<div class="external-ability-schema wide-field">${schemaRows}</div>` : ""}
@@ -6791,7 +6825,7 @@ function fillForm(selector, values) {
     } else if (Array.isArray(value)) {
       input.value = value.join("\n");
     } else {
-      input.value = value ?? "";
+      input.value = displaySettingValue(input.name, value);
     }
   });
   if (selector === "#longTermModuleForm") renderNewsSourceManager();
@@ -6812,13 +6846,7 @@ function collectFormSettings(selector) {
   }
   form.querySelectorAll("[name]").forEach((input) => {
     if (input.disabled) return;
-    if (input.type === "checkbox") {
-      result[input.name] = input.checked;
-    } else if (input.type === "number") {
-      result[input.name] = Number(input.value || 0);
-    } else {
-      result[input.name] = input.value;
-    }
+    result[input.name] = collectSettingValue(input.name, input);
   });
   return result;
 }
@@ -8413,14 +8441,15 @@ function featureSettingInput(key, value) {
     return `<textarea data-feature-param="${safeKey}" rows="3"${disabledAttr}>${escapeHtml(Array.isArray(value) ? value.join("\n") : value ?? "")}</textarea>`;
   }
   const numeric = spec.type === "number" || typeof value === "number";
-  const step = spec.step ?? (percentSettingKeys.has(key) ? "1" : probabilitySettingKeys.has(key) || key === "skill_growth_rate" ? "0.01" : "any");
-  const min = spec.min ?? (percentSettingKeys.has(key) || probabilitySettingKeys.has(key) ? "0" : "");
-  const max = spec.max ?? (percentSettingKeys.has(key) ? "100" : probabilitySettingKeys.has(key) ? "1" : "");
+  const step = isFractionalPercentSetting(key) ? "1" : (spec.step ?? (percentSettingKeys.has(key) ? "1" : key === "skill_growth_rate" ? "0.01" : "any"));
+  const min = isFractionalPercentSetting(key) ? "0" : (spec.min ?? (percentSettingKeys.has(key) ? "0" : ""));
+  const max = isFractionalPercentSetting(key) ? "100" : (spec.max ?? (percentSettingKeys.has(key) ? "100" : ""));
+  const displayValue = displaySettingValue(key, value);
   return `
     <input
       type="${numeric ? "number" : "text"}"
       data-feature-param="${safeKey}"
-      value="${escapeHtml(value ?? "")}"
+      value="${escapeHtml(displayValue)}"
       ${numeric ? `step="${step}"` : ""}
       ${min ? `min="${min}"` : ""}
       ${max ? `max="${max}"` : ""}
@@ -8469,14 +8498,7 @@ function collectFeatureDetailPayload(featureKey, root = document) {
   root.querySelectorAll("[data-feature-param]").forEach((input) => {
     const key = input.dataset.featureParam;
     if (!key) return;
-    let value;
-    if (input.type === "checkbox") {
-      value = input.checked;
-    } else if (input.type === "number") {
-      value = input.value === "" ? 0 : Number(input.value);
-    } else {
-      value = input.value;
-    }
+    const value = collectSettingValue(key, input);
     if (Object.prototype.hasOwnProperty.call(overviewSettings, key)) {
       settings[key] = value;
       if (Object.prototype.hasOwnProperty.call(state.featureDraft || {}, key)) {
@@ -8681,7 +8703,7 @@ const featureDetailGuides = {
     disabled: "媒介信息减少，复杂消息的场景判断会变弱。",
   },
   enable_model_perception: {
-    summary: "识别当前对话 LLM、插件任务模型覆盖，以及图片转述使用的视觉模型。",
+    summary: "识别当前对话 LLM，以及图片转述使用的视觉模型。",
     trigger: "环境感知注入时。",
     enabled: "Bot 能知道当前文本模型和视觉转述模型的大致来源，遇到不同配置时更容易判断自己的能力边界。",
     disabled: "Bot 不再获得模型环境信息，只按普通对话上下文回复。",
@@ -8729,7 +8751,7 @@ const featureDetailGuides = {
     disabled: "群回复主要依赖原始消息，上下文感会弱。",
   },
   enable_group_persona_denoise: {
-    summary: "群聊回复时降低人格外溢，减少私聊腔、状态汇报和关系画像直出。",
+    summary: "群聊回复时降低人格外溢，减少私聊腔、状态汇报和私聊关系直出。",
     trigger: "Bot 准备在群聊回复时。",
     enabled: "回复更贴当前群话题，更少硬插话和自报状态。",
     disabled: "群聊会更完整吃到陪伴人格背景，但也更容易显得黏或跑偏。",
@@ -8789,10 +8811,10 @@ const featureDetailGuides = {
     disabled: "只保留词本身，含义理解更依赖实时上下文。",
   },
   enable_group_member_profiles: {
-    summary: "维护群成员发言习惯、互动角色和常见称呼。",
-    trigger: "群成员持续发言或被关系网识别时。",
-    enabled: "Bot 更容易知道群里谁是谁、谁常做什么。",
-    disabled: "群成员画像不再自动更新。",
+    summary: "维护成员在当前群里的近期观察，例如发言次数、短句样本、活跃痕迹和改名记录。",
+    trigger: "目标群成员持续发言时。",
+    enabled: "Bot 会更懂这轮群聊里谁最近常出现、怎么说话，但不会把它当成稳定身份资料。",
+    disabled: "群内成员观察不再自动更新。",
   },
   enable_group_topic_threads: {
     summary: "整理群聊一段时间内的主题线，而不是只截取单句。",
@@ -8807,10 +8829,10 @@ const featureDetailGuides = {
     disabled: "不会新增群聊片段记忆。",
   },
   enable_group_relationship_graph: {
-    summary: "记录群成员之间的互动关系，例如常互相回复、玩梗、争论或一起出现。",
+    summary: "记录群成员之间的近期互动边，例如常互相回复、玩梗、争论或一起出现。",
     trigger: "群聊里成员之间发生互动时。",
-    enabled: "关系网页和群聊判断会更直观地知道成员关系。",
-    disabled: "不再更新互动边，关系网只保留静态身份资料。",
+    enabled: "Bot 会更容易判断当前群里谁在接谁的话、谁和谁常一起玩梗。",
+    disabled: "不再更新互动边；稳定身份资料仍由群聊关系网负责。",
   },
   enable_group_interjection: {
     summary: "允许 Bot 在群聊中不被直接叫到时主动插一句。",
@@ -8837,9 +8859,9 @@ const featureDetailGuides = {
     disabled: "隐私保护更依赖主模型自身判断，不建议关闭。",
   },
   enable_worldbook_member_recognition: {
-    summary: "用 QQ 号锚定成员身份，别名和群名片只是辅助，避免改名后认错人。",
+    summary: "用 QQ 号锚定成员稳定身份，保存称呼、关系备注、边界和重要记忆。",
     trigger: "群聊提到成员、@ 成员、自登记或转述解析时。",
-    enabled: "Bot 能把别名、QQ 和用户资料对应起来，并按需注入词条。",
+    enabled: "Bot 能把别名、QQ 和关系节点对应起来；近期发言习惯仍由群内成员观察负责。",
     disabled: "身份识别主要依赖当前昵称和原始消息。",
   },
   enable_atrelay_tools: {
@@ -8847,6 +8869,12 @@ const featureDetailGuides = {
     trigger: "用户让 Bot 帮忙告诉、提醒、转发或等某人出现再说时。",
     enabled: "Bot 可按人格改写、敏感确认、解析对象并执行转述。",
     disabled: "这些转述工具不可用，Bot 只能文字建议用户自己说。",
+  },
+  enable_cross_user_memory_bridge: {
+    summary: "让主人在私聊里询问 Bot 与某个用户或群聊的近期互动。",
+    trigger: "主人问“你和某某聊了什么”“最近和某群互动怎样”“在群里说过什么”时。",
+    enabled: "Bot 会读取对应会话的近期记录并整理成摘要；默认只允许主人用户查询。",
+    disabled: "Bot 不会跨用户读取互动记录，只能基于当前会话和已注入记忆回答。",
   },
   enable_livingmemory_integration: {
     summary: "允许插件与 LivingMemory 长期记忆协同，按需调用外部记忆工具。",
@@ -9015,7 +9043,7 @@ function featureImpactLines(key) {
     lines.push(["场景", "群回复 / 群主动 / 私聊主动"]);
   } else if (key === "enable_tts_enhancement") {
     lines.push(["场景", "私聊 / 群聊 / 主动语音"]);
-  } else if (key.startsWith("enable_group_") || key === "enable_atrelay_tools" || key === "enable_worldbook_member_recognition") {
+  } else if (key.startsWith("enable_group_") || key === "enable_atrelay_tools" || key === "enable_cross_user_memory_bridge" || key === "enable_worldbook_member_recognition") {
     lines.push(["场景", "群聊 / 转述 / 关系网"]);
   } else if (key === "enable_private_image_self_recognition") {
     lines.push(["场景", "私聊图片 / 引用图片 / 合并图片 / GIF"]);
@@ -9030,7 +9058,11 @@ function featureImpactLines(key) {
 }
 
 function configLabel(name) {
-  return configLabels[name] || name.replace(/^enable_/, "").replaceAll("_", " ");
+  const label = configLabels[name] || name.replace(/^enable_/, "").replaceAll("_", " ");
+  if ((isFractionalPercentSetting(name) || percentSettingKeys.has(name)) && !/[（(]%[）)]/.test(label)) {
+    return `${label}（%）`;
+  }
+  return label;
 }
 
 function featureDetailPage(key) {
@@ -10571,7 +10603,7 @@ document.addEventListener("submit", async (event) => {
   await runAction(() => postJson("/external_ability/update", {
     name,
     enabled: Boolean(form.querySelector('[name="enabled"]')?.checked),
-    share_probability: Number(form.querySelector('[name="share_probability"]')?.value || 0),
+    share_probability: Math.max(0, Math.min(1, Number(form.querySelector('[name="share_probability"]')?.value || 0) / 100)),
     min_interval_hours: Number(form.querySelector('[name="min_interval_hours"]')?.value || 0),
     config,
   }), "已保存外部主动能力", button);

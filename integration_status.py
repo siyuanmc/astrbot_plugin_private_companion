@@ -433,23 +433,12 @@ class IntegrationStatusMixin:
             return ""
         tool_name = _single_line(self.livingmemory_tool_name, 60) or "recall_long_term_memory"
         if scope == "group":
-            boundary = (
-                "群聊中只召回当前群会话可用的公开记忆；不要主动寻找或泄露私聊记忆、私聊偏好、私下关系。"
-                "如果召回结果像私聊内容或不适合公开场合,直接忽略。"
-            )
+            boundary = "群聊只查当前群可公开使用的旧事。"
         else:
-            boundary = (
-                "私聊中可以召回与当前用户、当前会话、当前人格相关的长期记忆；"
-                "召回结果只作为接话背景,不要说“我查到记忆/系统记录”。"
-            )
+            boundary = "私聊可查当前用户相关的旧约定、偏好和共同经历。"
         return (
-            "【LivingMemory 长期记忆协同】\n"
-            f"如果你可用工具中存在 `{tool_name}`,在当前上下文不足时可以主动调用它检索长期记忆。\n"
-            "适合检索的情况：用户提到旧约定、偏好、过去事件、模糊代词、共同经历、群内旧梗,或明确问“还记得吗”。\n"
-            "检索关键词要短,优先用实体名、话题、偏好、约定、事件名,不要整段复制用户消息。\n"
-            "如果第一次结果不够,可以换一个更具体或更抽象的关键词再查一次。\n"
-            f"{boundary}\n"
-            "召回内容和本插件的状态/日程/群聊观察发生冲突时：事实记忆优先,但回复仍要贴着当前气氛和关系边界。"
+            "【长期记忆检索】\n"
+            f"上下文不够时可用 `{tool_name}` 查记忆。{boundary}结果只作接话背景。"
         )
 
     def _format_livingmemory_status(self) -> str:
@@ -624,6 +613,20 @@ class IntegrationStatusMixin:
             pieces.append(provider_id)
         return " / ".join(_single_line(piece, 120) for piece in pieces if piece) or "AstrBot 默认会话模型"
 
+    def _provider_model_label(self, provider_id: str = "", provider: Any | None = None) -> str:
+        safe_id = _single_line(provider_id, 120)
+        if provider is None and safe_id:
+            getter = getattr(self.context, "get_provider_by_id", None)
+            if callable(getter):
+                try:
+                    provider = getter(safe_id)
+                except Exception:
+                    provider = None
+        if provider is None:
+            return safe_id or "AstrBot 默认会话模型"
+        model = self._provider_config_value(provider, "model", "model_name", "api_model", "model_id")
+        return _single_line(model, 120) or safe_id or "AstrBot 默认会话模型"
+
     def _current_event_chat_provider_id(self, event: AstrMessageEvent) -> tuple[str, Any | None]:
         provider = None
         provider_id = ""
@@ -667,21 +670,7 @@ class IntegrationStatusMixin:
             return ""
         lines: list[str] = []
         chat_provider_id, chat_provider = self._current_event_chat_provider_id(event)
-        lines.append(f"当前对话 LLM：{self._provider_identity_label(chat_provider_id, chat_provider)}")
-        plugin_main = self._task_provider(self.llm_provider_id)
-        if plugin_main:
-            lines.append(f"插件任务主模型覆盖：{self._provider_identity_label(plugin_main)}")
-        else:
-            lines.append("插件任务主模型覆盖：未单独配置,跟随当前会话或 AstrBot 默认模型")
-        task_models = [
-            ("日程", self._task_provider(self.daily_plan_provider_id, self.mai_style_provider_id, self.llm_provider_id)),
-            ("日记/梦境", self._task_provider(self.dream_diary_provider_id, self.mai_style_provider_id, self.llm_provider_id)),
-            ("创作", self._task_provider(self.creative_provider_id, self.mai_style_provider_id, self.llm_provider_id)),
-            ("新闻/搜索整理", self._task_provider(self.news_provider_id, self.web_exploration_provider_id, self.llm_provider_id)),
-        ]
-        task_lines = [f"{name}={self._provider_identity_label(provider_id)}" for name, provider_id in task_models if provider_id]
-        if task_lines:
-            lines.append("插件分项模型：" + "；".join(task_lines[:6]))
+        lines.append(f"对话模型={self._provider_model_label(chat_provider_id, chat_provider)}")
         vision_id, vision_source, _ = self._private_image_caption_provider_id(str(getattr(event, "unified_msg_origin", "") or ""))
         if vision_id:
             source_label = {
@@ -689,10 +678,8 @@ class IntegrationStatusMixin:
                 "plugin_vision": "备选识图模型",
                 "plugin_vision_fallback": "备选识图模型兜底",
             }.get(vision_source, vision_source or "视觉转述模型")
-            lines.append(f"视觉转述模型：{source_label}={self._provider_identity_label(vision_id)}")
-        else:
-            lines.append("视觉转述模型：未配置；遇到需要看图的插件任务会跳过或退回非视觉处理")
-        return "\n".join(lines)
+            lines.append(f"视觉转述模型={source_label} / {self._provider_model_label(vision_id)}")
+        return "；".join(lines)
 
     async def _format_environment_perception(self, event: AstrMessageEvent) -> str:
         checker = getattr(self, "_feature_enabled_or_temp_unlocked", None)
@@ -704,27 +691,31 @@ class IntegrationStatusMixin:
         current = self._environment_now()
         lines = [
             "【环境感知】",
-            "这是当前消息的环境边界,只影响语境判断、节奏和措辞；不要主动声明“我读取到环境/平台/系统时间”。",
-            f"发送时间：{current.strftime('%Y-%m-%d %H:%M')}",
+            "这是当前消息的背景边界，只影响语境判断、节奏和措辞；回复里不需要提到自己读取了时间、平台或环境。",
         ]
         holiday = self._format_holiday_perception(current)
         if holiday:
-            lines.append(f"日期语境：{holiday}")
+            lines.append(f"时间：{current.strftime('%Y-%m-%d %H:%M')}（{holiday}）")
+        else:
+            lines.append(f"时间：{current.strftime('%Y-%m-%d %H:%M')}")
+        season_parts = []
         lunar = self._format_lunar_perception(current)
         if lunar:
-            lines.append(f"农历：{lunar}")
+            season_parts.append(f"农历{lunar}")
         solar_term = self._format_solar_term_perception(current)
         if solar_term:
-            lines.append(f"节气：{solar_term}")
+            season_parts.append(f"节气{solar_term}")
         almanac = self._format_almanac_perception(current)
         if almanac:
-            lines.append(f"轻量黄历：{almanac}")
+            season_parts.append(almanac)
+        if season_parts:
+            lines.append(f"时令：{'；'.join(season_parts)}")
         platform = await self._format_platform_perception(event)
         if platform:
-            lines.append(f"平台环境：{platform}")
+            lines.append(f"会话：{platform}")
         model = self._format_model_perception(event)
         if model:
-            lines.append(f"模型环境：\n{model}")
+            lines.append(f"模型：{model}")
         return "\n".join(lines)
 
     def _environment_timezone(self) -> zoneinfo.ZoneInfo | None:

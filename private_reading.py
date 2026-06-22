@@ -573,15 +573,8 @@ class PrivateReadingMixin:
             for item in items:
                 if isinstance(item, dict):
                     term = _single_line(item.get("term"), 24)
-                    avg = _safe_float(item.get("avg"), 0)
-                    count = _safe_int(item.get("count"), 0)
                     if term:
-                        meta = []
-                        if avg:
-                            meta.append(f"均分{avg:.1f}")
-                        if count:
-                            meta.append(f"{count}次")
-                        rows.append(f"{term}（{'，'.join(meta)}）" if meta else term)
+                        rows.append(term)
                 else:
                     term = _single_line(item, 24)
                     if term:
@@ -594,25 +587,15 @@ class PrivateReadingMixin:
         disliked_text = format_terms(disliked[: max_terms // 2])
         if not liked_text and not disliked_text:
             return ""
-        inbound = str(inbound_text or "")
-        private_cue = any(token in inbound for token in ("夹层", "书柜", "阅读", "喜欢", "亲", "抱", "贴", "害羞", "色色", "私密", "秘密", "想你", "陪我"))
-        cue_line = "本轮有私密/亲密/偏好相关线索，可以更明显地参考。" if private_cue else "本轮没有明显私密线索，只允许作为很轻的语气背景。"
+        preference_parts = []
+        if liked_text:
+            preference_parts.append(f"喜欢：{liked_text}")
+        if disliked_text:
+            preference_parts.append(f"厌恶：{disliked_text}")
         lines = [
             "【私密偏好画像】",
-            f"基于书柜夹层阅读评分沉淀出的长期偏好，样本数 {rating_count}，平均评分 {_safe_float(profile.get('average_rating'), 0):.1f}/10。",
-            cue_line,
+            "经过长时间相处，可知用户" + "；".join(preference_parts) + "。",
         ]
-        if liked_text:
-            lines.append(f"较稳定的高分倾向：{liked_text}。")
-        if disliked_text:
-            lines.append(f"低分或不稳定倾向：{disliked_text}。")
-        lines.extend(
-            [
-                "这些偏好只影响私聊里的私密互动、语气尺度、主动靠近方式和素材挑选；不要用于群聊。",
-                "不要说出偏好来源、评分、素材类型或插件记录；表现成相处久了后自然知道一点。",
-                "它是弱参考，必须服从当前 AstrBot 人格、关系阶段、用户当下情绪和安全边界，不要机械复刻标签。",
-            ]
-        )
         return "\n".join(lines)
 
     @staticmethod

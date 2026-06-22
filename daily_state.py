@@ -5268,24 +5268,13 @@ class DailyStateMixin:
     @staticmethod
     def _skill_level_title(level: int) -> str:
         return {
-            1: "还不太熟",
-            2: "能慢慢试",
-            3: "能自己做",
-            4: "已经顺手",
-            5: "很拿手",
-            6: "有自己的办法",
-        }.get(max(1, min(6, int(level or 1))), "还不太熟")
-
-    @staticmethod
-    def _skill_level_description(level: int) -> str:
-        return {
-            1: "只是知道一点,真遇到事情还会犹豫,需要慢慢摸索。",
-            2: "能照着例子或提示一点点做,简单情况可以试着接住。",
-            3: "常见事情基本能自己处理,只是速度和细节还会有些不稳。",
-            4: "大多数日常情况已经比较顺手,偶尔会停下来检查细节。",
-            5: "这是她很拿手的事,普通情况会做得自然、快,也能提醒别人。",
-            6: "已经有自己的理解和做法,遇到新情况也能试着变通。",
-        }.get(max(1, min(6, int(level or 1))), "")
+            1: "一窍不通",
+            2: "会一点点",
+            3: "勉强能做",
+            4: "基本熟练",
+            5: "很熟练",
+            6: "很有心得",
+        }.get(max(1, min(6, int(level or 1))), "一窍不通")
 
     @staticmethod
     def _skill_level_from_exp(exp: float) -> int:
@@ -5465,6 +5454,28 @@ class DailyStateMixin:
             weight *= 0.55
         return max(0.0, weight)
 
+    @staticmethod
+    def _skill_growth_user_text_token_false_positive(token: str, query: str) -> bool:
+        if token == "历史":
+            false_contexts = (
+                "历史记录",
+                "聊天历史",
+                "会话历史",
+                "浏览历史",
+                "历史消息",
+                "历史归档",
+                "历史失败",
+                "历史调用",
+                "历史注入",
+                "历史缓存",
+                "历史版本",
+            )
+            if any(item in query for item in false_contexts):
+                return True
+            if re.search(r"历史\s*(记录|消息|会话|聊天|浏览|归档|失败|调用|注入|缓存|版本|数据|日志|摘要)", query):
+                return True
+        return False
+
     async def _maybe_settle_skill_growth(self, *, force: bool = False) -> None:
         if not self.enable_skill_growth_simulation:
             return
@@ -5550,12 +5561,13 @@ class DailyStateMixin:
             return ""
         ranked = sorted([item for item in skills.values() if isinstance(item, dict) and not item.get("hidden")], key=lambda item: (_safe_int(item.get("level"), 1, 1), _safe_float(item.get("exp"), 0)), reverse=True)[:limit]
         lines = [
-            "【Bot 技能成长自我认知】",
-            "这些是 Bot 自己长期练习形成的能力层级,不是夸张设定；回复时可以自然体现熟练度,不要直接报数值,除非用户询问技能/学习/最近练了什么。",
+            "【能力熟悉度】",
         ]
         for skill in ranked:
             level = _safe_int(skill.get("level"), 1, 1)
-            lines.append(f"- {_single_line(skill.get('name'), 24)}：{self._skill_level_title(level)}；{self._skill_level_description(level)}")
+            name = _single_line(skill.get("name"), 24)
+            if name:
+                lines.append(f"- {name}水平：{self._skill_level_title(level)}")
         return "\n".join(lines)
 
     def _format_skill_growth_for_user_text(self, text: str, limit: int = 3) -> str:
@@ -5576,25 +5588,25 @@ class DailyStateMixin:
             tokens = self._skill_growth_terms(skill, include_keywords=False)
             if not tokens:
                 continue
-            score = sum(1 for token in dict.fromkeys(tokens) if token and token in query)
+            score = sum(
+                1
+                for token in dict.fromkeys(tokens)
+                if token
+                and token in query
+                and not self._skill_growth_user_text_token_false_positive(token, query)
+            )
             if score <= 0:
                 continue
             matched.append((score, _safe_float(skill.get("exp"), 0), skill))
         if not matched:
             return ""
         matched.sort(key=lambda item: (item[0], _safe_int(item[2].get("level"), 1, 1), item[1]), reverse=True)
-        lines = [
-            "【本轮相关技能】",
-            "用户这轮提到了 Bot 已追踪的技能。只在确实相关时自然体现能力边界；不要主动报系统等级或把回复变成技能报告。",
-        ]
+        lines = ["【本轮相关技能】"]
         for _, _, skill in matched[: max(1, int(limit or 1))]:
             level = _safe_int(skill.get("level"), 1, 1)
             name = _single_line(skill.get("name"), 24)
-            category = _single_line(skill.get("category"), 18) or "能力"
-            count = _safe_int(skill.get("training_count"), 0, 0)
-            lines.append(
-                f"- {name}（{category}, {self._skill_level_title(level)}, 训练{count}次）：{self._skill_level_description(level)}"
-            )
+            if name:
+                lines.append(f"- {name}水平：{self._skill_level_title(level)}")
         return "\n".join(lines)
 
     def _format_skill_growth_schedule_context(self, limit: int = 8) -> str:
@@ -5631,7 +5643,7 @@ class DailyStateMixin:
         lines = [
             "【技能成长对日程的能力边界影响】",
             f"影响强度：{strength_text}。这些技能主要用于保持能力边界一致,优先级低于日期语境、身份主线、状态、天气和用户介入；不要把今天写成训练清单。",
-            "安排方式：能力状态会改变她面对相关任务的表现。这里的任务可以是题目、创作、料理、训练、战斗、交涉、研究、手工或任何符合人格的活动。已经顺手以后不要再写她被常规任务难住、完全不会或长期卡死；很拿手/有自己的办法时,面对普通任务应表现为自然、快速、能检查/讲清楚或优化做法。只有高阶、陌生、超纲、状态极差或复杂综合场景,才可以短暂停顿。",
+            "安排方式：能力状态会改变她面对相关任务的表现。这里的任务可以是题目、创作、料理、训练、战斗、交涉、研究、手工或任何符合人格的活动。基本熟练以后不要再写她被常规任务难住、完全不会或长期卡死；很熟练/很有心得时,面对普通任务应表现为自然、快速、能检查/讲清楚或优化做法。只有高阶、陌生、超纲、状态极差或复杂综合场景,才可以短暂停顿。",
             "低等级技能仍可以被基础任务卡住；中等级技能可以偶尔卡在细节上,但应能通过复习、查资料、请教、试错或换思路推进。",
         ]
         for _, skill in ranked[:limit]:
@@ -5704,29 +5716,25 @@ class DailyStateMixin:
             if not schedule_context:
                 return ""
             return (
-                "【当前细化片段】\n"
-                "当前没有命中的精细生活片段；以下只作为附近日程的轻量参考,不要当成正在逐字发生。\n"
+                "【当前片段】\n"
+                "附近的日程只作轻量背景,不要当成正在逐字发生。\n"
                 f"{schedule_context}"
             )
-        lines = ["【当前细化片段】"]
+        lines = ["【当前片段】"]
+        primary_parts = []
         if snapshot.get("summary"):
-            lines.append(f"这一小段的氛围：{snapshot['summary']}")
+            primary_parts.append(snapshot["summary"])
         if snapshot.get("event"):
-            event_line = f"当前这段更像是在：{snapshot['event']}"
-            if snapshot.get("mood"):
-                event_line += f"｜情绪：{snapshot['mood']}"
-            lines.append(event_line)
-        if snapshot.get("topic") or snapshot.get("scene") or snapshot.get("tone") or snapshot.get("impulse"):
-            detail_bits = []
-            if snapshot.get("topic"):
-                detail_bits.append(f"话题钩子：{snapshot['topic']}")
-            if snapshot.get("scene"):
-                detail_bits.append(f"场景：{snapshot['scene']}")
-            if snapshot.get("tone"):
-                detail_bits.append(f"底色：{snapshot['tone']}")
-            if snapshot.get("impulse"):
-                detail_bits.append(f"内在冲动：{snapshot['impulse']}")
-            lines.append("｜".join(detail_bits))
+            primary_parts.append(snapshot["event"])
+        if primary_parts:
+            lines.append("，".join(_single_line(part, 140) for part in primary_parts if _single_line(part, 140)))
+        secondary_parts = []
+        if snapshot.get("scene"):
+            secondary_parts.append(snapshot["scene"])
+        if snapshot.get("impulse"):
+            secondary_parts.append(f"心里有点{snapshot['impulse']}")
+        if secondary_parts:
+            lines.append("这一小段像" + "，".join(_single_line(part, 80) for part in secondary_parts if _single_line(part, 80)) + "。")
         segment = self._current_detail_segment_for_update()
         enhanced = self.data.get("detail_enhanced_segments", {})
         detail_snapshot = None
@@ -5735,17 +5743,47 @@ class DailyStateMixin:
         if isinstance(detail_snapshot, dict):
             state_variables = detail_snapshot.get("state_variables", [])
             if isinstance(state_variables, list) and state_variables:
-                variable_lines = []
+                variable_texts = []
+                roleplay_state_names = {
+                    "情绪",
+                    "心情",
+                    "体力",
+                    "精力",
+                    "能量",
+                    "心理能量",
+                    "睡眠",
+                    "睡意",
+                    "梦境",
+                    "健康",
+                    "身体",
+                    "饥饿",
+                    "饥饿感",
+                    "胃口",
+                    "周期",
+                    "生理期",
+                    "等待回复",
+                    "等回复",
+                    "是否等待回复",
+                }
+
+                def _natural_detail_variable(name: str, value: str, note: str = "") -> str:
+                    text = f"{name}是{value}"
+                    if note:
+                        text += f"，{note}"
+                    return text
+
                 for variable in state_variables[:6]:
                     if not isinstance(variable, dict):
                         continue
                     name = _single_line(variable.get("name"), 24)
                     value = _single_line(variable.get("value"), 50)
                     note = _single_line(variable.get("note"), 60)
+                    if name in roleplay_state_names:
+                        continue
                     if name and value:
-                        variable_lines.append(f"- {name}: {value}" + (f"（{note}）" if note else ""))
-                if variable_lines:
-                    lines.append("当前状态变量：\n" + "\n".join(variable_lines))
+                        variable_texts.append(_natural_detail_variable(name, value, note))
+                if variable_texts:
+                    lines.append("细节上，" + "；".join(variable_texts[:3]) + "。")
             interaction_updates = detail_snapshot.get("interaction_updates", [])
             if isinstance(interaction_updates, list) and interaction_updates:
                 update_lines = []
@@ -5754,20 +5792,23 @@ class DailyStateMixin:
                         continue
                     user_text = _single_line(update.get("user_text"), 60)
                     reaction = _single_line(update.get("reaction"), 90)
-                    intensity = _single_line(update.get("intensity"), 12)
                     state_updates = update.get("state_updates")
                     state_text = ""
                     if isinstance(state_updates, list) and state_updates:
-                        state_text = "；".join(_single_line(item, 50) for item in state_updates if _single_line(item, 50))
-                    pieces = [part for part in (f"用户说：{user_text}" if user_text else "", f"强度：{intensity}" if intensity else "", reaction, state_text) if part]
+                        filtered_updates = []
+                        for item in state_updates:
+                            text = _single_line(item, 50)
+                            if not text:
+                                continue
+                            if any(name and name in text for name in roleplay_state_names):
+                                continue
+                            filtered_updates.append(text)
+                        state_text = "；".join(filtered_updates)
+                    pieces = [part for part in (f"用户刚说过“{user_text}”" if user_text else "", reaction, state_text) if part]
                     if pieces:
-                        update_lines.append("- " + "｜".join(pieces))
+                        update_lines.append("，".join(pieces))
                 if update_lines:
-                    lines.append(
-                        "用户刚刚介入后的事实更新：\n"
-                        + "\n".join(update_lines)
-                        + "\n回复时必须承接这些事实,不要按介入前的日程状态继续说。"
-                    )
+                    lines.append("刚刚的介入：" + "；".join(update_lines) + "。")
         return "\n".join(lines)
 
     def _format_timer_scheduling_instruction(self) -> str:

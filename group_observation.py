@@ -325,14 +325,8 @@ class GroupObservationMixin:
             member["name"] = _single_line(sender_name, 30) or member.get("name") or sender_id
             member["identity_name"] = self._group_member_identity_name(sender_id, sender_name, limit=30)
             member["identity_known"] = bool(self._worldbook_profile_by_user_id(sender_id))
-            identity_note = self._group_member_identity_note(sender_id, limit=160)
-            if identity_note:
-                member["identity_note"] = identity_note
-            profile = self._worldbook_profile_by_user_id(sender_id)
-            if isinstance(profile, dict):
-                boundary_note = _single_line(profile.get("boundary_note"), 160)
-                if boundary_note:
-                    member["boundary_note"] = boundary_note
+            member.pop("identity_note", None)
+            member.pop("boundary_note", None)
             member["count"] = _safe_int(member.get("count"), 0, 0) + 1
             member["last_seen"] = now
             self._remember_worldbook_observed_name(sender_id, sender_name)
@@ -864,6 +858,10 @@ class GroupObservationMixin:
                 members.pop(user_id, None)
                 changed = True
                 continue
+            for stale_key in ("identity_note", "boundary_note"):
+                if stale_key in member:
+                    member.pop(stale_key, None)
+                    changed = True
             phrases = member.get("recent_phrases")
             if isinstance(phrases, list):
                 deduped: list[str] = []
@@ -887,7 +885,7 @@ class GroupObservationMixin:
                 edges.pop(key, None)
                 changed = True
                 continue
-            last_seen = _safe_float(item.get("last_seen") or item.get("updated_ts"), 0)
+            last_seen = _safe_float(item.get("last_ts") or item.get("last_seen") or item.get("updated_ts"), 0)
             weight = _safe_int(item.get("count"), 0, 0)
             if last_seen > 0 and now - last_seen > 60 * 86400 and weight <= 2:
                 edges.pop(key, None)
@@ -1080,15 +1078,42 @@ class GroupObservationMixin:
             "text": _single_line(text, 80),
         }
 
-    def _format_group_relationship_graph_for_prompt(self, group: dict[str, Any]) -> str:
+    def _format_group_relationship_graph_for_prompt(self, group: dict[str, Any], sender_id: str = "", text: str = "") -> str:
         edges = group.get("relationship_edges")
         if not isinstance(edges, dict):
             return ""
-        ranked = sorted(
+        cleaned = _single_line(text, 160)
+        recent = group.get("recent_messages") if isinstance(group.get("recent_messages"), list) else []
+        recent_ids = {
+            str(item.get("sender_id") or "")
+            for item in recent[-8:]
+            if isinstance(item, dict) and item.get("sender_id")
+        }
+        focus_ids = {str(sender_id or "").strip(), *recent_ids}
+        ranked_all = sorted(
             [item for item in edges.values() if isinstance(item, dict)],
-            key=lambda item: (_safe_int(item.get("count"), 0, 0), _safe_float(item.get("last_ts"), 0)),
+            key=lambda item: (
+                1 if str(item.get("a") or "") in focus_ids or str(item.get("b") or "") in focus_ids else 0,
+                _safe_float(item.get("last_ts"), 0),
+                _safe_int(item.get("count"), 0, 0),
+            ),
             reverse=True,
-        )[:6]
+        )
+        relevant = []
+        for item in ranked_all:
+            a_id = str(item.get("a") or "")
+            b_id = str(item.get("b") or "")
+            a_name = _single_line(item.get("a_name"), 24)
+            b_name = _single_line(item.get("b_name"), 24)
+            if sender_id and (a_id == str(sender_id) or b_id == str(sender_id)):
+                relevant.append(item)
+                continue
+            if cleaned and ((a_name and a_name in cleaned) or (b_name and b_name in cleaned)):
+                relevant.append(item)
+                continue
+            if a_id in recent_ids or b_id in recent_ids:
+                relevant.append(item)
+        ranked = relevant[:4]
         lines = []
         for item in ranked:
             a_id = str(item.get("a") or "")
@@ -1099,7 +1124,10 @@ class GroupObservationMixin:
             main_tone = "普通"
             if tone:
                 main_tone = max(tone.items(), key=lambda pair: _safe_int(pair[1], 0, 0))[0]
-            lines.append(f"- {a_name} ↔ {b_name}：互动 {item.get('count', 0)} 次｜常见氛围 {main_tone}")
+            line = f"- {a_name} ↔ {b_name}"
+            if main_tone and main_tone != "普通":
+                line += f"｜常见氛围 {main_tone}"
+            lines.append(line)
         return "\n".join(lines)
 
     def _format_group_slang_meanings_for_prompt(self, group: dict[str, Any]) -> str:
@@ -1193,14 +1221,42 @@ class GroupObservationMixin:
             lines.append("- " + summary + (f"｜新梗：{meme}" if meme else ""))
         return "\n".join(lines)
 
+    def _format_current_group_member_observation_for_prompt(self, group: dict[str, Any], sender_id: str = "", text: str = "") -> str:
+        members = group.get("members")
+        if not sender_id or not isinstance(members, dict):
+            return ""
+        member = members.get(str(sender_id))
+        if not isinstance(member, dict):
+            return ""
+        current_text = _single_line(text, 80)
+        display_name = _single_line(member.get("name"), 40)
+        anchor_note = self._group_member_identity_anchor_note(str(sender_id), display_name, limit=120)
+        rename_text = self._format_display_name_rename_events(member.get("display_name_events"), limit=2)
+        phrases = member.get("recent_phrases") if isinstance(member.get("recent_phrases"), list) else []
+        phrase_items = []
+        for item in phrases[:3]:
+            phrase = _single_line(item, 24)
+            if phrase and phrase != display_name and phrase != current_text and phrase not in phrase_items:
+                phrase_items.append(phrase)
+        parts = []
+        if phrase_items:
+            parts.append("最近常这样说：" + " / ".join(phrase_items))
+        if rename_text:
+            parts.append("最近改名：" + rename_text)
+        if anchor_note:
+            parts.append(anchor_note)
+        if not parts:
+            return ""
+        label = self._group_member_identity_label(str(sender_id), member.get("identity_name") or member.get("name"), limit=24)
+        return "当前群内观察：" + label + "｜" + "｜".join(parts)
+
     def _format_group_context_for_prompt(self, group: dict[str, Any], sender_id: str = "", text: str = "") -> str:
         atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
-        lines = [
-            "【群聊观察层】",
-            "这些是群聊上下文,只用于判断气氛、称呼、梗和是否该少说。不要暴露观察、画像、黑话学习或内部记录。",
-            "身份防串规则：最近群聊中的方括号 QQ 是内部身份锚点；同名、相似外号或群名片变化都不能跨 QQ 合并。回复时不要主动说出 QQ 标签。",
-            f"群气氛：{atmosphere.get('pace', '未知')}｜{atmosphere.get('mood', '平稳')}｜近段发言 {atmosphere.get('recent_count', 0)} 条｜活跃群友 {atmosphere.get('active_speakers', 0)} 人",
-        ]
+        lines = ["【群聊观察层】"]
+        pace = _single_line(atmosphere.get("pace"), 20)
+        mood = _single_line(atmosphere.get("mood"), 20)
+        if (pace and pace != "未知") or (mood and mood != "平稳"):
+            lines.append("群气氛：" + "｜".join(part for part in (pace, mood) if part))
         intensity = self._group_high_intensity_state(group, mutate=False)
         if intensity.get("active"):
             lines.append(
@@ -1209,6 +1265,12 @@ class GroupObservationMixin:
         scene_text = self._format_group_scene_awareness_for_prompt(group, sender_id, text)
         if scene_text:
             lines.append(scene_text)
+        worldbook_text = self._format_worldbook_group_members_for_prompt(group, sender_id, text)
+        if worldbook_text:
+            lines.append(worldbook_text)
+        current_observation = self._format_current_group_member_observation_for_prompt(group, sender_id, text)
+        if current_observation:
+            lines.append(current_observation)
         recent = group.get("recent_messages")
         if isinstance(recent, list) and recent:
             msg_lines = []
@@ -1231,9 +1293,9 @@ class GroupObservationMixin:
         episodes_text = self._format_group_episodes_for_prompt(group)
         if episodes_text:
             lines.append("近期群聊片段记忆：\n" + episodes_text)
-        relationship_text = self._format_group_relationship_graph_for_prompt(group)
+        relationship_text = self._format_group_relationship_graph_for_prompt(group, sender_id, text)
         if relationship_text:
-            lines.append("群友互动关系：\n" + relationship_text)
+            lines.append("群友互动图：\n" + relationship_text)
         slang = group.get("slang_terms")
         if isinstance(slang, list) and slang:
             terms = []
@@ -1247,40 +1309,15 @@ class GroupObservationMixin:
         meaning_text = self._format_group_slang_meanings_for_prompt(group)
         if meaning_text:
             lines.append("群内词义参考：\n" + meaning_text)
-        worldbook_text = self._format_worldbook_group_members_for_prompt(group, sender_id, text)
-        if worldbook_text:
-            lines.append(worldbook_text)
-        members = group.get("members")
-        if sender_id and isinstance(members, dict):
-            member = members.get(sender_id)
-            if isinstance(member, dict):
-                phrases = member.get("recent_phrases") if isinstance(member.get("recent_phrases"), list) else []
-                phrase_text = " / ".join(_single_line(item, 24) for item in phrases[:4] if _single_line(item, 24))
-                identity_note = _single_line(member.get("identity_note"), 80)
-                boundary_note = _single_line(member.get("boundary_note"), 80)
-                display_name = _single_line(member.get("name"), 40)
-                anchor_note = self._group_member_identity_anchor_note(sender_id, display_name, limit=120)
-                rename_text = self._format_display_name_rename_events(member.get("display_name_events"), limit=3)
-                lines.append(
-                    f"当前发言者：{self._group_member_identity_label(sender_id, member.get('identity_name') or member.get('name'), limit=24)}"
-                    f"｜发言样本 {member.get('count', 0)} 条"
-                    + (f"｜近期短句：{phrase_text}" if phrase_text else "")
-                    + (f"｜关系备注：{identity_note}" if identity_note else "")
-                    + (f"｜互动边界：{boundary_note}" if boundary_note else "")
-                    + (f"｜近期改名：{rename_text}" if rename_text else "")
-                    + (f"｜{anchor_note}" if anchor_note else "")
-                )
-        lines.append(
-            "群聊回复原则：被叫到或确实需要回应时再说；短一点,像群友接话；不要逐条总结群聊,不要当主持人,不要把每个话题都认真升格。"
-        )
         if self.enable_group_privacy_guard:
             lines.append(
-                "隐私边界：绝不能把私聊记忆、用户私聊偏好、内部画像或观察记录说到群里；"
-                "不要说“我记得你私聊说过”；不要公开评价群友关系。只把这些当作少说错话的背景。"
+                "群聊边界：私聊记忆、用户私聊偏好和内部记录只作避错背景,不要说到群里。"
             )
         livingmemory_guidance = self._format_livingmemory_guidance(scope="group")
         if livingmemory_guidance:
             lines.append(livingmemory_guidance)
+        if len(lines) <= 1:
+            return ""
         return "\n".join(lines)
 
     def _format_group_passive_reply_context_for_prompt(self, group: dict[str, Any], sender_id: str = "", text: str = "") -> str:
@@ -1497,7 +1534,7 @@ class GroupObservationMixin:
             f"常见词/梗：{'、'.join(top_terms) if top_terms else '暂无'}\n"
             f"活跃群友：{member_text or '暂无'}\n"
             f"当前话题：{_single_line(self._format_group_topic_threads_for_prompt(group), 180) or '暂无'}\n"
-            f"关系网络：{_single_line(self._format_group_relationship_graph_for_prompt(group), 180) or '暂无'}\n"
+            f"群友互动图：{_single_line(self._format_group_relationship_graph_for_prompt(group), 180) or '暂无'}\n"
             f"插话反馈：{self._format_group_interjection_feedback(group)}"
         )
 

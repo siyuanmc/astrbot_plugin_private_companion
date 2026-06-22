@@ -3350,6 +3350,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_group_relationship_graph",
             "enable_group_privacy_guard",
             "enable_worldbook_member_recognition",
+            "enable_cross_user_memory_bridge",
             "enable_atrelay_tools",
             "enable_livingmemory_integration",
             "enable_bilibili_integration",
@@ -3877,6 +3878,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "worldbook_auto_pending_observations",
             "worldbook_member_inject_limit",
             "worldbook_config_paths",
+            "cross_user_memory_owner_only",
             "enable_atrelay_tools",
             "atrelay_require_worldbook_first",
             "atrelay_member_cache_minutes",
@@ -4081,7 +4083,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             if enabled_groups:
                 add("ok", "已有群聊观测数据", f"已启用 {enabled_groups} 个群")
             else:
-                add("info", "暂无群聊观测数据", "收到群消息后会逐步建立群画像")
+                add("info", "暂无群聊观测数据", "收到群消息后会逐步建立群内观察")
         else:
             add("info", "群聊陪伴未开启", "当前不会记录群聊上下文")
 
@@ -4623,6 +4625,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_group_relationship_graph",
             "enable_group_privacy_guard",
             "enable_worldbook_member_recognition",
+            "enable_cross_user_memory_bridge",
             "enable_group_scene_awareness",
             "enable_group_reality_promise_guard",
             "enable_atrelay_tools",
@@ -4964,6 +4967,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "worldbook_auto_pending_observations",
             "worldbook_member_inject_limit",
             "worldbook_config_paths",
+            "cross_user_memory_owner_only",
             "enable_atrelay_tools",
             "atrelay_require_worldbook_first",
             "atrelay_member_cache_minutes",
@@ -5538,7 +5542,9 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "worldbook_member_match_aliases",
             "worldbook_self_registration",
             "enable_atrelay_tools",
+            "enable_cross_user_memory_bridge",
             "atrelay_require_worldbook_first",
+            "cross_user_memory_owner_only",
             "atrelay_sensitive_confirm",
         }:
             return self._normalize_bool_value(value)

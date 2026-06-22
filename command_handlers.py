@@ -72,9 +72,17 @@ class CommandHandlersMixin:
                     reverse=True,
                 )[:12]
                 if ranked:
-                    response = "当前群友轻画像：\n" + "\n".join(
-                        f"- {_single_line(item.get('name'), 18) or '群友'}｜发言 {item.get('count', 0)}｜"
-                        f"{' / '.join(_single_line(x, 18) for x in (item.get('recent_phrases') or [])[:3])}"
+                    response = "当前群内成员观察：\n" + "\n".join(
+                        f"- {_single_line(item.get('name'), 18) or '群友'}"
+                        + (
+                            "｜" + " / ".join(
+                                _single_line(x, 18)
+                                for x in (item.get('recent_phrases') or [])[:3]
+                                if _single_line(x, 18)
+                            )
+                            if item.get("recent_phrases")
+                            else ""
+                        )
                         for item in ranked
                     )
                 else:
@@ -86,7 +94,7 @@ class CommandHandlersMixin:
             elif action in {"插话判定", "插话反馈", "反馈"}:
                 response = "群聊插话反馈：" + self._format_group_interjection_feedback(group)
             elif action in {"关系网", "关系网络", "互动关系"}:
-                response = "群友互动关系：\n" + (self._format_group_relationship_graph_for_prompt(group) or "暂无。")
+                response = "群友互动图：\n" + (self._format_group_relationship_graph_for_prompt(group) or "暂无。")
             elif action in {"撤回消息", "防撤回", "转述撤回", "撤回转述"}:
                 if not self.enable_recall_enhancement or not self.enable_recall_transcribe_command:
                     response = "撤回消息转述没有开启。"

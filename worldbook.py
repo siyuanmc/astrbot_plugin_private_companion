@@ -494,22 +494,10 @@ class WorldbookMixin:
         if not uid:
             return ""
         display = _single_line(display_name, 40)
-        profile = self._worldbook_profile_by_user_id(uid)
         stable_name = self._group_member_identity_name(uid, display, limit=30)
         if not display or display == uid or display == stable_name:
             return ""
-        note_parts = [
-            f"身份锚点：{stable_name}[QQ:{uid}] 当前群名片/显示名是“{display}”,这只是临时显示名,不能覆盖 QQ 号对应的稳定身份。"
-        ]
-        if isinstance(profile, dict):
-            gender = _single_line(profile.get("gender"), 40)
-            if gender:
-                note_parts.append(f"性别：{gender}")
-            identity_note = _single_line(profile.get("identity_note") or profile.get("note") or profile.get("content"), limit)
-            if identity_note:
-                note_parts.append(f"关系网备注：{identity_note}")
-        note_parts.append(f"若显示名像其他角色或群友名字,优先理解为{stable_name}在改名/玩梗/模仿,不要把 TA 误认为那个名字本人。")
-        return " ".join(note_parts)
+        return f"{stable_name}[QQ:{uid}] 现在显示成“{display}”，这是群名片/临时显示名。"
 
     def _format_display_name_rename_events(self, events: Any, *, limit: int = 3) -> str:
         if not isinstance(events, list):
@@ -1196,24 +1184,17 @@ class WorldbookMixin:
             if not parts:
                 parts.append(_single_line(profile.get("content"), 360))
             lines.append(
-                f"- [{confidence}｜{reason}] QQ:{profile_uid or '-'}｜"
-                f"固定名称:{_single_line(profile.get('name'), 40) or profile_uid or '-'}"
-                + (f"｜可用称呼线索:{aliases}" if aliases else "")
+                f"- {confidence}：{_single_line(profile.get('name'), 40) or profile_uid or '-'}"
+                f"（QQ:{profile_uid or '-'}）"
+                + (f"｜称呼线索：{aliases}" if aliases else "")
+                + (f"｜来源：{reason}" if reason else "")
                 + "：" + "｜".join(part for part in parts if part)
             )
         if not lines:
             return ""
         return (
             "【群聊关系网】\n"
-            "以下是群聊关系节点资料,用于称呼、关系和说话边界。"
-            "身份锚点只能是 QQ 号；群名片、昵称和别名只可作为称呼线索或被提及线索。"
-            "不要把一个 QQ 的固定名称、外号、记忆或关系套用到另一个 QQ；"
-            "只把标注为“已确认”的节点当作当前发言者/近期发言者；"
-            "已确认必须来自消息 sender_id 与节点 QQ 号的精确匹配。"
-            "标注为“被提及”的节点只表示当前消息明确提到该称呼。"
-            "不要凭相似昵称、改名前后的群名片或语气习惯猜测身份；遇到不确定身份时直接按群友处理。"
-            "回复时不要主动说出内部 QQ 标签,除非用户明确询问身份或 QQ。"
-            "重要记忆只作为背景,不要把画像里的现实信息说成实时事实,也不要公开复述内部资料或 private/internal 记忆。\n"
+            "下面是按 QQ 号确认的稳定关系资料；群名片、昵称和别名只当称呼线索。\n"
             + "\n".join(lines)
         )
 

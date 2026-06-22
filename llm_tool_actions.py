@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Any
 
@@ -17,6 +18,18 @@ from .helpers import _now_ts, _safe_float, _safe_int, _single_line
 
 class LlmToolActionsMixin:
     """Implementation bodies for LLM tools registered in main.py."""
+
+    def _cross_user_memory_query_instruction(self) -> str:
+        if not (self.enabled and getattr(self, "enable_cross_user_memory_bridge", False)):
+            return ""
+        return """
+【跨用户记忆互通】
+用户在私聊里问“你和某人聊了什么”“最近和某群互动怎样”“某人在群里说过什么”时，可以用 `pc_query_interaction` 读取近期互动摘要。
+- 只用于查询，不发送消息。
+- 优先传 scope=private/group、user_hint 或 group_hint；不确定时传原始称呼给 hint。
+- “最近和他私聊说了什么”传 scope=private,user_hint=对象；“他在群里说了什么”传 scope=group,user_hint=对象，有具体群再加 group_hint。
+- 回答时概括最近互动和重点即可，不要大段复述原文。
+""".strip()
 
     def _qzone_tool_instruction(self) -> str:
         if not (self.enabled and self.enable_qzone_integration):
@@ -94,6 +107,342 @@ class LlmToolActionsMixin:
             )
         result = await self._publish_qzone_text(content, event, images=images)
         return json.dumps({"status": "success" if result.get("success") else "error", **result}, ensure_ascii=False)
+
+    def _interaction_query_platform(self, event: AstrMessageEvent) -> str:
+        origin = str(getattr(event, "unified_msg_origin", "") or "")
+        platform = origin.split(":", 1)[0] if ":" in origin else ""
+        return platform or getattr(self, "target_platform", "") or "aiocqhttp"
+
+    def _interaction_query_private_targets(self, hint: str = "") -> list[dict[str, str]]:
+        query = _single_line(hint, 80)
+        users = self.data.get("users") if isinstance(self.data.get("users"), dict) else {}
+        profiles = self.data.get("worldbook_member_profiles") if isinstance(self.data.get("worldbook_member_profiles"), dict) else {}
+        targets: dict[str, dict[str, str]] = {}
+
+        def add(user_id: str, label: str = "", source: str = "") -> None:
+            user_id = _single_line(user_id, 40)
+            if not user_id:
+                return
+            existing = targets.setdefault(user_id, {"user_id": user_id, "label": "", "source": ""})
+            if label and (not existing.get("label") or existing.get("label") == user_id):
+                existing["label"] = label
+            if source and not existing.get("source"):
+                existing["source"] = source
+
+        if query and query.isdigit():
+            add(query, query, "qq")
+        for user_id, user in users.items():
+            if not isinstance(user, dict):
+                continue
+            uid = _single_line(user.get("user_id") or user_id, 40)
+            tokens = [
+                uid,
+                user.get("nickname"),
+                user.get("display_name"),
+                user.get("last_display_name"),
+                user.get("stable_name"),
+                *(user.get("observed_display_names") if isinstance(user.get("observed_display_names"), list) else []),
+                *(user.get("aliases") if isinstance(user.get("aliases"), list) else []),
+            ]
+            clean_tokens = [_single_line(token, 60) for token in tokens if _single_line(token, 60)]
+            if not query or any(query == token or (query and query in token) for token in clean_tokens):
+                label = next((token for token in clean_tokens if token and token != uid), uid)
+                add(uid, label, "private_user")
+        for user_id, profile in profiles.items():
+            if not isinstance(profile, dict):
+                continue
+            uid = _single_line(profile.get("linked_qq_user_id") or profile.get("user_id") or user_id, 40)
+            if not uid or not uid.isdigit():
+                continue
+            tokens = [
+                uid,
+                profile.get("name"),
+                *(profile.get("aliases") if isinstance(profile.get("aliases"), list) else []),
+                *(profile.get("observed_names") if isinstance(profile.get("observed_names"), list) else []),
+            ]
+            clean_tokens = [_single_line(token, 60) for token in tokens if _single_line(token, 60)]
+            if not query or any(query == token or (query and query in token) for token in clean_tokens):
+                label = next((token for token in clean_tokens if token and token != uid), uid)
+                add(uid, label, "worldbook")
+        return list(targets.values())[:12]
+
+    async def _interaction_query_group_targets(self, event: AstrMessageEvent, hint: str = "") -> list[dict[str, str]]:
+        query = _single_line(hint, 80)
+        targets: dict[str, dict[str, str]] = {}
+
+        def add(group_id: str, label: str = "", source: str = "") -> None:
+            group_id = _single_line(group_id, 40)
+            if not group_id:
+                return
+            existing = targets.setdefault(group_id, {"group_id": group_id, "label": "", "source": ""})
+            if label and (not existing.get("label") or existing.get("label") == group_id):
+                existing["label"] = label
+            if source and not existing.get("source"):
+                existing["source"] = source
+
+        if query and query.isdigit():
+            add(query, query, "group_id")
+        groups = self.data.get("groups") if isinstance(self.data.get("groups"), dict) else {}
+        for group_id, group in groups.items():
+            if not isinstance(group, dict):
+                continue
+            gid = _single_line(group.get("group_id") or group_id, 40)
+            tokens = [
+                gid,
+                group.get("name"),
+                group.get("group_name"),
+                group.get("display_name"),
+                group.get("nickname"),
+            ]
+            clean_tokens = [_single_line(token, 80) for token in tokens if _single_line(token, 80)]
+            if not query or any(query == token or (query and query in token) for token in clean_tokens):
+                label = next((token for token in clean_tokens if token and token != gid), gid)
+                add(gid, label, "plugin_group")
+        profiles = self.data.get("worldbook_group_profiles") if isinstance(self.data.get("worldbook_group_profiles"), dict) else {}
+        for group_id, profile in profiles.items():
+            if not isinstance(profile, dict):
+                continue
+            gid = _single_line(profile.get("group_id") or group_id, 40)
+            tokens = [gid, profile.get("name"), profile.get("title"), profile.get("display_name")]
+            clean_tokens = [_single_line(token, 80) for token in tokens if _single_line(token, 80)]
+            if not query or any(query == token or (query and query in token) for token in clean_tokens):
+                label = next((token for token in clean_tokens if token and token != gid), gid)
+                add(gid, label, "worldbook_group")
+        if query and len(targets) <= 1:
+            try:
+                result = await self._resolve_atrelay_target_group(event, query)
+                if isinstance(result, dict) and result.get("status") == "success":
+                    gid = _single_line(result.get("group_id"), 40)
+                    label = _single_line(result.get("group_name") or result.get("name"), 80) or gid
+                    add(gid, label, "platform")
+            except Exception:
+                pass
+        return list(targets.values())[:12]
+
+    async def _interaction_query_read_history(self, umo: str, *, limit: int = 40, hours: int = 72) -> list[dict[str, Any]]:
+        getter = getattr(self, "_get_current_conversation_safely", None)
+        try:
+            if callable(getter):
+                conv = await getter(umo, label="cross_user_memory_query")
+            else:
+                conv_id = await self.context.conversation_manager.get_curr_conversation_id(umo)
+                if not conv_id:
+                    return []
+                conv = await self.context.conversation_manager.get_conversation(umo, conv_id)
+        except Exception:
+            return []
+        history = self._load_conversation_history_items(conv)
+        if not history:
+            return []
+        max_items = max(5, min(120, _safe_int(limit, 40, 5)))
+        cutoff = _now_ts() - max(1, min(24 * 30, _safe_int(hours, 72, 1))) * 3600
+        dated: list[dict[str, Any]] = []
+        undated: list[dict[str, Any]] = []
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            if not self._history_item_content_text(item):
+                continue
+            ts = self._history_item_timestamp(item)
+            if ts is None:
+                undated.append(item)
+            elif ts >= cutoff:
+                dated.append(item)
+        selected = dated[-max_items:] if dated else (undated or history)[-max_items:]
+        return [item for item in selected if isinstance(item, dict)][-max_items:]
+
+    def _interaction_query_lines(self, history: list[dict[str, Any]], *, limit: int = 24) -> list[str]:
+        lines: list[str] = []
+        for item in history[-max(1, limit):]:
+            line = self._format_history_item_for_summary(item)
+            if not line:
+                continue
+            line = re.sub(r"\s+", " ", line).strip()
+            if line and line not in lines:
+                lines.append(line)
+        return lines
+
+    def _interaction_query_user_filter_tokens(self, user_hint: str = "") -> tuple[set[str], set[str]]:
+        user_hint = _single_line(user_hint, 80)
+        ids: set[str] = set()
+        names: set[str] = set()
+        if user_hint:
+            if user_hint.isdigit():
+                ids.add(user_hint)
+            else:
+                names.add(user_hint)
+        for target in self._interaction_query_private_targets(user_hint):
+            user_id = _single_line(target.get("user_id"), 40)
+            label = _single_line(target.get("label"), 60)
+            if user_id:
+                ids.add(user_id)
+            if label and label != user_id:
+                names.add(label)
+        return ids, names
+
+    def _interaction_query_group_recent_lines(self, group_id: str, *, limit: int = 24, user_hint: str = "") -> list[str]:
+        groups = self.data.get("groups") if isinstance(self.data.get("groups"), dict) else {}
+        group = groups.get(str(group_id))
+        if not isinstance(group, dict):
+            return []
+        recent = group.get("recent_messages") if isinstance(group.get("recent_messages"), list) else []
+        filter_ids, filter_names = self._interaction_query_user_filter_tokens(user_hint)
+        lines: list[str] = []
+        for item in recent[-max(1, limit):]:
+            if not isinstance(item, dict):
+                continue
+            sender_id = _single_line(item.get("sender_id") or item.get("user_id"), 40)
+            speaker = _single_line(item.get("identity_name") or item.get("name") or item.get("sender_name") or sender_id, 40) or "群友"
+            if user_hint:
+                speaker_hit = any(token and (token == speaker or token in speaker) for token in filter_names)
+                if not ((sender_id and sender_id in filter_ids) or speaker_hit):
+                    continue
+            text = _single_line(item.get("text") or item.get("message"), 220)
+            if not text:
+                continue
+            ts = _safe_float(item.get("ts") or item.get("time") or item.get("timestamp"), 0)
+            prefix = ""
+            if ts > 0:
+                try:
+                    prefix = self._environment_fromtimestamp(ts / 1000 if ts > 10_000_000_000 else ts).strftime("%m-%d %H:%M") + " "
+                except Exception:
+                    prefix = ""
+            lines.append(f"{prefix}{speaker}: {text}")
+        return lines
+
+    def _interaction_query_group_user_recent_lines(self, user_hint: str, *, limit: int = 36) -> list[str]:
+        user_hint = _single_line(user_hint, 80)
+        if not user_hint:
+            return []
+        groups = self.data.get("groups") if isinstance(self.data.get("groups"), dict) else {}
+        lines: list[str] = []
+        per_group_limit = max(4, min(12, limit // 3 or 8))
+        for group_id, group in groups.items():
+            if not isinstance(group, dict):
+                continue
+            group_label = _single_line(group.get("name") or group.get("group_name") or group_id, 60)
+            group_lines = self._interaction_query_group_recent_lines(str(group_id), limit=per_group_limit, user_hint=user_hint)
+            for line in group_lines:
+                lines.append(f"{group_label}｜{line}")
+        return lines[-max(1, limit):]
+
+    async def _pc_query_interaction_impl(self, event: AstrMessageEvent, **kwargs) -> str:
+        if not getattr(self, "enable_cross_user_memory_bridge", False):
+            return json.dumps({"status": "disabled", "message": "跨用户记忆互通未启用"}, ensure_ascii=False)
+        try:
+            is_private = bool(getattr(event, "is_private_chat", lambda: False)())
+        except Exception:
+            is_private = ":FriendMessage:" in str(getattr(event, "unified_msg_origin", "") or "")
+        try:
+            requester_id = str(event.get_sender_id())
+        except Exception:
+            requester_id = ""
+        owner_only = bool(getattr(self, "cross_user_memory_owner_only", True))
+        if owner_only:
+            users = self.data.get("users") if isinstance(self.data.get("users"), dict) else {}
+            requester_profile = users.get(requester_id) if isinstance(users, dict) else None
+            try:
+                requester_is_owner = isinstance(requester_profile, dict) and self._private_user_role(requester_profile, requester_id) == "owner"
+            except Exception:
+                requester_is_owner = False
+            allowed = requester_id in set(self._configured_target_ids()) or requester_is_owner
+            forbidden_message = "只有主人用户可以查询 Bot 与其他人的互动。"
+        else:
+            allowed = self._can_manage_private_companion(event)
+            forbidden_message = "只有主人/管理员在私聊中可以查询 Bot 与其他人的互动。"
+        if not is_private or not allowed:
+            return json.dumps({"status": "forbidden", "message": forbidden_message}, ensure_ascii=False)
+        scope = _single_line(kwargs.get("scope") or kwargs.get("type") or "auto", 20).lower()
+        user_hint = _single_line(kwargs.get("user_hint") or kwargs.get("user") or kwargs.get("user_id") or kwargs.get("target_user") or "", 80)
+        group_hint = _single_line(kwargs.get("group_hint") or kwargs.get("group") or kwargs.get("group_id") or kwargs.get("target_group") or "", 80)
+        hint = _single_line(kwargs.get("hint") or kwargs.get("target") or kwargs.get("name") or "", 80)
+        hours = max(1, min(24 * 30, _safe_int(kwargs.get("hours"), 72, 1)))
+        limit = max(5, min(80, _safe_int(kwargs.get("limit"), 36, 5)))
+        if scope in {"群", "群聊", "group_message"}:
+            scope = "group"
+        elif scope in {"私聊", "好友", "friend", "private_message", "user"}:
+            scope = "private"
+        elif scope not in {"auto", "private", "group"}:
+            scope = "auto"
+        if scope == "auto":
+            if group_hint:
+                scope = "group"
+            elif user_hint:
+                scope = "private"
+            elif hint and "群" in hint:
+                scope = "group"
+            else:
+                scope = "private"
+        platform = self._interaction_query_platform(event)
+        target_hint = user_hint or group_hint or hint
+        if scope == "private":
+            targets = self._interaction_query_private_targets(user_hint or hint)
+            if not targets:
+                return json.dumps({"status": "not_found", "message": "没有找到匹配的私聊对象", "hint": target_hint}, ensure_ascii=False)
+            if len(targets) > 1 and not (user_hint or hint).isdigit():
+                return json.dumps({"status": "ambiguous", "message": "匹配到多个私聊对象，需要补充 QQ 或更明确称呼", "matches": targets[:8]}, ensure_ascii=False)
+            target = targets[0]
+            user_id = target.get("user_id", "")
+            umo = f"{platform}:FriendMessage:{user_id}"
+            history = await self._interaction_query_read_history(umo, limit=limit, hours=hours)
+            lines = self._interaction_query_lines(history, limit=min(limit, 28))
+            return json.dumps(
+                {
+                    "status": "success" if lines else "empty",
+                    "scope": "private",
+                    "target": target,
+                    "session": umo,
+                    "hours": hours,
+                    "message_count": len(lines),
+                    "recent_lines": lines,
+                    "reply_hint": "请用自然口吻向主人概括最近互动；可以提到对象和大致话题，不要大段复述原文。",
+                },
+                ensure_ascii=False,
+            )
+        if user_hint and not (group_hint or hint):
+            lines = self._interaction_query_group_user_recent_lines(user_hint, limit=min(limit, 36))
+            return json.dumps(
+                {
+                    "status": "success" if lines else "empty",
+                    "scope": "group_user",
+                    "target": {"user_hint": user_hint},
+                    "hours": hours,
+                    "message_count": len(lines),
+                    "recent_lines": lines,
+                    "reply_hint": "请概括这个人最近在群里的发言和互动；如果线索不足，就说明目前只看到这些近期群聊记录。",
+                },
+                ensure_ascii=False,
+            )
+        targets = await self._interaction_query_group_targets(event, group_hint or hint)
+        if not targets:
+            return json.dumps({"status": "not_found", "message": "没有找到匹配的群聊", "hint": target_hint}, ensure_ascii=False)
+        if len(targets) > 1 and not (group_hint or hint).isdigit():
+            return json.dumps({"status": "ambiguous", "message": "匹配到多个群聊，需要补充群号或更明确群名", "matches": targets[:8]}, ensure_ascii=False)
+        target = targets[0]
+        group_id = target.get("group_id", "")
+        umo = f"{platform}:GroupMessage:{group_id}"
+        if user_hint:
+            history = []
+            lines = self._interaction_query_group_recent_lines(group_id, limit=min(limit, 28), user_hint=user_hint)
+        else:
+            history = await self._interaction_query_read_history(umo, limit=limit, hours=hours)
+            lines = self._interaction_query_lines(history, limit=min(limit, 28))
+            if not lines:
+                lines = self._interaction_query_group_recent_lines(group_id, limit=min(limit, 28))
+        return json.dumps(
+            {
+                "status": "success" if lines else "empty",
+                "scope": "group",
+                "target": target,
+                "user_hint": user_hint,
+                "session": umo,
+                "hours": hours,
+                "message_count": len(lines),
+                "recent_lines": lines,
+                "reply_hint": "请用自然口吻向主人概括 Bot 最近在这个群里的互动；不要把群聊原文整段搬出来。",
+            },
+            ensure_ascii=False,
+        )
 
     async def _pc_get_group_id_by_name_impl(self, event: AstrMessageEvent, **kwargs) -> str:
         if not self.enable_atrelay_tools:

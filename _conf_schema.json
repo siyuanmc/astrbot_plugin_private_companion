@@ -110,7 +110,7 @@
   "enable_model_perception": {
     "description": "感知当前模型配置",
     "type": "bool",
-    "hint": "把当前会话 LLM、插件任务模型覆盖和视觉转述模型配置作为环境信息注入。不同会话、不同任务和不同 AstrBot 配置下模型可能不同；该信息只供 Bot 判断自身能力边界和表达方式，不要求主动报告模型名。",
+    "hint": "把当前会话 LLM 和视觉转述模型配置作为环境信息注入。该信息只供 Bot 判断自身能力边界和表达方式，不要求主动报告模型名。",
     "default": true,
     "condition": "enable_environment_perception"
   },
@@ -2029,7 +2029,7 @@
   "enable_group_context_injection": {
     "description": "群聊回复前注入观察上下文",
     "type": "bool",
-    "hint": "当 AstrBot 本身触发群聊 LLM 回复时，注入群气氛、最近消息、群内常见词和当前发言者轻画像。",
+    "hint": "当 AstrBot 本身触发群聊 LLM 回复时，注入群气氛、最近消息、群内常见词和当前发言者的群内观察。",
     "default": true,
     "condition": {
       "enable_group_companion": true
@@ -2038,7 +2038,7 @@
   "enable_group_persona_denoise": {
     "description": "群聊人格降噪",
     "type": "bool",
-    "hint": "群聊回复时降低私聊腔、状态汇报和关系画像外溢，让 Bot 更贴当前群话题。",
+    "hint": "群聊回复时降低私聊腔、状态汇报和私聊关系外溢，让 Bot 更贴当前群话题。",
     "default": true,
     "condition": {
       "enable_group_companion": true
@@ -2504,9 +2504,9 @@
     }
   },
   "enable_group_member_profiles": {
-    "description": "启用群友轻画像",
+    "description": "启用群内成员观察",
     "type": "bool",
-    "hint": "记录目标群内成员的昵称、发言次数和近期短句，用于被叫到时更贴合群聊语境。",
+    "hint": "只记录成员在当前群里的近期发言、短句、活跃度和改名痕迹；稳定身份、关系备注和重要记忆交给群聊关系网。",
     "default": true,
     "condition": {
       "enable_group_companion": true
@@ -2571,9 +2571,9 @@
     }
   },
   "enable_group_relationship_graph": {
-    "description": "启用群友互动关系网络",
+    "description": "启用群友互动图",
     "type": "bool",
-    "hint": "记录群友之间的相邻互动频率和常见氛围，用于判断谁经常互相接话或开玩笑。",
+    "hint": "记录群友之间近期谁常互相接话、玩梗或争论；它只表示群内互动节奏，不保存稳定身份资料。",
     "default": true,
     "condition": {
       "enable_group_companion": true
@@ -2591,7 +2591,7 @@
   "enable_worldbook_member_recognition": {
     "description": "启用群聊关系网",
     "type": "bool",
-    "hint": "开启后，会读取关系节点、群资料和原始条目。成员身份以 QQ 号为唯一稳定锚点；改群名片或昵称也不会影响当前发言者识别。",
+    "hint": "读取稳定关系节点、群资料、别名和重要记忆。成员身份以 QQ 号为唯一锚点；群名片、昵称和近期发言习惯只作辅助线索。",
     "default": true,
     "condition": {
       "enable_group_companion": true
@@ -2663,6 +2663,24 @@
     "default": true,
     "condition": {
       "enable_group_companion": true
+    }
+  },
+  "enable_cross_user_memory_bridge": {
+    "description": "启用跨用户记忆互通",
+    "type": "bool",
+    "hint": "开启后，主人可在私聊中询问 Bot 与某个私聊对象或群聊的近期互动。该功能只读摘要，不会发送消息，默认仅主人用户可用。",
+    "default": false,
+    "condition": {
+      "enable_worldbook_member_recognition": true
+    }
+  },
+  "cross_user_memory_owner_only": {
+    "description": "仅主人可查询跨用户互动",
+    "type": "bool",
+    "hint": "开启后，只有配置目标用户能查询 Bot 与其他用户/群聊的互动；关闭后，Bot 管理员也可在私聊中查询。",
+    "default": true,
+    "condition": {
+      "enable_cross_user_memory_bridge": true
     }
   },
   "atrelay_require_worldbook_first": {
@@ -2815,9 +2833,9 @@
     }
   },
   "max_group_relationship_edges": {
-    "description": "最多保留群友互动关系边",
+    "description": "最多保留群友互动边",
     "type": "int",
-    "hint": "保留多少组群友之间的互动关系统计。",
+    "hint": "保留多少组群友之间的近期互动统计。",
     "slider": {
       "min": 10,
       "max": 300,

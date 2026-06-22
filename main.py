@@ -328,6 +328,9 @@ _PROACTIVE_ONLY_TEMP_UNLOCK_ALIASES = {
     "书柜偏好": "enable_private_reading_preference_influence",
     "夹层偏好": "enable_private_reading_preference_influence",
     "关系网": "enable_worldbook_member_recognition",
+    "跨用户记忆": "enable_cross_user_memory_bridge",
+    "跨用户记忆互通": "enable_cross_user_memory_bridge",
+    "互动查询": "enable_cross_user_memory_bridge",
     "跨群转述": "enable_atrelay_tools",
     "转述工具": "enable_atrelay_tools",
     "livingmemory": "enable_livingmemory_integration",
@@ -348,6 +351,7 @@ _PROACTIVE_ONLY_TEMP_UNLOCK_LABELS = {
     "enable_skill_growth_passive_injection": "技能被动注入",
     "enable_private_reading_preference_influence": "夹层阅读偏好影响",
     "enable_worldbook_member_recognition": "关系网成员识别",
+    "enable_cross_user_memory_bridge": "跨用户记忆互通",
     "enable_atrelay_tools": "跨群转述工具",
     "enable_livingmemory_integration": "LivingMemory 被动引导",
     "enable_tts_enhancement": "TTS 后处理",
@@ -377,16 +381,19 @@ _PROACTIVE_ONLY_TEMP_UNLOCK_GROUPS = {
         "enable_skill_growth_passive_injection",
         "enable_private_reading_preference_influence",
         "enable_worldbook_member_recognition",
+        "enable_cross_user_memory_bridge",
         "enable_livingmemory_integration",
     },
     "pc_tools": {
         "enable_atrelay_tools",
         "enable_worldbook_member_recognition",
+        "enable_cross_user_memory_bridge",
         "enable_qzone_integration",
     },
 }
 _PROACTIVE_ONLY_TEMP_UNLOCK_RELATED = {
     "enable_atrelay_tools": ["enable_worldbook_member_recognition"],
+    "enable_cross_user_memory_bridge": ["enable_worldbook_member_recognition"],
     "enable_group_companion": ["enable_worldbook_member_recognition"],
     "enable_forward_message_adaptation": ["enable_private_image_self_recognition"],
 }
@@ -396,7 +403,7 @@ _PROACTIVE_ONLY_TEMP_UNLOCK_RELATED = {
     PLUGIN_NAME,
     "menglimi",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "4.3.1",
+    "4.4.0",
 )
 class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, TtsEnhancementMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
     @staticmethod
@@ -973,6 +980,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.enable_group_privacy_guard = self._cfg_bool(c, "enable_group_privacy_guard", True)
         self.enable_worldbook_member_recognition = self._cfg_bool(c, "enable_worldbook_member_recognition", True)
         self.enable_atrelay_tools = self._cfg_bool(c, "enable_atrelay_tools", True)
+        self.enable_cross_user_memory_bridge = self._cfg_bool(c, "enable_cross_user_memory_bridge", False)
+        self.cross_user_memory_owner_only = self._cfg_bool(c, "cross_user_memory_owner_only", True)
         self.atrelay_require_worldbook_first = self._cfg_bool(c, "atrelay_require_worldbook_first", True)
         self.atrelay_member_cache_minutes = self._cfg_int(c, "atrelay_member_cache_minutes", 60, 1, 1440)
         self.atrelay_sensitive_confirm = self._cfg_bool(c, "atrelay_sensitive_confirm", True)
@@ -2126,6 +2135,22 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             return '{"status":"disabled","message":"主动消息专用模式下，普通被动回复不可使用 Private Companion 工具。"}'
         return await self._pc_get_specified_group_members_impl(event, **kwargs)
 
+    @filter.llm_tool(name="pc_query_interaction")
+    async def pc_query_interaction(self, event: AstrMessageEvent, **kwargs) -> str:
+        """查询 Bot 与某个私聊对象或群聊的近期互动摘要。
+
+        Args:
+            scope(string): private/group/auto。
+            user_hint(string): 私聊对象/群成员 QQ、关系网名称、别名或显示名。
+            group_hint(string): 群号或群名；和 user_hint 同时提供时查询这个人在该群的近期发言。
+            hint(string): 不确定目标类型时的原始称呼。
+            hours(number): 查询最近多少小时，默认 72。
+            limit(number): 返回多少条候选互动线索，默认 36。
+        """
+        if self._proactive_only_blocks_passive_event(event, "pc_tools"):
+            return '{"status":"disabled","message":"主动消息专用模式下，普通被动回复不可使用 Private Companion 工具。"}'
+        return await self._pc_query_interaction_impl(event, **kwargs)
+
     @filter.llm_tool(name="pc_relay_message")
     async def pc_relay_message(self, event: AstrMessageEvent, **kwargs) -> str:
         """统一转述入口：把用户明确要求转发/转述/提醒的话发送到群聊或私聊。
@@ -2477,12 +2502,12 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         current = self._environment_now()
         lines = [
             "【轻量环境感知】",
-            "这是当前消息的轻量环境边界,只影响时间感、平台语境和回复节奏；不要主动声明“我读取到环境/系统时间”。",
-            f"发送时间：{current.strftime('%Y-%m-%d %H:%M')}",
+            "这是当前消息的轻量背景边界，只影响时间感、平台语境和回复节奏；回复里不需要提到自己读取了环境。",
+            f"时间：{current.strftime('%Y-%m-%d %H:%M')}",
         ]
         platform = await self._format_platform_perception(event)
         if platform:
-            lines.append(f"平台环境：{platform}")
+            lines.append(f"会话：{platform}")
         return "\n".join(lines)
 
     async def _append_capability_boundary_to_request(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
@@ -2562,6 +2587,34 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     mode="conditional",
                     metadata={"注入位置": placement},
                 )
+        cross_user_instruction = self._cross_user_memory_query_instruction()
+        current_prompt = req.system_prompt or ""
+        current_turn_prompt = str(getattr(req, "prompt", "") or "")
+        cross_user_marker = "<!-- private_companion_cross_user_memory_v1 -->"
+        if cross_user_instruction and cross_user_marker not in current_prompt and cross_user_marker not in current_turn_prompt:
+            if any(token in message_text for token in (
+                "聊了什么", "说了什么", "发了什么", "讲了什么", "互动", "和谁聊", "跟谁聊", "最近跟", "最近和",
+                "你和", "你跟", "在群里", "那个群", "这个群", "私聊过", "聊过",
+            )):
+                placement = "prompt" if self._append_turn_prompt_fragment_by_position(
+                    req,
+                    cross_user_marker,
+                    cross_user_instruction,
+                    priority=88,
+                    source="tools",
+                ) else "system_prompt"
+                if placement == "system_prompt":
+                    current_prompt = f"{current_prompt}\n\n{cross_user_marker}\n{cross_user_instruction}".strip()
+                    req.system_prompt = current_prompt
+                await self._record_request_prompt_fragment(
+                    event,
+                    title="跨用户记忆互通工具注入",
+                    key="tools.cross_user_memory",
+                    text=cross_user_instruction,
+                    source="tools",
+                    mode="conditional",
+                    metadata={"注入位置": placement},
+                )
 
     def _is_lightweight_private_passive_inbound(self, text: str) -> bool:
         cleaned = _single_line(text, 80)
@@ -2587,7 +2640,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         lines = [
             "【群聊人格降噪】",
             "这是群聊，不是私聊。优先回答当前被问到的事或接住当前话题，少用亲密私聊腔。",
-            "状态、日程、情绪、关系画像只作为语气背景，除非别人明确问，否则不要主动报告能量、天气、日程、心情或插件状态。",
+            "状态、日程、情绪和私聊关系只作为语气背景，除非别人明确问，否则不要主动报告能量、天气、日程、心情或插件状态。",
             "不要为了表现人格而硬插动作描写、撒娇、长解释或关系总结；一句能说清就一句。",
             "如果只是被轻轻提到或话题不需要你，宁可短、轻、贴当前梗，不要扩写成主动陪伴消息。",
         ]
@@ -3283,34 +3336,34 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         if lightweight_passive:
             lightweight_injection = self._prepared_lightweight_state_injection(state)
             lightweight_injection = self._sanitize_schedule_context_for_private_user(lightweight_injection, current_user)
-            prompt_surface.add("state.lightweight", lightweight_injection, priority=10, source="daily_state")
+            prompt_surface.add("state.lightweight", lightweight_injection, priority=30, source="daily_state")
         else:
             state_injection = self._format_state_injection(state)
             state_injection = self._sanitize_schedule_context_for_private_user(state_injection, current_user)
-            prompt_surface.add("state.full", state_injection, priority=10, source="daily_state")
+            prompt_surface.add("state.full", state_injection, priority=30, source="daily_state")
             life_context = self._format_life_context_injection()
             life_context = self._sanitize_schedule_context_for_private_user(life_context, current_user)
             if life_context:
-                prompt_surface.add("life.context", life_context, priority=12, source="daily_state")
+                prompt_surface.add("life.context", life_context, priority=35, source="daily_state")
             important_dates = self._format_important_dates_injection()
             if important_dates:
-                prompt_surface.add("important.dates", important_dates, priority=14, source="daily_state")
+                prompt_surface.add("important.dates", important_dates, priority=36, source="daily_state")
             worldview_context = (
                 self._format_worldview_adaptation_prompt()
                 if self._feature_enabled_or_temp_unlocked("enable_environment_perception") and self.enable_worldview_perception
                 else ""
             )
             if worldview_context:
-                prompt_surface.add("worldview.adaptation", worldview_context, priority=20, source="worldview")
+                prompt_surface.add("worldview.adaptation", worldview_context, priority=37, source="worldview")
         identity_anchor = self._format_private_identity_anchor_for_prompt(user_id, current_user, event)
         if identity_anchor:
-            prompt_surface.add("identity.anchor", identity_anchor, priority=30, source="identity")
+            prompt_surface.add("identity.anchor", identity_anchor, priority=10, source="identity")
         environment_fragment = await self._format_passive_environment_fragment(event, lightweight=lightweight_passive)
         if environment_fragment:
             prompt_surface.add(
                 "environment.lightweight" if lightweight_passive else "environment.perception",
                 environment_fragment,
-                priority=35,
+                priority=20,
                 source="environment",
             )
         buffered_image_context = self._take_buffered_private_image_context_for_event(event)
@@ -3384,12 +3437,12 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 "【本轮用户连续补充】\n"
                 "用户刚刚在短时间内连续补充了几句,请把它们当作同一轮完整发言理解,不要逐条回复,也不要表现得像用户重复催促：\n"
                 f"{combined_text}",
-                priority=40,
+                priority=50,
                 source="message_debounce",
             )
             inbound_text = _single_line(combined_text.replace("\n", " "), 260)
         if self._user_asks_recalled_messages(inbound_text):
-            prompt_surface.add("recall.query", self._format_recalled_messages_for_natural_query(event, limit=5), priority=45, source="recall")
+            prompt_surface.add("recall.query", self._format_recalled_messages_for_natural_query(event, limit=5), priority=52, source="recall")
         if (
             buffered_images
             and buffered_image_vision
@@ -3449,7 +3502,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                         prompt_surface.add(
                             "image.direct",
                             direct_role_hint,
-                            priority=50,
+                            priority=55,
                             source="private_image",
                         )
                     direct_image_mounted = True
@@ -3479,7 +3532,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     f"{self._private_image_identity_disambiguation_instruction()}\n"
                     f"{reply_objective}\n"
                     f"{buffered_image_vision}",
-                    priority=50,
+                    priority=55,
                     source="private_image",
                 )
             else:
@@ -3494,7 +3547,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     f"{image_context_intro}图片已暂存，但暂无可靠视觉摘要；"
                     "如果用户问图片内容，请自然说暂时没看清，不要编造画面。\n"
                     + "\n".join(f"- {path}" for path in buffered_images),
-                    priority=50,
+                    priority=55,
                     source="private_image",
                 )
         elif bool(getattr(event, "private_companion_deferred_private_image_only_ready", False)):
@@ -3504,7 +3557,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     "【本轮延迟图片】\n"
                     "用户只发了一张图片。下面是这张图的视觉摘要；请自然接住图片内容或表达意图，不要提处理过程。\n"
                     f"{buffered_image_vision}",
-                    priority=50,
+                    priority=55,
                     source="private_image",
                 )
             else:
@@ -3512,7 +3565,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     "image.only.fallback",
                     "【本轮延迟图片】\n"
                     "用户只发了一张图片，但当前没有可靠图片内容；请自然表示暂时没看清，可以请用户补一句，不要编造画面。",
-                    priority=50,
+                    priority=55,
                     source="private_image",
                 )
         reply_image_sources: list[str] = []
@@ -3565,7 +3618,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                         f"{self._private_image_identity_disambiguation_instruction()}\n"
                         f"{reply_objective}\n"
                         f"{reply_image_vision}",
-                        priority=5,
+                        priority=55,
                         source="private_image",
                     )
                     image_keys = self._private_image_cache_image_keys(reply_image_sources)
@@ -3602,7 +3655,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                         "【本轮引用图片】\n"
                         f"用户这轮引用/回复了一张图片,并发送文字：{inbound_text or '（空）'}。"
                         "当前未能拿到可用视觉摘要；如果用户问图片内容，请自然说明暂时没看清，不要编造。",
-                        priority=5,
+                        priority=55,
                         source="private_image",
                     )
         if reply_image_prompt_anchor:
@@ -3619,40 +3672,46 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         if not lightweight_passive:
             hidden_creative_context = self._format_hidden_creative_context_for_reply(inbound_text)
             if hidden_creative_context:
-                prompt_surface.add("creative.hidden", hidden_creative_context, priority=70, source="creative")
+                prompt_surface.add("creative.hidden", hidden_creative_context, priority=60, source="creative")
             bookshelf_secret_context = await self._format_bookshelf_secret_for_prompt(inbound_text, current_user)
             if bookshelf_secret_context:
-                prompt_surface.add("bookshelf.secret", bookshelf_secret_context, priority=70, source="bookshelf")
+                prompt_surface.add("bookshelf.secret", bookshelf_secret_context, priority=61, source="bookshelf")
             bookshelf_reading_context = self._format_bookshelf_reading_context_for_reply(inbound_text, current_user)
             if bookshelf_reading_context:
-                prompt_surface.add("bookshelf.reading", bookshelf_reading_context, priority=72, source="bookshelf")
+                prompt_surface.add("bookshelf.reading", bookshelf_reading_context, priority=62, source="bookshelf")
             private_preference_context = self._format_private_reading_preference_influence_for_reply(inbound_text, current_user)
             if private_preference_context:
-                prompt_surface.add("private_reading.preference", private_preference_context, priority=74, source="private_reading")
+                prompt_surface.add("private_reading.preference", private_preference_context, priority=63, source="private_reading")
             news_context = self._format_recent_news_context_for_reply(inbound_text)
             if news_context:
-                prompt_surface.add("news.recent", news_context, priority=76, source="news")
+                prompt_surface.add("news.recent", news_context, priority=64, source="news")
             if self._feature_enabled_or_temp_unlocked("enable_skill_growth_passive_injection"):
                 skill_context = self._format_skill_growth_for_prompt()
                 if skill_context:
-                    prompt_surface.add("skill.growth", skill_context, priority=78, source="skill")
+                    prompt_surface.add("skill.growth", skill_context, priority=66, source="skill")
             else:
                 skill_context = self._format_skill_growth_for_user_text(inbound_text)
                 if skill_context:
-                    prompt_surface.add("skill.growth.match", skill_context, priority=78, source="skill")
+                    prompt_surface.add("skill.growth.match", skill_context, priority=66, source="skill")
+            private_chat_context = self._format_private_chat_context_injection(current_user)
+            if private_chat_context:
+                prompt_surface.add("private.context", private_chat_context, priority=70, source="companion")
             companion_injection = self._format_companion_planner_injection(current_user)
             if companion_injection:
                 prompt_surface.add("companion.planner", companion_injection, priority=80, source="companion")
+            livingmemory_guidance = self._format_livingmemory_guidance(scope="private" if is_private_chat else "group")
+            if livingmemory_guidance:
+                prompt_surface.add("livingmemory.guidance", livingmemory_guidance, priority=90, source="livingmemory")
             is_wake_event = bool(getattr(event, "is_wake", False)) or bool(
                 getattr(event, "is_at_or_wake_command", False)
             )
             if is_private_chat and not is_wake_event:
                 proactive_context = await self._format_proactive_reply_context(event)
                 if proactive_context:
-                    prompt_surface.add("proactive.reply_context", proactive_context, priority=82, source="proactive")
+                    prompt_surface.add("proactive.reply_context", proactive_context, priority=58, source="proactive")
             detail_injection = self._format_detail_injection()
             if detail_injection:
-                prompt_surface.add("detail.injection", detail_injection, priority=84, source="daily_detail")
+                prompt_surface.add("detail.injection", detail_injection, priority=40, source="daily_detail")
             if self.enable_llm_timer_scheduling and is_private_chat:
                 try:
                     user_id = str(event.get_sender_id())
@@ -3662,7 +3721,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     async with self._data_lock:
                         enabled = bool(self._get_user(user_id).get("enabled"))
                     if enabled:
-                        prompt_surface.add("timer.scheduling", self._format_timer_scheduling_instruction(), priority=90, source="timer")
+                        prompt_surface.add("timer.scheduling", self._format_timer_scheduling_instruction(), priority=95, source="timer")
         injection = prompt_surface.render()
         marker = "<!-- private_companion_state_v1 -->"
         current_prompt = req.system_prompt or ""

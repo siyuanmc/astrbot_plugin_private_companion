@@ -836,9 +836,9 @@ QQ空间 = 公开札记
               <label>插话最小间隔分钟 <input name="group_interject_min_interval_minutes" type="number" min="0" /></label>
               <label>每群每日插话上限 <input name="group_interject_max_daily" type="number" min="0" /></label>
               <label>复读触发阈值 <input name="group_repeat_trigger_threshold" type="number" min="3" max="20" step="1" /></label>
-              <label>跟读初始概率 <input name="group_repeat_follow_probability" type="number" min="0" max="100" /></label>
-              <label>打断初始概率 <input name="group_repeat_interrupt_probability" type="number" min="0" max="100" /></label>
-              <label>概率共同递增 <input name="group_repeat_interrupt_probability_step" type="number" min="0" max="50" /></label>
+              <label>跟读初始概率（%） <input name="group_repeat_follow_probability" type="number" min="0" max="100" /></label>
+              <label>打断初始概率（%） <input name="group_repeat_interrupt_probability" type="number" min="0" max="100" /></label>
+              <label>概率共同递增（%） <input name="group_repeat_interrupt_probability_step" type="number" min="0" max="50" /></label>
               <label>打断文本 <input name="group_repeat_interrupt_text" placeholder="禁止复读" /></label>
               <label class="wide-field">打断表情包路径 <input name="group_repeat_interrupt_image_path" placeholder="C:\\path\\to\\meme.png" /></label>
               <label class="toggle-row"><input name="enable_group_repeat_follow" type="checkbox" /> <span>启用复读跟读</span></label>
@@ -911,7 +911,7 @@ QQ空间 = 公开札记
               <label>技能成长倍率 <input name="skill_growth_rate" type="number" min="0.1" max="3" step="0.1" /></label>
               <label class="toggle-row"><input name="enable_skill_growth_passive_injection" type="checkbox" /> <span>被动回复技能认知</span></label>
               <label class="toggle-row"><input name="enable_skill_growth_schedule_influence" type="checkbox" /> <span>能力状态影响日程</span></label>
-              <label>日程影响强度 <input name="skill_growth_schedule_influence_strength" type="number" min="0" max="1" step="0.05" /></label>
+              <label>日程影响强度（%） <input name="skill_growth_schedule_influence_strength" type="number" min="0" max="100" step="1" /></label>
               <button type="submit">保存记忆学习</button>
             </form>
           </article>
@@ -928,7 +928,7 @@ QQ空间 = 公开札记
                 <label class="toggle-row"><input name="enable_bilibili_integration" type="checkbox" /> <span>启用 B 站 Bot 协同</span></label>
                 <label class="toggle-row"><input name="enable_bilibili_boredom_watch" type="checkbox" /> <span>无聊时触发刷 B 站</span></label>
                 <label>B 站触发最小间隔小时 <input name="bilibili_boredom_min_interval_hours" type="number" min="2" max="72" /></label>
-                <label>视频分享概率 <input name="bilibili_share_probability" type="number" min="0" max="1" step="0.05" /></label>
+                <label>视频分享概率（%） <input name="bilibili_share_probability" type="number" min="0" max="100" step="1" /></label>
                 <label>视频分享最低评分 <input name="bilibili_share_min_score" type="number" min="0" max="10" /></label>
               </div>
               <div class="module-subgroup">
@@ -936,7 +936,7 @@ QQ空间 = 公开札记
                 <label class="toggle-row"><input name="enable_qzone_integration" type="checkbox" /> <span>启用 QQ 空间动态层</span></label>
                 <label class="toggle-row"><input name="enable_qzone_life_publish" type="checkbox" /> <span>低频发布生活说说</span></label>
                 <label>生活说说最小间隔小时 <input name="qzone_life_publish_min_interval_hours" type="number" min="4" max="168" /></label>
-                <label>生活说说触发概率 <input name="qzone_life_publish_probability" type="number" min="0" max="1" step="0.05" /></label>
+                <label>生活说说触发概率（%） <input name="qzone_life_publish_probability" type="number" min="0" max="100" step="1" /></label>
               </div>
               <div class="module-subgroup">
                 <h3>新闻阅读</h3>
@@ -944,7 +944,7 @@ QQ空间 = 公开札记
                 <label class="toggle-row"><input name="enable_news_daily_hot_read" type="checkbox" /> <span>每日获取热点</span></label>
                 <label class="toggle-row"><input name="enable_news_boredom_read" type="checkbox" /> <span>无聊时看新闻</span></label>
                 <label>新闻读取间隔小时 <input name="news_min_interval_hours" type="number" min="1" max="72" /></label>
-                <label>新闻分享概率 <input name="news_share_probability" type="number" min="0" max="1" step="0.05" /></label>
+                <label>新闻分享概率（%） <input name="news_share_probability" type="number" min="0" max="100" step="1" /></label>
                 <label>单源读取条数 <input name="news_max_items_per_source" type="number" min="1" max="30" /></label>
                 <label>热点来源 <input name="news_hot_sources" type="text" maxlength="120" /></label>
                 <label>热点候选数量 <input name="news_hot_max_items" type="number" min="1" max="50" /></label>
@@ -958,8 +958,8 @@ QQ空间 = 公开札记
                 <label class="toggle-row"><input name="enable_private_reading_ask_recommendation" type="checkbox" /> <span>向用户征求推荐</span></label>
                 <label>阅读最小间隔小时 <input name="private_reading_min_interval_hours" type="number" min="4" max="168" /></label>
                 <label>页数上限 <input name="private_reading_max_photo_count" type="number" min="8" max="120" /></label>
-                <label>主动提起概率 <input name="private_reading_share_probability" type="number" min="0" max="1" step="0.05" /></label>
-                <label>征求推荐概率 <input name="private_reading_ask_probability" type="number" min="0" max="1" step="0.05" /></label>
+                <label>主动提起概率（%） <input name="private_reading_share_probability" type="number" min="0" max="100" step="1" /></label>
+                <label>征求推荐概率（%） <input name="private_reading_ask_probability" type="number" min="0" max="100" step="1" /></label>
                 <label>默认搜索关键词 <input name="private_reading_default_keywords" type="text" maxlength="120" /></label>
                 <label>过滤标签 <input name="private_reading_blocked_tags" type="text" maxlength="120" /></label>
               </div>
@@ -967,8 +967,8 @@ QQ空间 = 公开札记
                 <h3>私下创作</h3>
                 <label class="toggle-row"><input name="enable_creative_writing" type="checkbox" /> <span>启用私下创作行为</span></label>
                 <label class="toggle-row"><input name="creative_hidden_mode" type="checkbox" /> <span>创作默认低调进行</span></label>
-                <label>创作灵感触发概率 <input name="creative_inspiration_probability" type="number" min="0" max="1" step="0.05" /></label>
-                <label>创作节点透露概率 <input name="creative_share_probability" type="number" min="0" max="1" step="0.05" /></label>
+                <label>创作灵感触发概率（%） <input name="creative_inspiration_probability" type="number" min="0" max="100" step="1" /></label>
+                <label>创作节点透露概率（%） <input name="creative_share_probability" type="number" min="0" max="100" step="1" /></label>
                 <label>基础写作速度（字/小时） <input name="creative_base_chars_per_hour" type="number" min="60" max="1200" /></label>
                 <label>最多同时创作项目 <input name="creative_max_active_projects" type="number" min="1" max="5" /></label>
               </div>
