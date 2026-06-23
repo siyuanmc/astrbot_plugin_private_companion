@@ -1196,6 +1196,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self._default_persona_prompt_cache_persona_id = ""
         self._default_persona_prompt_refresh_task: asyncio.Task | None = None
         self._passive_light_injection_cache: dict[str, Any] = {}
+        self._state_fingerprint: dict[str, Any] | None = None
+        self._state_fingerprint_history_written: bool = False
         self._data_save_task: asyncio.Task | None = None
         self._data_save_dirty = False
         self._maintenance_failure_cooldowns: dict[str, dict[str, Any]] = {}
@@ -3484,6 +3486,89 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             _single_line(text, 80) or "非文本消息",
         )
 
+    def _compute_state_fingerprint(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Compute a fingerprint of current state to detect meaningful changes."""
+        now = self._environment_now()
+        label, _ = self._current_time_period_label(now)
+        energy = _safe_int(state.get("energy"), 70, 0, 100)
+        detail = self._current_detail_segment_for_update()
+        return {
+            "time_label": label,
+            "energy_bracket": (energy // 10) * 10,
+            "mood": _single_line(state.get("mood_bias"), 12),
+            "detail_key": str(detail.get("key") if isinstance(detail, dict) else ""),
+            "plan_date": self.data.get("daily_plan", {}).get("date", ""),
+        }
+
+    def _format_state_history_message(self, state: dict[str, Any]) -> str:
+        """Build a compact state update message for conversation history."""
+        energy = _safe_int(state.get("energy"), 70, 0, 100)
+        mood = _single_line(state.get("mood_bias"), 12) or "平稳"
+        now = self._environment_now()
+        label, _ = self._current_time_period_label(now)
+        desc = now.strftime("%H:%M")
+        lines = [f"【状态更新 {desc}】"]
+        lines.append(f"精力：{energy}/100，情绪：{mood}")
+        current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
+        activity = _single_line(current_item.get("activity"), 40) if isinstance(current_item, dict) else ""
+        if activity:
+            lines.append(f"时段：{label}（{activity}）")
+        else:
+            lines.append(f"时段：{label}")
+        weather = _single_line(state.get("weather"), 30)
+        if weather and weather not in ("暂无天气信息", ""):
+            lines.append(f"天气：{weather}")
+        detail = self._current_detail_segment_for_update()
+        if isinstance(detail, dict):
+            summary = _single_line(detail.get("summary"), 80)
+            if summary:
+                lines.append(f"场景：{summary}")
+        condition_texts = []
+        conditions = state.get("conditions", [])
+        if isinstance(conditions, list):
+            for cond in conditions[:2]:
+                if not isinstance(cond, dict):
+                    continue
+                label_text = _single_line(cond.get("label") or cond.get("title"), 24)
+                if label_text and label_text not in condition_texts:
+                    condition_texts.append(label_text)
+        if condition_texts:
+            lines.append("状态：{}".format("，".join(condition_texts)))
+        return "\n".join(lines)
+
+    async def _write_state_update_to_history(
+        self,
+        event: AstrMessageEvent,
+        state_message: str,
+    ) -> None:
+        """Write a state update message to AstrBot conversation history."""
+        try:
+            umo = _single_line(getattr(event, "unified_msg_origin", ""), 160)
+            if not umo:
+                return
+            user_msg = UserMessageSegment(content="")
+            assistant_msg = AssistantMessageSegment(content=state_message)
+            async def _write():
+                conv_id = await self.context.conversation_manager.get_curr_conversation_id(umo)
+                if not conv_id:
+                    return False
+                await self.context.conversation_manager.add_message_pair(
+                    cid=conv_id,
+                    user_message=user_msg,
+                    assistant_message=assistant_msg,
+                )
+                return True
+            written = await self._conversation_db_operation("state_update", _write)
+            if written:
+                logger.info(
+                    "[PrivateCompanion] 状态已变更，已写入对话历史: %s time_label=%s chars=%s",
+                    umo,
+                    self._current_time_period_label(self._environment_now())[0],
+                    len(state_message),
+                )
+        except Exception as e:
+            logger.warning("[PrivateCompanion] 状态更新写入对话历史失败: %s", _single_line(e, 120))
+
     @filter.on_llm_request()
     async def inject_humanized_state(self, event: AstrMessageEvent, req: ProviderRequest):
         """LLM 请求前注入陪伴状态、群聊上下文、工具边界和合并消息阅读上下文。"""
@@ -3688,48 +3773,35 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         state = await self._ensure_daily_state(skip_conversation_summary=True, passive_fast=True)
         inbound_text = _single_line(getattr(event, "message_str", "") or current_user.get("last_user_message"), 260)
         lightweight_passive = self._is_lightweight_private_passive_inbound(inbound_text)
+
+        # ── State change detection & conversation history write ──
+        current_fingerprint = self._compute_state_fingerprint(state)
+        state_changed = self._state_fingerprint != current_fingerprint
+        if state_changed or not self._state_fingerprint_history_written:
+            state_message = self._format_state_history_message(state)
+            await self._write_state_update_to_history(event, state_message)
+            self._state_fingerprint_history_written = True
+        self._state_fingerprint = current_fingerprint
+
+        # ── Minimal per-request injection (identity + time) ──
         prompt_surface = PromptSurface()
-        if lightweight_passive:
-            lightweight_injection = self._prepared_lightweight_state_injection(state)
-            lightweight_injection = self._sanitize_schedule_context_for_private_user(lightweight_injection, current_user)
-            prompt_surface.add("state.lightweight", lightweight_injection, priority=30, source="daily_state")
-        else:
-            state_injection = self._format_state_injection(state)
-            state_injection = self._sanitize_schedule_context_for_private_user(state_injection, current_user)
-            prompt_surface.add("state.full", state_injection, priority=30, source="daily_state")
-            life_context = self._format_life_context_injection()
-            life_context = self._sanitize_schedule_context_for_private_user(life_context, current_user)
-            if life_context:
-                prompt_surface.add("life.context", life_context, priority=35, source="daily_state")
-            important_dates = self._format_important_dates_injection()
-            if important_dates:
-                prompt_surface.add("important.dates", important_dates, priority=36, source="daily_state")
-            worldview_context = (
-                self._format_worldview_adaptation_prompt()
-                if self._feature_enabled_or_temp_unlocked("enable_environment_perception") and self.enable_worldview_perception
-                else ""
-            )
-            if worldview_context:
-                prompt_surface.add("worldview.adaptation", worldview_context, priority=37, source="worldview")
         identity_anchor = self._format_private_identity_anchor_for_prompt(user_id, current_user, event)
         if identity_anchor:
             prompt_surface.add("identity.anchor", identity_anchor, priority=10, source="identity")
-        environment_fragment = await self._format_passive_environment_fragment(event, lightweight=lightweight_passive)
+        environment_fragment = await self._format_passive_environment_fragment(event, lightweight=True)
         if environment_fragment:
-            prompt_surface.add(
-                "environment.lightweight" if lightweight_passive else "environment.perception",
-                environment_fragment,
-                priority=20,
-                source="environment",
+            prompt_surface.add("environment.lightweight", environment_fragment, priority=20, source="environment")
+
+        # One-time system_prompt directive: model reads state from history
+        state_directive_marker = "<!-- private_companion_state_history_directive_v1 -->"
+        if state_directive_marker not in (req.system_prompt or ""):
+            directive = (
+                f"\n\n{state_directive_marker}\n"
+                "【状态信息来源】\n"
+                "对话历史中可能出现以「状态更新」开头的消息,这些代表 Bot 在不同时间点的状态快照。"
+                "只有时间最新的一条反映 Bot 的当前真实状态(精力、情绪、时段、天气和场景),旧的可忽略。"
             )
-        rest_backlog_prompt = self._take_rest_reply_backlog_prompt(current_user)
-        if rest_backlog_prompt:
-            prompt_surface.add(
-                "rest.backlog",
-                rest_backlog_prompt,
-                priority=25,
-                source="daily_state",
-            )
+            req.system_prompt = (req.system_prompt or "") + directive
         buffered_image_context = self._take_buffered_private_image_context_for_event(event)
         buffered_images = (
             [str(item) for item in buffered_image_context.get("images", []) if str(item or "").strip()]
@@ -4040,117 +4112,33 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                     ).strip()
             except Exception as exc:
                 logger.debug("[PrivateCompanion] 私聊引用图片 prompt 锚点写入失败: %s", exc)
-        if not lightweight_passive:
-            hidden_creative_context = self._format_hidden_creative_context_for_reply(inbound_text)
-            if hidden_creative_context:
-                prompt_surface.add("creative.hidden", hidden_creative_context, priority=60, source="creative")
-            bookshelf_secret_context = await self._format_bookshelf_secret_for_prompt(inbound_text, current_user)
-            if bookshelf_secret_context:
-                prompt_surface.add("bookshelf.secret", bookshelf_secret_context, priority=61, source="bookshelf")
-            bookshelf_reading_context = self._format_bookshelf_reading_context_for_reply(inbound_text, current_user)
-            if bookshelf_reading_context:
-                prompt_surface.add("bookshelf.reading", bookshelf_reading_context, priority=62, source="bookshelf")
-            private_preference_context = self._format_private_reading_preference_influence_for_reply(inbound_text, current_user)
-            if private_preference_context:
-                prompt_surface.add("private_reading.preference", private_preference_context, priority=63, source="private_reading")
-            news_context = self._format_recent_news_context_for_reply(inbound_text)
-            if news_context:
-                prompt_surface.add("news.recent", news_context, priority=64, source="news")
-            if self._feature_enabled_or_temp_unlocked("enable_skill_growth_passive_injection"):
-                skill_context = self._format_skill_growth_for_prompt()
-                if skill_context:
-                    prompt_surface.add("skill.growth", skill_context, priority=66, source="skill")
-            else:
-                skill_context = self._format_skill_growth_for_user_text(inbound_text)
-                if skill_context:
-                    prompt_surface.add("skill.growth.match", skill_context, priority=66, source="skill")
-            private_chat_context = self._format_private_chat_context_injection(current_user)
-            if private_chat_context:
-                prompt_surface.add("private.context", private_chat_context, priority=70, source="companion")
-            companion_injection = self._format_companion_planner_injection(current_user)
-            if companion_injection:
-                prompt_surface.add("companion.planner", companion_injection, priority=80, source="companion")
-            livingmemory_guidance = self._format_livingmemory_guidance(scope="private" if is_private_chat else "group")
-            if livingmemory_guidance:
-                prompt_surface.add("livingmemory.guidance", livingmemory_guidance, priority=90, source="livingmemory")
-            is_wake_event = bool(getattr(event, "is_wake", False)) or bool(
-                getattr(event, "is_at_or_wake_command", False)
-            )
-            if is_private_chat and not is_wake_event:
-                proactive_context = await self._format_proactive_reply_context(event)
-                if proactive_context:
-                    prompt_surface.add("proactive.reply_context", proactive_context, priority=58, source="proactive")
-            detail_injection = self._format_detail_injection()
-            if detail_injection:
-                prompt_surface.add("detail.injection", detail_injection, priority=40, source="daily_detail")
-            if self.enable_llm_timer_scheduling and is_private_chat:
-                try:
-                    user_id = str(event.get_sender_id())
-                except Exception:
-                    user_id = ""
-                if user_id:
-                    async with self._data_lock:
-                        enabled = bool(self._get_user(user_id).get("enabled"))
-                    if enabled:
-                        prompt_surface.add("timer.scheduling", self._format_timer_scheduling_instruction(), priority=95, source="timer")
         injection = prompt_surface.render()
-        marker = "<!-- private_companion_state_v1 -->"
-        current_prompt = req.system_prompt or ""
-        current_turn_prompt = str(getattr(req, "prompt", "") or "")
-        if marker in current_prompt or marker in current_turn_prompt:
-            await self._append_conditional_tool_instructions_to_request(event, req)
-            return
-        if not injection:
-            logger.debug("[PrivateCompanion] 被动状态提示词片段为空,跳过状态 marker 注入")
-            await self._append_conditional_tool_instructions_to_request(event, req)
-            return
-        injection_placement = "prompt" if self._append_turn_prompt_fragment_by_position(
-            req,
-            marker,
-            injection,
-            priority=40,
-            source="passive_state",
-        ) else "system_prompt"
-        if injection_placement == "system_prompt":
-            req.system_prompt = f"{current_prompt}\n\n{marker}\n{injection}".strip()
+        if injection:
+            marker = "<!-- private_companion_state_v1 -->"
+            current_prompt = req.system_prompt or ""
+            current_turn_prompt = str(getattr(req, "prompt", "") or "")
+            if marker not in current_prompt and marker not in current_turn_prompt:
+                injection_placement = "prompt" if self._append_turn_prompt_fragment_by_position(
+                    req,
+                    marker,
+                    injection,
+                    priority=40,
+                    source="passive_state",
+                ) else "system_prompt"
+                if injection_placement == "system_prompt":
+                    req.system_prompt = f"{current_prompt}\n\n{marker}\n{injection}".strip()
+                logger.debug(
+                    "[PrivateCompanion] 注入精简被动上下文: placement=%s chars=%s fragments=%s",
+                    injection_placement,
+                    len(injection),
+                    len(prompt_surface),
+                )
         await self._append_conditional_tool_instructions_to_request(event, req)
-        state_log_parts = [
-            f"心理能量={state.get('energy', 70)}/100",
-            f"情绪底色={state.get('mood_bias', '平稳')}",
-        ]
-        weather = _single_line(state.get("weather"), 80)
-        if weather and weather != "暂无天气信息":
-            state_log_parts.append(f"天气={weather}")
-        current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
-        current_schedule = self._sanitize_schedule_context_for_private_user(
-            self._format_plan_item_for_prompt(current_item),
-            current_user,
-        ) or "无当前日程"
-        recorder = getattr(self, "_record_prompt_injection_snapshot", None)
-        if callable(recorder):
-            await recorder(
-                kind="passive",
-                session=_single_line(getattr(event, "unified_msg_origin", ""), 160) or self._event_scope_key(event),
-                title="被动回复注入",
-                text=injection,
-                mode="light" if lightweight_passive else "full",
-                modules=prompt_surface.rendered_fragments(),
-                metadata={
-                    "状态": "｜".join(state_log_parts),
-                    "当前日程": current_schedule,
-                    "注入位置": injection_placement,
-                    "会话": _single_line(getattr(event, "unified_msg_origin", ""), 160) or "unknown",
-                    "发送者": _single_line(self._event_sender_id(event), 80),
-                },
-            )
-        logger.info(
-            "[PrivateCompanion] 已注入被动状态提示词到 %s: mode=%s placement=%s chars=%s 状态=%s；当前日程=%s",
-            _single_line(getattr(event, "unified_msg_origin", ""), 80) or "unknown_session",
-            "light" if lightweight_passive else "full",
-            injection_placement,
-            len(injection),
-            "｜".join(state_log_parts),
-            current_schedule,
+        logger.debug(
+            "[PrivateCompanion] 被动回复注入链路完成: session=%s user=%s state_changed=%s",
+            _single_line(getattr(event, "unified_msg_origin", ""), 80) or "unknown",
+            user_id,
+            "yes" if state_changed else "no",
         )
 
     @filter.on_llm_response()
