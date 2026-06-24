@@ -8104,6 +8104,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "last_emotional_vent_at": self.plugin._format_timestamp_elapsed(state.get("last_emotional_vent_at", 0)),
             "last_emotional_vent_status": state.get("last_emotional_vent_status", ""),
             "last_emotional_vent_text": state.get("last_emotional_vent_text", ""),
+            "auth_block_until": self.plugin._format_timestamp_elapsed(state.get("auth_block_until", 0)),
+            "auth_failure_reason": state.get("last_auth_failure_reason", ""),
+            "auth_failure_count": self._int(state.get("auth_failure_count"), 0),
+            "auth_status": state.get("last_auth_status", ""),
         }
 
     def _jm_cosmos_summary(self, data: dict[str, Any]) -> dict[str, Any]:

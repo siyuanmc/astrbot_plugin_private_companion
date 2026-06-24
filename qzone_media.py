@@ -32,6 +32,145 @@ class QzoneIntegrationError(RuntimeError):
 class QzoneMediaMixin:
     """QZone image reading, upload and publish helpers."""
 
+    @staticmethod
+    def _qzone_auth_failure_message(message: Any) -> bool:
+        text = str(message or "").lower()
+        if not text:
+            return False
+        markers = (
+            "code=-3000",
+            "请先登录",
+            "未登录",
+            "login",
+            "cookie",
+            "p_skey",
+            "pskey",
+            "skey",
+            "g_tk",
+            "gtk",
+            "qzonetoken",
+        )
+        return any(marker in text for marker in markers)
+
+    def _qzone_state_dict(self) -> dict[str, Any]:
+        data = getattr(self, "data", None)
+        if not isinstance(data, dict):
+            return {}
+        state = data.setdefault("qzone_integration", {})
+        if not isinstance(state, dict):
+            data["qzone_integration"] = {}
+            state = data["qzone_integration"]
+        return state
+
+    def _qzone_format_block_until(self, ts: float) -> str:
+        try:
+            return time.strftime("%m-%d %H:%M", time.localtime(float(ts)))
+        except Exception:
+            return ""
+
+    def _qzone_auto_publish_block_reason(self, state: dict[str, Any] | None = None, *, now: float | None = None) -> str:
+        state = state if isinstance(state, dict) else self._qzone_state_dict()
+        if not isinstance(state, dict):
+            return ""
+        current = _now_ts() if now is None else float(now)
+        until = _safe_float(state.get("auth_block_until"), 0)
+        if until <= current:
+            return ""
+        reason = _single_line(state.get("last_auth_failure_reason") or "QQ 空间登录状态异常", 100)
+        until_text = self._qzone_format_block_until(until)
+        return f"{reason}，自动说说已暂停到 {until_text}" if until_text else reason
+
+    def _qzone_mark_auth_failure(
+        self,
+        reason: str,
+        *,
+        source: str = "",
+        cooldown_hours: float = 12.0,
+        state: dict[str, Any] | None = None,
+        save: bool = True,
+    ) -> None:
+        state = state if isinstance(state, dict) else self._qzone_state_dict()
+        if not isinstance(state, dict):
+            return
+        now = _now_ts()
+        clean_reason = _single_line(reason or "QQ 空间登录状态异常", 160)
+        last_failed_at = _safe_float(state.get("last_auth_failed_at"), 0)
+        previous_count = _safe_int(state.get("auth_failure_count"), 0, 0, 999)
+        if last_failed_at and now - last_failed_at > 7 * 24 * 3600:
+            previous_count = 0
+        failure_count = previous_count + 1
+        if failure_count <= 1:
+            effective_hours = max(1.0, float(cooldown_hours or 12.0))
+            status = "blocked"
+        elif failure_count == 2:
+            effective_hours = 24.0
+            status = "blocked"
+        else:
+            effective_hours = 24.0 * 7
+            status = "stopped"
+        cooldown_seconds = effective_hours * 3600.0
+        state["last_auth_failed_at"] = now
+        state["last_auth_failure_reason"] = clean_reason
+        state["last_auth_failure_source"] = _single_line(source, 40)
+        state["auth_failure_count"] = failure_count
+        state["auth_block_until"] = now + cooldown_seconds
+        state["last_auth_status"] = status
+        if status == "stopped":
+            logger.warning(
+                "[PrivateCompanion] QQ 空间认证连续失败,自动说说进入保守等待: count=%s until=%s reason=%s",
+                failure_count,
+                self._qzone_format_block_until(state["auth_block_until"]),
+                clean_reason,
+            )
+        if save:
+            saver = getattr(self, "_save_data_sync", None)
+            if callable(saver):
+                try:
+                    saver()
+                except Exception:
+                    pass
+
+    def _qzone_clear_auth_failure(self, state: dict[str, Any] | None = None) -> None:
+        state = state if isinstance(state, dict) else self._qzone_state_dict()
+        if not isinstance(state, dict):
+            return
+        changed = False
+        for key in ("auth_block_until", "last_auth_status", "auth_failure_count", "last_auth_failure_source"):
+            if key in state:
+                state.pop(key, None)
+                changed = True
+        if changed:
+            saver = getattr(self, "_save_data_sync", None)
+            if callable(saver):
+                try:
+                    saver()
+                except Exception:
+                    pass
+
+    async def _qzone_preflight_auto_publish(
+        self,
+        event: AstrMessageEvent | None,
+        *,
+        state: dict[str, Any] | None = None,
+        source: str = "auto",
+    ) -> str:
+        state = state if isinstance(state, dict) else self._qzone_state_dict()
+        block_reason = self._qzone_auto_publish_block_reason(state)
+        if block_reason:
+            return block_reason
+        try:
+            cookie_header = await self._qzone_get_cookies(event)
+            ctx = self._qzone_context_from_cookies(cookie_header)
+            token = ctx.get("qzonetoken") or await self._qzone_ensure_qzonetoken(event, cookie_header=cookie_header, ctx=ctx)
+            if not str(token or "").strip():
+                raise RuntimeError("qzonetoken 未在 H5 首页中找到，可能 Cookie 已失效")
+        except Exception as exc:
+            reason = _single_line(exc, 160)
+            self._qzone_mark_auth_failure(reason, source=source, state=state, save=False)
+            return reason
+        self._qzone_clear_auth_failure(state)
+        return ""
+
     async def _qzone_ensure_qzonetoken(
         self,
         event: AstrMessageEvent | None,
@@ -611,13 +750,16 @@ class QzoneMediaMixin:
         code = payload.get("code", 0)
         if code not in {0, "0"}:
             message = _single_line(payload.get("message") or payload.get("msg") or f"code={code}", 160)
+            if str(code) not in message:
+                message = _single_line(f"code={code} {message}", 160)
             logger.info(
                 "[PrivateCompanion] QQ 空间发布失败: endpoint=%s code=%s msg=%s",
                 urlparse(endpoint).netloc,
                 code,
                 message,
             )
-            raise QzoneIntegrationError("发布失败", message)
+            stage = "Cookie/g_tk" if self._qzone_auth_failure_message(message) else "发布失败"
+            raise QzoneIntegrationError(stage, message)
         logger.info(
             "[PrivateCompanion] QQ 空间说说发布成功: endpoint=%s images=%s",
             urlparse(endpoint).netloc,
@@ -677,6 +819,7 @@ class QzoneMediaMixin:
             return {"success": False, "message": "说说内容为空"}
         try:
             post = await self._qzone_publish_post(event, text=content, images=image_list)
+            self._qzone_clear_auth_failure()
             verification = await self._qzone_verify_published_post(
                 event,
                 post,
@@ -695,9 +838,12 @@ class QzoneMediaMixin:
         except Exception as exc:
             message = _single_line(exc, 180)
             if isinstance(exc, QzoneIntegrationError):
+                if exc.stage == "Cookie/g_tk" or self._qzone_auth_failure_message(message):
+                    self._qzone_mark_auth_failure(message, source="publish", save=True)
                 return {"success": False, "stage": exc.stage, "message": message}
             lowered = message.lower()
             if "cookie" in lowered or "p_skey" in lowered or "skey" in lowered or "g_tk" in lowered or "登录" in message:
+                self._qzone_mark_auth_failure(message, source="publish", save=True)
                 return {"success": False, "stage": "Cookie/g_tk", "message": f"Cookie/g_tk：{message}"}
             if "权限" in message or "403" in message:
                 return {"success": False, "stage": "权限失败", "message": f"权限失败：{message}"}

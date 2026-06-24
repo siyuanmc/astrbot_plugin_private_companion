@@ -837,7 +837,8 @@ class ProactiveMixin:
                 result["motive"] = motive or "刚刚有个轻轻的小念头,想自然分享一下"
                 result["topic"] = topic or "轻分享"
                 result["note"] = "情绪 attached: 提高轻分享倾向"
-            if action == "message" and reason in {"activity_share", "diary_share", "background_schedule"} and self._photo_text_available(user) and random.random() < 0.18:
+            photo_probability = max(0.0, min(1.0, float(getattr(self, "proactive_photo_text_probability", 0.18))))
+            if action == "message" and reason in {"activity_share", "diary_share", "background_schedule"} and self._photo_text_available(user) and random.random() < photo_probability:
                 result["action"] = self._fallback_action_for_unavailable("photo_text", user)
                 result["note"] = (result["note"] + "；" if result["note"] else "") + "情绪 attached: 轻分享可带图"
             return result

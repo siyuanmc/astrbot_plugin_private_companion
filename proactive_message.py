@@ -1760,6 +1760,152 @@ class ProactiveMessageMixin:
                 logger.warning("[PrivateCompanion] 主动消息主链生成失败: %s", exc)
             return ""
 
+    async def _recent_private_conversation_for_proactive_review(
+        self,
+        user: dict[str, Any],
+        *,
+        limit: int = 10,
+    ) -> str:
+        umo = str(user.get("umo") or "").strip()
+        lines: list[str] = []
+        if umo:
+            try:
+                conv = await self._get_current_conversation_safely(umo, label="proactive_review_history_read")
+                history = self._load_conversation_history_items(conv)
+                for item in history[-max(1, limit):]:
+                    line = self._format_history_item_for_summary(item)
+                    if line:
+                        lines.append(line)
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] 主动润色读取私聊历史失败: %s", _single_line(exc, 120))
+        if not lines:
+            last_user = _single_line(user.get("last_user_message"), 180)
+            last_bot = _single_line(user.get("last_companion_message"), 180)
+            if last_bot:
+                lines.append(f"{self.bot_name}: {last_bot}")
+            if last_user:
+                lines.append(f"用户: {last_user}")
+        return "\n".join(lines[-max(1, limit):])
+
+    def _local_proactive_send_decision(
+        self,
+        user: dict[str, Any],
+        text: str,
+        *,
+        reason: str,
+        action: str,
+    ) -> dict[str, Any]:
+        cleaned = _single_line(text, 500)
+        if not cleaned:
+            return {"decision": "drop", "reason": "主动消息为空"}
+        source = str(user.get("planned_proactive_source") or "")
+        if source in {"timer", "troubleshooting"}:
+            return {"decision": "send", "reason": "特殊主动来源不做普通价值复核"}
+        reply_like_openers = (
+            "好呀", "好啊", "可以呀", "行啊", "那就", "你说呢", "要不", "刚看到", "才看到",
+            "你来了", "你叫我", "你问", "我帮你查", "我去问", "我去说",
+        )
+        if any(cleaned.startswith(token) for token in reply_like_openers):
+            return {"decision": "drop", "reason": "像是在回复刚发来的消息"}
+        vague = ("想你了", "来看看你", "你在忙什么", "最近怎么样", "吃了吗", "辛苦了")
+        if reason in {"check_in", "quiet_care", "state_share"} and any(token in cleaned for token in vague):
+            return {"decision": "defer", "reason": "普通主动过于泛泛", "delay_minutes": 60}
+        if _safe_int(user.get("ignored_streak"), 0, 0) >= 2 and len(cleaned) > 36:
+            return {"decision": "rewrite", "reason": "连续未回应时主动偏长", "text": cleaned[:36].rstrip("，,。") + "。"}
+        return {"decision": "send", "reason": "本地检查通过"}
+
+    async def _review_proactive_message_send_decision(
+        self,
+        user: dict[str, Any],
+        text: str,
+        *,
+        reason: str,
+        action: str,
+        motive: str = "",
+        topic: str = "",
+        action_summary: str = "",
+    ) -> dict[str, Any]:
+        local = self._local_proactive_send_decision(user, text, reason=reason, action=action)
+        if local.get("decision") in {"drop", "defer"}:
+            return local
+        if not bool(getattr(self, "enable_response_self_review", True)):
+            return local
+        mode = str(getattr(self, "response_review_mode", "severe_only") or "severe_only").strip().lower()
+        if mode not in {"local_only", "severe_only", "full"}:
+            mode = "severe_only"
+        if mode == "local_only":
+            return local
+        source = str(user.get("planned_proactive_source") or "")
+        if source in {"timer", "troubleshooting"}:
+            return local
+        history = await self._recent_private_conversation_for_proactive_review(user, limit=10)
+        prompt = f"""
+你是主动私聊发送前的价值复核模型。请判断候选主动消息是否值得现在发给用户。
+
+只输出 JSON 对象，不要解释。
+
+可选 decision：
+- send：适合现在发，text 留空。
+- rewrite：内容值得发，但需要改得更自然更短，text 填改写后的正文。
+- defer：现在时机不合适，但稍后可发，delay_minutes 填 30 到 90。
+- drop：没有发送价值、像回复空气、像承接刚刚不存在的新消息、太泛泛、容易打扰，直接取消。
+
+判断原则：
+- 先读最近私聊记录。候选消息放进去必须像自然聊天，不像突然插入的系统主动。
+- 主动消息不是回复用户刚发来的话；如果它写成“好呀/刚看到/你问/我帮你查”等回复口吻，应 drop 或 rewrite。
+- 如果只是“想你了/来看看你/忙不忙/吃了吗/辛苦了”且没有具体由头，通常 defer 或 drop。
+- 如果最近用户刚刚在聊正事或刚聊完，倾向 defer；如果候选本身没价值，drop。
+- rewrite 只能轻改写，不能新增事实，不能添加工具、转述、查询、发图等承诺。
+
+【最近私聊记录】
+{history or "（无可用历史）"}
+
+【本轮主动来源】
+reason={reason or "check_in"}；action={action or "message"}；topic={_single_line(topic, 80) or "无"}；motive={_single_line(motive, 120) or "无"}；summary={_single_line(action_summary, 80) or "无"}
+
+【候选主动消息】
+{text}
+
+请输出：
+{{"decision":"send|rewrite|defer|drop","text":"","delay_minutes":45,"reason":"一句很短的原因"}}
+""".strip()
+        started = time.perf_counter()
+        raw = await self._llm_call(
+            prompt,
+            max_tokens=220,
+            provider_id=self._task_provider(self.response_review_provider_id, self.mai_style_provider_id),
+            task="proactive_send_review",
+        )
+        payload = self._parse_json_object(raw)
+        if not isinstance(payload, dict):
+            return local
+        decision = str(payload.get("decision") or "").strip().lower()
+        if decision not in {"send", "rewrite", "defer", "drop"}:
+            return local
+        reviewed_text = str(payload.get("text") or "").strip()
+        delay_minutes = _safe_int(payload.get("delay_minutes"), 45, 30, 90)
+        note = _single_line(payload.get("reason"), 120)
+        if decision == "rewrite":
+            if not reviewed_text:
+                return local
+            if len(reviewed_text) > max(len(text) + 60, 240):
+                return local
+            if re.search(r"(提示词|系统|JSON|模型|工具调用)", reviewed_text, re.IGNORECASE):
+                return local
+        logger.info(
+            "[PrivateCompanion] 主动消息发送前价值复核: decision=%s delay=%s elapsed=%dms reason=%s",
+            decision,
+            delay_minutes if decision == "defer" else "-",
+            int((time.perf_counter() - started) * 1000),
+            note or "无",
+        )
+        return {
+            "decision": decision,
+            "text": reviewed_text,
+            "delay_minutes": delay_minutes,
+            "reason": note or "主动发送前价值复核",
+        }
+
     def _pop_framework_captured_send_payload(
         self,
         umo: str,
@@ -2031,7 +2177,7 @@ class ProactiveMessageMixin:
             has_real_image="真实图片文件：" in action_context or "图片路径：" in action_context,
         )
         logger.info(
-            "[PrivateCompanion] 主动消息润色完成: mode=%s flags=%s elapsed=%dms before=%s after=%s",
+            "[PrivateCompanion] 回复/主动复核完成: mode=%s flags=%s elapsed=%dms before=%s after=%s",
             mode,
             ",".join(flags),
             int((time.perf_counter() - started) * 1000),
@@ -2052,7 +2198,7 @@ class ProactiveMessageMixin:
         )
         if remaining_flags:
             logger.info(
-                "[PrivateCompanion] 主动消息润色后仍疑似回复空气,已丢弃: flags=%s text=%s",
+                "[PrivateCompanion] 回复/主动复核后仍疑似回复空气,已丢弃: flags=%s text=%s",
                 ",".join(remaining_flags),
                 _single_line(candidate, 120),
             )
@@ -3601,6 +3747,9 @@ class ProactiveMessageMixin:
         source = str(text or "").strip()
         if not source:
             return ""
+        placeholder_cleaner = getattr(self, "_sanitize_orphan_tts_placeholders", None)
+        if callable(placeholder_cleaner):
+            source = placeholder_cleaner(source)
         normalizer = getattr(self, "_normalize_tts_tags", None)
         if callable(normalizer) and re.search(r"</?t{2,}s\b", source, flags=re.IGNORECASE):
             try:

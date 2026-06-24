@@ -1266,6 +1266,93 @@ class DailyStateMixin:
         )
         del recent[:-12]
 
+    def _pending_proactive_send_retry(self, user: dict[str, Any], *, now: float | None = None) -> dict[str, Any] | None:
+        payload = user.get("pending_proactive_send_retry") if isinstance(user, dict) else None
+        if not isinstance(payload, dict) or not payload.get("active"):
+            return None
+        current = _now_ts() if now is None else float(now)
+        if _safe_float(payload.get("expires_at"), 0) <= current:
+            self._clear_pending_proactive_send_retry(user)
+            return None
+        text = _single_line(payload.get("text"), 1200)
+        image_path = str(payload.get("image_path") or "").strip()
+        if image_path and not re.match(r"^(?:https?://|file://|data:)", image_path, flags=re.I):
+            try:
+                if not Path(image_path).exists():
+                    self._clear_pending_proactive_send_retry(user)
+                    return None
+            except Exception:
+                self._clear_pending_proactive_send_retry(user)
+                return None
+        if not text and not image_path:
+            self._clear_pending_proactive_send_retry(user)
+            return None
+        return payload
+
+    def _clear_pending_proactive_send_retry(self, user: dict[str, Any]) -> None:
+        if isinstance(user, dict):
+            user["pending_proactive_send_retry"] = {}
+
+    def _store_or_advance_proactive_send_retry(
+        self,
+        user: dict[str, Any],
+        *,
+        text: str,
+        image_path: str,
+        extra_components: list[Any],
+        reason: str,
+        action: str,
+        action_summary: str,
+        error_text: str,
+        now: float | None = None,
+    ) -> str:
+        if not isinstance(user, dict):
+            return "无法保存待重发内容"
+        current = _now_ts() if now is None else float(now)
+        existing = user.get("pending_proactive_send_retry")
+        previous_count = _safe_int(existing.get("retry_count"), 0, 0, 10) if isinstance(existing, dict) else 0
+        retry_count = previous_count + 1
+        if retry_count > 2:
+            self._clear_pending_proactive_send_retry(user)
+            user["next_proactive_at"] = 0
+            user["planned_proactive_reason"] = ""
+            user["planned_proactive_action"] = ""
+            user["planned_proactive_source"] = ""
+            user["planned_proactive_motive"] = ""
+            user["planned_proactive_topic"] = ""
+            user["planned_event_chain"] = []
+            user["planned_opener_mode"] = ""
+            user["planned_followup_kind"] = ""
+            user["planned_proactive_quota_exempt"] = False
+            self._schedule_next_proactive(user, now=current, delay_hours=(12, 24))
+            return "待重发内容连续发送失败，已放弃复用并重新排程"
+        if extra_components:
+            self._clear_pending_proactive_send_retry(user)
+            self._schedule_next_proactive(user, now=current, delay_hours=(6, 12))
+            return "包含复杂组件，未缓存待重发内容，已延后重新排程"
+        clean_text = _single_line(text, 1200)
+        clean_image = _single_line(image_path, 260)
+        if not clean_text and not clean_image:
+            self._clear_pending_proactive_send_retry(user)
+            self._schedule_next_proactive(user, now=current, delay_hours=(6, 12))
+            return "无可复用内容，已延后重新排程"
+        delay_hours = 6.0 if retry_count <= 1 else 24.0
+        user["pending_proactive_send_retry"] = {
+            "active": True,
+            "created_at": _safe_float(existing.get("created_at"), current) if isinstance(existing, dict) else current,
+            "updated_at": current,
+            "expires_at": current + 72 * 3600,
+            "retry_count": retry_count,
+            "text": clean_text,
+            "image_path": clean_image,
+            "reason": _single_line(reason, 40) or "check_in",
+            "action": _single_line(action, 40) or "message",
+            "action_summary": _single_line(action_summary, 500),
+            "last_error": _single_line(error_text, 180),
+        }
+        user["next_proactive_at"] = current + delay_hours * 3600
+        return f"已保留待重发内容，{int(delay_hours)} 小时后第 {retry_count} 次重试"
+
     def _activity_share_global_signature(self, user: dict[str, Any], *, text: str = "", action_summary: str = "") -> str:
         state = self.data.get("daily_state", {})
         current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
@@ -7566,6 +7653,76 @@ class DailyStateMixin:
                     cache.pop(old_key, None)
         logger.debug(f"[PrivateCompanion] {prefix} {user_id}: {reason_text}")
 
+    def _recent_chat_proactive_guard_reason(
+        self,
+        user: dict[str, Any],
+        *,
+        now: float | None = None,
+        planned_reason: str = "",
+        planned_source: str = "",
+        due_timer_active: bool = False,
+        is_troubleshooting: bool = False,
+    ) -> str:
+        """Block ordinary proactive messages when the private chat has just moved."""
+        if not isinstance(user, dict):
+            return ""
+        source = str(planned_source or user.get("planned_proactive_source") or "")
+        if is_troubleshooting or due_timer_active or source == "timer":
+            return ""
+        check_now = _now_ts() if now is None else now
+        reason = str(planned_reason or user.get("planned_proactive_reason") or "")
+        idle_minutes = (
+            self._effective_user_greeting_idle_minutes(user)
+            if self._is_greeting_reason(reason)
+            else self._effective_user_idle_minutes(user)
+        )
+        idle_seconds = max(0, idle_minutes) * 60
+        if idle_seconds <= 0:
+            return ""
+        recent_at = max(
+            _safe_float(user.get("last_seen"), 0),
+            _safe_float(user.get("last_user_message_at"), 0),
+        )
+        if recent_at <= 0:
+            return ""
+        remaining = recent_at + idle_seconds - check_now
+        if remaining <= 0:
+            return ""
+        minutes = max(1, int(math.ceil(remaining / 60)))
+        return f"刚聊完，普通主动延后（还需安静约 {minutes} 分钟）"
+
+    def _defer_proactive_for_recent_chat(
+        self,
+        user: dict[str, Any],
+        *,
+        now: float | None = None,
+        note: str = "",
+    ) -> None:
+        if not isinstance(user, dict):
+            return
+        check_now = _now_ts() if now is None else now
+        reason = str(user.get("planned_proactive_reason") or "")
+        idle_minutes = (
+            self._effective_user_greeting_idle_minutes(user)
+            if self._is_greeting_reason(reason)
+            else self._effective_user_idle_minutes(user)
+        )
+        recent_at = max(
+            _safe_float(user.get("last_seen"), 0),
+            _safe_float(user.get("last_user_message_at"), 0),
+        )
+        quiet_until = recent_at + max(0, idle_minutes) * 60 if recent_at > 0 else check_now + 10 * 60
+        if self._is_sticky_greeting_reason(reason) and self._reschedule_greeting_within_window(user, reason, now=check_now):
+            pass
+        else:
+            user["next_proactive_at"] = max(check_now + 5 * 60, quiet_until + random.uniform(2 * 60, 8 * 60))
+            if str(user.get("planned_proactive_source") or "") == "simulation":
+                sim = user.get("simulation_mode")
+                events = sim.get("events") if isinstance(sim, dict) else None
+                if isinstance(events, list) and events and isinstance(events[0], dict):
+                    events[0]["_scheduled_ts"] = user["next_proactive_at"]
+        self._mark_planned_candidate_status(user, "deferred", note or "刚聊完，普通主动延后")
+
     def _is_troubleshooting_proactive_plan(self, user: dict[str, Any]) -> bool:
         return isinstance(user, dict) and str(user.get("planned_proactive_source") or "") == "troubleshooting"
 
@@ -7766,6 +7923,30 @@ class DailyStateMixin:
                         self._save_data_sync()
                         self._debug_tick_skip(user_id, "用户刚自然来聊,已取消或延后问候主动")
                         continue
+                recent_chat_guard_reason = self._recent_chat_proactive_guard_reason(
+                    current_for_mark,
+                    now=_now_ts(),
+                    planned_reason=current_reason,
+                    planned_source=str(current_for_mark.get("planned_proactive_source") or ""),
+                    due_timer_active=bool(due_timer_id),
+                    is_troubleshooting=is_troubleshooting_for_send,
+                )
+                if recent_chat_guard_reason:
+                    self._defer_proactive_for_recent_chat(
+                        current_for_mark,
+                        now=_now_ts(),
+                        note=recent_chat_guard_reason,
+                    )
+                    self._save_data_sync()
+                    logger.info(
+                        "[PrivateCompanion] 刚聊完,延后本轮普通主动: user=%s reason=%s planned=%s/%s",
+                        user_id,
+                        _single_line(recent_chat_guard_reason, 120),
+                        _single_line(current_reason, 40),
+                        _single_line(current_for_mark.get("planned_proactive_action"), 24),
+                    )
+                    self._debug_tick_skip(user_id, recent_chat_guard_reason, prefix="延后")
+                    continue
                 current_for_mark["proactive_sending"] = True
                 current_for_mark["proactive_sending_started_at"] = _now_ts()
                 audit_id = self._append_proactive_audit(
@@ -7910,30 +8091,46 @@ class DailyStateMixin:
                     continue
             task_start_last_seen = _safe_float(user.get("last_seen"), 0)
             task_start_inbound_count = _safe_int(user.get("inbound_count"), 0)
-            try:
-                reason, text, image_path, extra_components, action_summary, effective_action_for_send = await self._render_message(user)
-            except Exception as e:
-                logger.warning("[PrivateCompanion] 主动消息生成失败: user=%s error=%s", user_id, _single_line(e, 160), exc_info=True)
-                async with self._data_lock:
-                    current_after_render_failure = self._get_user(user_id)
-                    current_after_render_failure["proactive_sending"] = False
-                    current_after_render_failure["proactive_sending_started_at"] = 0
-                    if is_troubleshooting_for_send:
-                        self._append_troubleshooting_proactive_step(current_after_render_failure, "LLM 渲染", "error", f"生成失败: {_single_line(e, 120)}")
-                        self._record_troubleshooting_proactive_result(
-                            user_id,
-                            current_after_render_failure,
-                            ok=False,
-                            detail="主动循环已触发，但 LLM 渲染失败",
-                            error=f"生成失败: {_single_line(e, 160)}",
-                        )
-                        self._restore_troubleshooting_proactive_plan(current_after_render_failure)
-                    else:
-                        current_after_render_failure["next_proactive_at"] = 0
-                        self._schedule_next_proactive(current_after_render_failure, now=_now_ts(), delay_hours=(1, 3))
-                    self._update_proactive_audit(audit_id, status="failed", note=f"生成失败: {_single_line(e, 140)}")
-                    self._save_data_sync()
-                continue
+            pending_send_retry = None if is_troubleshooting_for_send else self._pending_proactive_send_retry(user)
+            if pending_send_retry:
+                reason = _single_line(pending_send_retry.get("reason"), 40) or str(user.get("planned_proactive_reason") or "check_in")
+                text = _single_line(pending_send_retry.get("text"), 1200)
+                image_path = _single_line(pending_send_retry.get("image_path"), 260)
+                extra_components = []
+                action_summary = _single_line(pending_send_retry.get("action_summary"), 500)
+                effective_action_for_send = _single_line(pending_send_retry.get("action"), 40) or planned_action_for_send or "message"
+                logger.info(
+                    "[PrivateCompanion] 复用待重发主动消息: user=%s retry=%s text=%s image=%s",
+                    user_id,
+                    _safe_int(pending_send_retry.get("retry_count"), 0, 0, 10),
+                    _single_line(text, 100),
+                    bool(image_path),
+                )
+            else:
+                try:
+                    reason, text, image_path, extra_components, action_summary, effective_action_for_send = await self._render_message(user)
+                except Exception as e:
+                    logger.warning("[PrivateCompanion] 主动消息生成失败: user=%s error=%s", user_id, _single_line(e, 160), exc_info=True)
+                    async with self._data_lock:
+                        current_after_render_failure = self._get_user(user_id)
+                        current_after_render_failure["proactive_sending"] = False
+                        current_after_render_failure["proactive_sending_started_at"] = 0
+                        if is_troubleshooting_for_send:
+                            self._append_troubleshooting_proactive_step(current_after_render_failure, "LLM 渲染", "error", f"生成失败: {_single_line(e, 120)}")
+                            self._record_troubleshooting_proactive_result(
+                                user_id,
+                                current_after_render_failure,
+                                ok=False,
+                                detail="主动循环已触发，但 LLM 渲染失败",
+                                error=f"生成失败: {_single_line(e, 160)}",
+                            )
+                            self._restore_troubleshooting_proactive_plan(current_after_render_failure)
+                        else:
+                            current_after_render_failure["next_proactive_at"] = 0
+                            self._schedule_next_proactive(current_after_render_failure, now=_now_ts(), delay_hours=(1, 3))
+                        self._update_proactive_audit(audit_id, status="failed", note=f"生成失败: {_single_line(e, 140)}")
+                        self._save_data_sync()
+                    continue
             if is_troubleshooting_for_send:
                 async with self._data_lock:
                     current_after_render_ok = self._get_user(user_id)
@@ -7954,6 +8151,59 @@ class DailyStateMixin:
                         extra_count=len(extra_components),
                     )
                     self._save_data_sync()
+            if not is_troubleshooting_for_send and not pending_send_retry and text:
+                try:
+                    review_decision = await self._review_proactive_message_send_decision(
+                        user,
+                        text,
+                        reason=reason or str(user.get("planned_proactive_reason") or ""),
+                        action=effective_action_for_send or planned_action_for_send or "message",
+                        motive=planned_motive_for_send,
+                        topic=planned_topic_for_send,
+                        action_summary=action_summary,
+                    )
+                except Exception as exc:
+                    logger.debug("[PrivateCompanion] 主动消息发送前价值复核失败,按原文继续: %s", _single_line(exc, 120))
+                    review_decision = {"decision": "send"}
+                decision = str(review_decision.get("decision") or "send").lower() if isinstance(review_decision, dict) else "send"
+                if decision == "rewrite":
+                    rewritten_text = str(review_decision.get("text") or "").strip()
+                    if rewritten_text:
+                        logger.info(
+                            "[PrivateCompanion] 主动消息发送前已润色: user=%s before=%s after=%s",
+                            user_id,
+                            _single_line(text, 100),
+                            _single_line(rewritten_text, 100),
+                        )
+                        text = rewritten_text
+                elif decision in {"defer", "drop"}:
+                    note = _single_line(review_decision.get("reason"), 120) or (
+                        "发送前价值复核建议延后" if decision == "defer" else "发送前价值复核建议取消"
+                    )
+                    delay_minutes = _safe_int(review_decision.get("delay_minutes"), 45, 30, 90)
+                    async with self._data_lock:
+                        current_for_review = self._get_user(user_id)
+                        current_for_review["proactive_sending"] = False
+                        current_for_review["proactive_sending_started_at"] = 0
+                        if decision == "defer":
+                            current_for_review["next_proactive_at"] = _now_ts() + delay_minutes * 60
+                            self._mark_planned_candidate_status(current_for_review, "deferred", note)
+                            self._update_proactive_audit(audit_id, status="deferred", note=note, text=text)
+                        else:
+                            self._mark_planned_candidate_status(current_for_review, "blocked", note)
+                            self._update_proactive_audit(audit_id, status="cancelled", note=note, text=text)
+                            self._clear_pending_proactive_plan(current_for_review)
+                            self._schedule_next_proactive(current_for_review, now=_now_ts(), delay_hours=(1.5, 4.0))
+                        self._save_data_sync()
+                    logger.info(
+                        "[PrivateCompanion] 主动消息发送前价值复核%s: user=%s reason=%s text=%s",
+                        "延后" if decision == "defer" else "取消",
+                        user_id,
+                        note,
+                        _single_line(text, 120),
+                    )
+                    self._debug_tick_skip(user_id, note, prefix="延后" if decision == "defer" else "取消")
+                    continue
             placeholder_cleaner = getattr(self, "_sanitize_orphan_tts_placeholders", None)
             if callable(placeholder_cleaner):
                 cleaned_text = placeholder_cleaner(text)
@@ -8116,6 +8366,49 @@ class DailyStateMixin:
                     self._update_proactive_audit(audit_id, status="cancelled", note="用户在生成期间发来新消息,已取消本次主动")
                     self._save_data_sync()
                 continue
+            async with self._data_lock:
+                current_for_recent_chat = self._get_user(user_id)
+                recent_chat_guard_reason = self._recent_chat_proactive_guard_reason(
+                    current_for_recent_chat,
+                    now=_now_ts(),
+                    planned_reason=reason or str(user.get("planned_proactive_reason") or ""),
+                    planned_source=str(current_for_recent_chat.get("planned_proactive_source") or ""),
+                    due_timer_active=bool(due_timer_id),
+                    is_troubleshooting=is_troubleshooting_for_send,
+                )
+                if recent_chat_guard_reason:
+                    current_for_recent_chat["proactive_sending"] = False
+                    current_for_recent_chat["proactive_sending_started_at"] = 0
+                    if is_troubleshooting_for_send:
+                        self._append_troubleshooting_proactive_step(current_for_recent_chat, "发送前复核", "error", recent_chat_guard_reason)
+                        self._record_troubleshooting_proactive_result(
+                            user_id,
+                            current_for_recent_chat,
+                            ok=False,
+                            detail="主动消息已生成，但发送前发现用户刚聊过，已取消",
+                            error=recent_chat_guard_reason,
+                            text=text,
+                            action=effective_action_for_send or planned_action_for_send or "message",
+                            reason=reason or "check_in",
+                            extra_count=len(extra_components),
+                        )
+                        self._restore_troubleshooting_proactive_plan(current_for_recent_chat)
+                    else:
+                        self._defer_proactive_for_recent_chat(
+                            current_for_recent_chat,
+                            now=_now_ts(),
+                            note=recent_chat_guard_reason,
+                        )
+                    self._update_proactive_audit(audit_id, status="deferred", note=recent_chat_guard_reason)
+                    self._save_data_sync()
+            if recent_chat_guard_reason:
+                logger.info(
+                    "[PrivateCompanion] 发送前发现刚聊完,延后普通主动: user=%s reason=%s",
+                    user_id,
+                    _single_line(recent_chat_guard_reason, 120),
+                )
+                self._debug_tick_skip(user_id, recent_chat_guard_reason, prefix="延后")
+                continue
             if not text and not image_path and not extra_components:
                 async with self._data_lock:
                     current = self._get_user(user_id)
@@ -8252,17 +8545,18 @@ class DailyStateMixin:
                         )
                         self._restore_troubleshooting_proactive_plan(current_after_failure)
                     else:
-                        current_after_failure["next_proactive_at"] = 0
-                        current_after_failure["planned_proactive_reason"] = ""
-                        current_after_failure["planned_proactive_action"] = ""
-                        current_after_failure["planned_proactive_source"] = ""
-                        current_after_failure["planned_proactive_motive"] = ""
-                        current_after_failure["planned_proactive_topic"] = ""
-                        current_after_failure["planned_event_chain"] = []
-                        current_after_failure["planned_opener_mode"] = ""
-                        current_after_failure["planned_followup_kind"] = ""
-                        current_after_failure["planned_proactive_quota_exempt"] = False
-                        self._schedule_next_proactive(current_after_failure, now=_now_ts(), delay_hours=(6, 12))
+                        retry_note = self._store_or_advance_proactive_send_retry(
+                            current_after_failure,
+                            text=text,
+                            image_path=image_path,
+                            extra_components=extra_components,
+                            reason=reason or "check_in",
+                            action=effective_action_for_send or planned_action_for_send or "message",
+                            action_summary=action_summary,
+                            error_text=error_text,
+                            now=_now_ts(),
+                        )
+                        self._mark_planned_candidate_status(current_after_failure, "deferred", retry_note)
                     self._update_proactive_audit(audit_id, status="failed", note=f"发送失败: {_single_line(error_text, 140)}")
                     self._save_data_sync()
                 continue
@@ -8284,6 +8578,7 @@ class DailyStateMixin:
                 current["last_proactive_action"] = effective_action_for_send or planned_action_for_send or "message"
                 current["last_proactive_behavior_summary"] = action_summary
                 current["last_proactive_motive"] = planned_motive_for_send
+                self._clear_pending_proactive_send_retry(current)
                 food_prompt_hint = " ".join(
                     _single_line(value, 120)
                     for value in (

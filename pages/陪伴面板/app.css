@@ -9773,10 +9773,13 @@ textarea {
 
 @media (max-width: 760px) {
   .migration-head,
-  .migration-actions,
-  .migration-flow {
+  .migration-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .migration-flow {
+    grid-template-columns: 1fr;
   }
 
   .migration-actions button,
@@ -10790,25 +10793,45 @@ tbody tr.is-selected {
 .migration-options {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
+  gap: 8px 10px;
   margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(222, 217, 206, 0.68);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.migration-options > span {
+  flex: 0 0 auto;
+  margin-right: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .migration-options label {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  min-height: 34px;
-  padding: 6px 11px;
+  flex: 0 0 auto;
+  min-width: max-content;
+  min-height: 30px;
+  padding: 5px 11px;
   border: 1px solid rgba(190, 181, 158, 0.48);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.66);
   color: var(--ink);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .migration-options input {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
   accent-color: var(--accent);
 }
 
@@ -10841,6 +10864,10 @@ tbody tr.is-selected {
 }
 
 .migration-flow {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto auto;
+  align-items: end;
+  gap: 10px;
   margin-top: 14px;
   padding: 12px;
   border: 1px solid rgba(222, 217, 206, 0.72);
@@ -10851,13 +10878,14 @@ tbody tr.is-selected {
 .migration-flow label {
   display: grid;
   gap: 5px;
-  min-width: min(300px, 100%);
+  min-width: 0;
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
 }
 
 .migration-flow select {
+  width: 100%;
   min-height: 36px;
   border: 1px solid var(--line);
   border-radius: 12px;

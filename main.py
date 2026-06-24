@@ -866,6 +866,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.poke_action_max_times = self._cfg_int(c, "poke_action_max_times", 1, 1, 3)
         self.voice_action_max_chars = self._cfg_int(c, "voice_action_max_chars", 30, 6, 80)
         self.photo_action_max_daily = self._cfg_int(c, "photo_action_max_daily", 1, 0, 5)
+        self.proactive_photo_text_probability = self._cfg_int(c, "proactive_photo_text_probability", 18, 0, 100) / 100
         self.screen_peek_max_daily = self._cfg_int(c, "screen_peek_max_daily", 1, 0, 5)
         self.screen_peek_cooldown_minutes = self._cfg_int(c, "screen_peek_cooldown_minutes", 240, 0, 1440)
         self.enable_unanswered_screen_peek_followup = self._cfg_bool(c, "enable_unanswered_screen_peek_followup", True)
@@ -1742,6 +1743,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             cleaned = _strip_outbound_control_blocks(
                 original,
                 preserve_private_tts_tokens=preserve_private_tts_tokens,
+                allowed_private_tts_tokens=set(protected_tts_tokens.keys()) if isinstance(protected_tts_tokens, dict) else None,
             )
             if not bool(getattr(self, "enable_tts_enhancement", False)):
                 cleaned = re.sub(r"</?t{2,}s\b[^>]*>", "", cleaned, flags=re.IGNORECASE).strip()
@@ -3631,7 +3633,9 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         phase = str((runtime or {}).get("phase") or "")
         sleepy_item = self._is_sleepy_plan_item(current_item) if isinstance(current_item, dict) else False
         sleeping = phase in {"falling_asleep", "light_sleep", "sleeping_again"} or sleepy_item
-        if phase in {"woken", "natural_wake", "awake"} and not sleepy_item:
+        if phase == "woken":
+            sleeping = False
+        if phase in {"natural_wake", "awake"} and not sleepy_item:
             sleeping = False
         schedule_text = self._format_plan_item_for_prompt(current_item) if isinstance(current_item, dict) else ""
         return sleeping, runtime if isinstance(runtime, dict) else {}, current_item, _single_line(schedule_text, 220)
@@ -3641,11 +3645,15 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         compact = re.sub(r"\s+", "", str(text or ""))
         if not compact:
             return 0, "empty"
+        if re.search(r"你.{0,6}(没睡|没在睡|不是在睡|不是睡|不在睡|还没睡|醒着|清醒|没休息|没在休息|不是在休息|不是休息|不在休息)|别装睡|别装休息|装睡|装睡觉|明明醒着|明明没睡|明明没休息|又没睡|又没休息", compact):
+            return 100, "user_corrects_not_resting"
+        if re.search(r"快醒|醒醒|醒一醒|醒来|醒过来|别睡了?|别睡啦|别睡嘛|先别睡|别睡别睡|起床|起来|快起|回我一下|快回|马上回", compact):
+            return 100, "explicit_wakeup_request"
         if re.search(r"别(回|理|吵|发|找)|不要(回|理|吵|发|找)|安静|闭嘴|先别|别醒|继续睡|不用回|不用理", compact):
             return -100, "user_asks_quiet"
-        if re.search(r"救命|出事|急|紧急|快醒|醒醒|快回|马上回|重要|不舒服|难受|害怕|崩溃|报警|医院|摔|痛", compact):
+        if re.search(r"救命|出事|急|紧急|重要|不舒服|难受|害怕|崩溃|报警|医院|摔|痛", compact):
             return 100, "urgent_or_explicit_wakeup"
-        if re.search(r"醒了吗|睡了吗|在吗|能不能回|可以回吗|想你|陪我|听我说", compact):
+        if re.search(r"醒了吗|睡了吗|在吗|能不能回|可以回吗|想你|陪我|听我说|还睡吗|还在睡吗", compact):
             return 72, "soft_wakeup_request"
         return 0, "normal"
 
@@ -3707,6 +3715,10 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         if boundary_score < 0:
             return False, boundary_reason
         if boundary_score >= max(1, self.rest_reply_llm_threshold):
+            try:
+                self._mark_sleep_woken_by_user(text)
+            except Exception:
+                pass
             return True, boundary_reason
         mode = getattr(self, "rest_reply_mode", "probability")
         if mode == "llm":
@@ -4004,11 +4016,12 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             self._note_private_display_name_observation(user, user_id, sender_display_name, now=received_ts)
             user["last_seen"] = received_ts
             if text:
-                user["last_user_message"] = text
+                safe_text = self._sanitize_orphan_tts_placeholders(text)
+                user["last_user_message"] = safe_text or text
                 user["last_user_message_at"] = received_ts
                 user["inbound_count"] = _safe_int(user.get("inbound_count"), 0) + 1
                 user["episode_message_count"] = _safe_int(user.get("episode_message_count"), 0, 0) + 1
-                self._apply_user_rest_silence_from_message(user, text, now=received_ts)
+                self._apply_user_rest_silence_from_message(user, safe_text or text, now=received_ts)
             if _safe_float(user.get("awaiting_reply_since"), 0) > 0:
                 user["reply_count"] = _safe_int(user.get("reply_count"), 0) + 1
                 self._note_action_reply_feedback(
@@ -5420,9 +5433,10 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             fast_user["umo"] = event.unified_msg_origin
             self._note_private_display_name_observation(fast_user, user_id, sender_display_name, now=received_ts)
             fast_user["last_seen"] = received_ts
-            fast_user["last_user_message"] = text
+            safe_text = self._sanitize_orphan_tts_placeholders(text)
+            fast_user["last_user_message"] = safe_text or text
             fast_user["last_user_message_at"] = received_ts
-            self._apply_user_rest_silence_from_message(fast_user, text, now=received_ts)
+            self._apply_user_rest_silence_from_message(fast_user, safe_text or text, now=received_ts)
             fast_user["inbound_count"] = _safe_int(fast_user.get("inbound_count"), 0) + 1
             fast_user["relationship_score"] = _safe_int(fast_user.get("relationship_score"), 0) + 1
             fast_user["episode_message_count"] = _safe_int(fast_user.get("episode_message_count"), 0, 0) + 1
@@ -5691,16 +5705,17 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
                 user["planned_proactive_quota_exempt"] = False
             user["ignored_streak"] = 0
             if text:
-                user["last_user_message"] = text
+                safe_text = self._sanitize_orphan_tts_placeholders(text)
+                user["last_user_message"] = safe_text or text
                 user["last_user_message_at"] = received_ts
-                self._apply_user_rest_silence_from_message(user, text, now=received_ts)
-                self._apply_private_image_vision_negative_feedback(user, text)
+                self._apply_user_rest_silence_from_message(user, safe_text or text, now=received_ts)
+                self._apply_private_image_vision_negative_feedback(user, safe_text or text)
                 user["episode_message_count"] = _safe_int(user.get("episode_message_count"), 0, 0) + 1
-                self._update_expression_profile_from_message(user, text)
-                self._update_companion_memory_from_message(user, text)
-                self._update_open_loops_from_message(user, text)
-                self._update_action_preferences_from_message(user, text)
-                self._update_user_behavior_habits_from_message(user, text)
+                self._update_expression_profile_from_message(user, safe_text or text)
+                self._update_companion_memory_from_message(user, safe_text or text)
+                self._update_open_loops_from_message(user, safe_text or text)
+                self._update_action_preferences_from_message(user, safe_text or text)
+                self._update_user_behavior_habits_from_message(user, safe_text or text)
                 if (
                     self.enable_intent_emotion_analysis
                     or self.enable_relationship_state_machine

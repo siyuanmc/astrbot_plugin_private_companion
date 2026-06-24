@@ -754,6 +754,57 @@ class QzoneMixin(QzoneMediaMixin):
             lines.append("结果：内置服务已加载，但 QQ 空间访问失败。")
             return "\n".join(lines)
 
+    @staticmethod
+    def _qzone_reason_prefix(reason: str) -> str:
+        return "emotional_vent" if reason == "emotional_vent" else "life_publish"
+
+    def _qzone_reusable_draft(self, state: dict[str, Any], reason: str, *, now: float | None = None, max_age_hours: float = 72.0) -> str:
+        if not isinstance(state, dict):
+            return ""
+        prefix = self._qzone_reason_prefix(reason)
+        status = str(state.get(f"last_{prefix}_status") or "").strip()
+        if not (status.startswith("failed:") or status.startswith("paused:") or status.startswith("retrying:")):
+            return ""
+        current = _now_ts() if now is None else float(now)
+        draft_at = _safe_float(state.get(f"last_{prefix}_draft_at"), 0)
+        if not draft_at or current - draft_at > max(1.0, float(max_age_hours)) * 3600:
+            return ""
+        return _single_line(state.get(f"last_{prefix}_draft"), 300)
+
+    def _qzone_reusable_generated_image(self, state: dict[str, Any], reason: str, post_text: str, *, now: float | None = None) -> list[str]:
+        if not isinstance(state, dict):
+            return []
+        prefix = self._qzone_reason_prefix(reason)
+        current = _now_ts() if now is None else float(now)
+        image_at = _safe_float(state.get(f"last_{prefix}_generated_image_at"), 0)
+        if not image_at or current - image_at > 72 * 3600:
+            return []
+        stored_text = _single_line(state.get(f"last_{prefix}_generated_image_text"), 300)
+        if stored_text and stored_text != _single_line(post_text, 300):
+            return []
+        image_path = str(state.get(f"last_{prefix}_generated_image_path") or "").strip()
+        if not image_path:
+            return []
+        if not re.match(r"^(?:https?://|file://|data:)", image_path, flags=re.I) and not Path(image_path).exists():
+            return []
+        logger.info("[PrivateCompanion] QQ 空间复用待发布配图: reason=%s path=%s", reason, _single_line(image_path, 160))
+        return [image_path]
+
+    def _qzone_clear_pending_publish_assets(self, state: dict[str, Any], reason: str) -> None:
+        if not isinstance(state, dict):
+            return
+        prefix = self._qzone_reason_prefix(reason)
+        for key in (
+            f"last_{prefix}_draft",
+            f"last_{prefix}_draft_at",
+            f"last_{prefix}_generated_image_path",
+            f"last_{prefix}_generated_image_at",
+            f"last_{prefix}_generated_image_text",
+            f"last_{prefix}_generated_image_caption",
+            f"last_{prefix}_generated_image_backend",
+        ):
+            state.pop(key, None)
+
     async def _maybe_generate_qzone_publish_image(
         self,
         *,
@@ -764,6 +815,9 @@ class QzoneMixin(QzoneMediaMixin):
         diary_context: str = "",
         state: dict[str, Any] | None = None,
     ) -> list[str]:
+        reusable = self._qzone_reusable_generated_image(state if isinstance(state, dict) else {}, reason, post_text)
+        if reusable:
+            return reusable
         if not (
             getattr(self, "enable_qzone_generated_image_publish", False)
             and getattr(self, "enable_qzone_integration", False)
@@ -867,11 +921,17 @@ class QzoneMixin(QzoneMediaMixin):
             logger.info("[PrivateCompanion] QQ 空间主动配图跳过: image_path_missing path=%s", _single_line(image_path, 160))
             return []
         if isinstance(state, dict):
+            prefix = self._qzone_reason_prefix(reason)
             state["last_generated_image_path"] = _single_line(image_path, 260)
             state["last_generated_image_at"] = _now_ts()
             state["last_generated_image_reason"] = reason
             state["last_generated_image_caption"] = _single_line(caption, 180)
             state["last_generated_image_backend"] = _single_line(backend_name, 40)
+            state[f"last_{prefix}_generated_image_path"] = _single_line(image_path, 260)
+            state[f"last_{prefix}_generated_image_at"] = _now_ts()
+            state[f"last_{prefix}_generated_image_text"] = _single_line(post_text, 300)
+            state[f"last_{prefix}_generated_image_caption"] = _single_line(caption, 180)
+            state[f"last_{prefix}_generated_image_backend"] = _single_line(backend_name, 40)
         logger.info(
             "[PrivateCompanion] QQ 空间主动配图完成: reason=%s backend=%s path=%s",
             reason,
@@ -894,25 +954,38 @@ class QzoneMixin(QzoneMediaMixin):
             and now - _safe_float(state.get("last_life_publish_at"), 0) < max(4, self.qzone_life_publish_min_interval_hours) * 3600
         ):
             return
+        block_reason = self._qzone_auto_publish_block_reason(state, now=now)
+        if block_reason:
+            state["last_life_publish_status"] = f"paused:auth:{_single_line(block_reason, 80)}"
+            state["last_life_publish_checked_at"] = now
+            self._save_data_sync()
+            return
         if now - _safe_float(state.get("last_life_publish_failed_at"), 0) < 15 * 60:
             return
-        if random.random() > self.qzone_life_publish_probability:
+        reusable_text = self._qzone_reusable_draft(state, "life_publish", now=now)
+        if not reusable_text and random.random() > self.qzone_life_publish_probability:
             state["last_life_publish_status"] = "skipped:probability_miss"
             state["last_life_publish_checked_at"] = now
             self._save_data_sync()
             return
-        try:
-            await self._qzone_get_cookies(None)
-        except Exception as exc:
+        preflight_error = await self._qzone_preflight_auto_publish(None, state=state, source="life_publish")
+        if preflight_error:
             state["last_life_publish_failed_at"] = now
-            state["last_life_publish_status"] = f"failed:{_single_line(exc, 80)}"
+            state["last_life_publish_status"] = f"paused:auth:{_single_line(preflight_error, 80)}"
             state["last_life_publish_checked_at"] = now
             self._save_data_sync()
             return
         daily_state = self.data.get("daily_state", {})
         current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
         diary_context = self._recent_diary_context(count=2)
-        prompt = f"""
+        if reusable_text:
+            text = reusable_text
+            logger.info(
+                "[PrivateCompanion] QQ 空间复用待发布生活说说草稿: age=%ds",
+                int(now - _safe_float(state.get("last_life_publish_draft_at"), now)),
+            )
+        else:
+            prompt = f"""
 请以当前 Bot 人格写一条 QQ 空间说说。
 只输出说说正文,不要解释,不要加标题。
 
@@ -934,28 +1007,32 @@ class QzoneMixin(QzoneMediaMixin):
 
 {self._format_worldview_adaptation_prompt()}
 """.strip()
-        text = await self._llm_call(
-            prompt,
-            max_tokens=180,
-            provider_id=self._task_provider(self.mai_style_provider_id, self.llm_provider_id),
-            task="qzone_publish",
-        )
-        text = await self._sanitize_qzone_life_post_text(text, prompt=prompt)
-        state["last_life_publish_draft"] = _single_line(text, 300)
-        state["last_life_publish_draft_at"] = now
-        image_sources = await self._maybe_generate_qzone_publish_image(
-            post_text=text,
-            reason="life_publish",
-            daily_state=daily_state if isinstance(daily_state, dict) else {},
-            current_item=current_item,
-            diary_context=diary_context,
-            state=state,
-        )
+            text = await self._llm_call(
+                prompt,
+                max_tokens=180,
+                provider_id=self._task_provider(self.mai_style_provider_id, self.llm_provider_id),
+                task="qzone_publish",
+            )
+            text = await self._sanitize_qzone_life_post_text(text, prompt=prompt)
+            state["last_life_publish_draft"] = _single_line(text, 300)
+            state["last_life_publish_draft_at"] = now
+        if reusable_text:
+            image_sources = self._qzone_reusable_generated_image(state, "life_publish", text, now=now)
+        else:
+            image_sources = await self._maybe_generate_qzone_publish_image(
+                post_text=text,
+                reason="life_publish",
+                daily_state=daily_state if isinstance(daily_state, dict) else {},
+                current_item=current_item,
+                diary_context=diary_context,
+                state=state,
+            )
         result = await self._publish_qzone_text(text, images=image_sources)
         if result.get("success"):
             state["last_life_publish_at"] = now
             state.pop("last_life_publish_failed_at", None)
             state["last_life_publish_status"] = "published"
+            self._qzone_clear_pending_publish_assets(state, "life_publish")
         else:
             state["last_life_publish_failed_at"] = now
             state["last_life_publish_status"] = f"failed:{_single_line(result.get('message'), 80)}"
@@ -1004,19 +1081,25 @@ class QzoneMixin(QzoneMediaMixin):
         if now - _safe_float(state.get("last_emotional_vent_at"), 0) < cooldown:
             logger.info("[PrivateCompanion] 公开心情动态跳过: cooldown score=%s", mood_score)
             return
+        block_reason = self._qzone_auto_publish_block_reason(state, now=now)
+        if block_reason:
+            state["last_emotional_vent_status"] = f"paused:auth:{_single_line(block_reason, 80)}"
+            state["last_emotional_vent_checked_at"] = now
+            self._save_data_sync()
+            return
         if now - _safe_float(state.get("last_emotional_vent_failed_at"), 0) < 15 * 60:
             return
+        reusable_text = self._qzone_reusable_draft(state, "emotional_vent", now=now)
         probability = max(0.0, min(1.0, _safe_float(getattr(self, "qzone_emotional_vent_probability", 0.35), 0.35)))
-        if random.random() > probability:
+        if not reusable_text and random.random() > probability:
             state["last_emotional_vent_status"] = "skipped:probability_miss"
             state["last_emotional_vent_checked_at"] = now
             self._save_data_sync()
             return
-        try:
-            await self._qzone_get_cookies(None)
-        except Exception as exc:
+        preflight_error = await self._qzone_preflight_auto_publish(None, state=state, source="emotional_vent")
+        if preflight_error:
             state["last_emotional_vent_failed_at"] = now
-            state["last_emotional_vent_status"] = f"failed:{_single_line(exc, 80)}"
+            state["last_emotional_vent_status"] = f"paused:auth:{_single_line(preflight_error, 80)}"
             state["last_emotional_vent_checked_at"] = now
             self._save_data_sync()
             return
@@ -1046,28 +1129,39 @@ class QzoneMixin(QzoneMediaMixin):
 {self._format_worldview_adaptation_prompt()}
 """.strip()
         try:
-            text = await self._llm_call(
-                prompt,
-                max_tokens=140,
-                provider_id=self._task_provider(self.mai_style_provider_id, self.llm_provider_id),
-                task="qzone_emotional_vent",
-            )
-            text = await self._sanitize_qzone_life_post_text(text, prompt=prompt)
-            state["last_emotional_vent_draft"] = _single_line(text, 240)
-            state["last_emotional_vent_draft_at"] = now
-            image_sources = await self._maybe_generate_qzone_publish_image(
-                post_text=text,
-                reason="emotional_vent",
-                daily_state=daily_state if isinstance(daily_state, dict) else {},
-                current_item=current_item,
-                diary_context="",
-                state=state,
-            )
+            if reusable_text:
+                text = reusable_text
+                logger.info(
+                    "[PrivateCompanion] QQ 空间复用待发布心情动态草稿: age=%ds",
+                    int(now - _safe_float(state.get("last_emotional_vent_draft_at"), now)),
+                )
+            else:
+                text = await self._llm_call(
+                    prompt,
+                    max_tokens=140,
+                    provider_id=self._task_provider(self.mai_style_provider_id, self.llm_provider_id),
+                    task="qzone_emotional_vent",
+                )
+                text = await self._sanitize_qzone_life_post_text(text, prompt=prompt)
+                state["last_emotional_vent_draft"] = _single_line(text, 240)
+                state["last_emotional_vent_draft_at"] = now
+            if reusable_text:
+                image_sources = self._qzone_reusable_generated_image(state, "emotional_vent", text, now=now)
+            else:
+                image_sources = await self._maybe_generate_qzone_publish_image(
+                    post_text=text,
+                    reason="emotional_vent",
+                    daily_state=daily_state if isinstance(daily_state, dict) else {},
+                    current_item=current_item,
+                    diary_context="",
+                    state=state,
+                )
             result = await self._publish_qzone_text(text, images=image_sources)
             if result.get("success"):
                 state["last_emotional_vent_at"] = now
                 state.pop("last_emotional_vent_failed_at", None)
                 state["last_emotional_vent_status"] = "published"
+                self._qzone_clear_pending_publish_assets(state, "emotional_vent")
                 logger.info("[PrivateCompanion] 公开心情动态已发布: score=%s text=%s", mood_score, _single_line(result.get("text") or text, 120))
             else:
                 state["last_emotional_vent_failed_at"] = now

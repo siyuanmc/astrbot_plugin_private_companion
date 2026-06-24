@@ -1879,6 +1879,14 @@ class ProactiveEngineMixin:
             and self._strong_photo_share_intent(event_text, motive, user.get("planned_proactive_topic"))
         ):
             return "photo_text"
+        photo_probability = self._proactive_photo_text_trigger_probability(
+            reason,
+            event_text,
+            motive,
+            user.get("planned_proactive_topic"),
+        )
+        if self._photo_text_available(user) and photo_probability > 0 and random.random() < photo_probability:
+            return "photo_text"
         if self._photo_text_available(user) and (
             reason in {"activity_share", "diary_share", "background_schedule", "noon_greeting", "evening_greeting"}
             or any(token in combined_hint for token in self._visual_share_tokens())
@@ -3145,6 +3153,20 @@ class ProactiveEngineMixin:
     def _action_has_photo_text(self, action: str) -> bool:
         return "photo_text" in {part.strip() for part in str(action or "").split("+") if part.strip()}
 
+    def _proactive_photo_text_trigger_probability(self, reason: str, *parts: Any) -> float:
+        base = max(0.0, min(1.0, float(getattr(self, "proactive_photo_text_probability", 0.18))))
+        if base <= 0:
+            return 0.0
+        hard_reasons = {"activity_share", "diary_share", "background_schedule", "noon_greeting", "evening_greeting"}
+        soft_reasons = {"check_in", "quiet_care", "state_share"}
+        text = " ".join(_single_line(part, 180) for part in parts if _single_line(part, 180))
+        has_visual_cut = any(token in text for token in self._visual_share_tokens())
+        if reason in hard_reasons:
+            return base if has_visual_cut else base * 0.45
+        if reason in soft_reasons and has_visual_cut:
+            return base * 0.55
+        return 0.0
+
     def _photo_text_load_defer_note(self, action: str = "photo_text", *, force_refresh: bool = False) -> str:
         if not self._action_has_photo_text(action):
             return ""
@@ -3336,6 +3358,8 @@ class ProactiveEngineMixin:
         action_profile = self._persona_action_profile()
         motive_bias = self._motive_action_bias(motive)
         affinity_bias = self._action_affinity_bias(user)
+        current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
+        current_item_text = self._format_plan_item_for_prompt(current_item)
 
         weighted: list[tuple[str, float]] = [("message", 0.82)]
         if self._screen_glance_available(user) and reason in {"check_in", "quiet_care", "state_share", "background_schedule"}:
@@ -3349,8 +3373,20 @@ class ProactiveEngineMixin:
             and self._strong_photo_share_intent(motive, user.get("planned_proactive_topic") if isinstance(user, dict) else "")
         ):
             return "photo_text"
+        photo_probability = self._proactive_photo_text_trigger_probability(
+            reason,
+            motive,
+            user.get("planned_proactive_topic") if isinstance(user, dict) else "",
+            weather,
+            current_item_text,
+        )
+        if self._photo_text_available(user) and photo_probability > 0 and random.random() < photo_probability:
+            return "photo_text"
         visual_hint = any(token in motive for token in self._visual_share_tokens())
-        if self._photo_text_available(user) and reason in {"activity_share", "diary_share", "background_schedule", "noon_greeting", "evening_greeting"}:
+        if self._photo_text_available(user) and (
+            reason in {"activity_share", "diary_share", "background_schedule", "noon_greeting", "evening_greeting"}
+            or photo_probability > 0
+        ):
             weight = 0.38 + (0.18 if action_profile["visual"] else 0.0) + motive_bias["photo_text"] * 0.65 + affinity_bias["photo_text"]
             if any(token in weather for token in ("晴", "阳光", "多云", "晚霞", "雨", "阵雨", "小雨")):
                 weight += 0.04
@@ -3358,6 +3394,8 @@ class ProactiveEngineMixin:
                 weight += 0.14
             if reason in {"activity_share", "diary_share"}:
                 weight += 0.05
+            if reason in {"check_in", "quiet_care", "state_share"}:
+                weight *= 0.45
             weighted.append(("photo_text", weight))
         if self._poke_available() and self._effective_user_poke_daily_limit(user) > 0 and reason in {"check_in", "quiet_care", "state_share", "important_date_share", "morning_greeting", "evening_greeting"}:
             weight = 0.38 + motive_bias["poke"] + affinity_bias["poke"]
