@@ -113,6 +113,8 @@ from .helpers import (
     _strip_outbound_control_blocks,
     _today_key,
 )
+from .config_migration import migrate_flat_config_into_schema_groups
+from .user_rest_gate import UserRestGateMixin
 from .forward_message import ForwardMessageMixin
 from .private_image import PrivateImageMixin
 from .prompt_surface import PromptSurface
@@ -140,6 +142,7 @@ from .interaction_utils import InteractionUtilsMixin
 from .llm_tool_actions import LlmToolActionsMixin
 from .command_handlers import CommandHandlersMixin
 from .tts_enhancement import TtsEnhancementMixin
+from .tts_tool_sanitizer import TtsToolSanitizerMixin
 from .planning import (
     build_daily_plan_prompt,
     build_detail_enhancement_prompt,
@@ -410,9 +413,38 @@ _PROACTIVE_ONLY_TEMP_UNLOCK_RELATED = {
     PLUGIN_NAME,
     "menglimi",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "5.0.0",
+    "5.0.1",
 )
-class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationStatusMixin, PrivateImageMixin, ForwardMessageMixin, QzoneMixin, TokenBudgetMixin, WorldbookMixin, UserMemoryMixin, CreativeMixin, ProactiveMixin, ProactiveEngineMixin, ProactiveMessageMixin, DailyStateMixin, StateViewsMixin, InteractionUtilsMixin, LlmToolActionsMixin, CommandHandlersMixin, TtsEnhancementMixin, GroupWakeupMixin, GroupObservationMixin, EventDispatchMixin, PrivateReadingMixin, NewsExplorationMixin, AtRelayMixin, Star):
+class PrivateCompanionPlugin(
+    CoreStoreMixin,
+    AstrBotKnowledgeMixin,
+    IntegrationStatusMixin,
+    UserRestGateMixin,
+    PrivateImageMixin,
+    ForwardMessageMixin,
+    QzoneMixin,
+    TokenBudgetMixin,
+    WorldbookMixin,
+    UserMemoryMixin,
+    CreativeMixin,
+    ProactiveMixin,
+    ProactiveEngineMixin,
+    ProactiveMessageMixin,
+    DailyStateMixin,
+    StateViewsMixin,
+    InteractionUtilsMixin,
+    LlmToolActionsMixin,
+    CommandHandlersMixin,
+    TtsEnhancementMixin,
+    TtsToolSanitizerMixin,
+    GroupWakeupMixin,
+    GroupObservationMixin,
+    EventDispatchMixin,
+    PrivateReadingMixin,
+    NewsExplorationMixin,
+    AtRelayMixin,
+    Star,
+):
     @staticmethod
     def _cfg_raw(config: AstrBotConfig, key: str, default: Any = None) -> Any:
         return _flat_get(config, key, default)
@@ -445,219 +477,13 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         return _safe_float(_flat_get(config, key, default), default, minimum)
 
     @staticmethod
-    def _config_root_mapping(config: Any) -> dict[str, Any] | None:
-        if isinstance(config, dict):
-            return config
-        for attr in ("data", "config"):
-            target = getattr(config, attr, None)
-            if isinstance(target, dict):
-                return target
-        return None
-
-    @staticmethod
-    def _schema_group_defaults_for_migration() -> dict[str, tuple[str, Any]]:
-        mapping: dict[str, tuple[str, Any]] = {}
-        try:
-            raw = json.loads(Path(__file__).with_name("_conf_schema.json").read_text(encoding="utf-8"))
-        except Exception as exc:
-            logger.debug("[PrivateCompanion] 读取配置 schema 用于分组迁移失败: %s", exc)
-            return mapping
-        if not isinstance(raw, dict):
-            return mapping
-        for group_key, group in raw.items():
-            if not isinstance(group, dict) or group.get("type") != "object":
-                continue
-            items = group.get("items")
-            if not isinstance(items, dict):
-                continue
-            for key, item in items.items():
-                if isinstance(item, dict):
-                    mapping[str(key)] = (str(group_key), item.get("default"))
-        return mapping
-
-    @staticmethod
-    def _config_value_is_empty(value: Any) -> bool:
-        return value in (None, "", [], {})
-
-    def _migrate_flat_config_into_schema_groups(self, config: AstrBotConfig) -> None:
-        root = self._config_root_mapping(config)
-        if not isinstance(root, dict):
-            return
-        schema_map = self._schema_group_defaults_for_migration()
-        if not schema_map:
-            return
-        changed: list[str] = []
-        for key, (group_key, default) in schema_map.items():
-            if key not in root:
-                continue
-            old_value = root.get(key)
-            if old_value == default:
-                continue
-            group = root.get(group_key)
-            if not isinstance(group, dict):
-                group = {}
-                root[group_key] = group
-            group_value = group.get(key)
-            should_copy = key not in group or group_value == default
-            if not should_copy and self._config_value_is_empty(group_value) and not self._config_value_is_empty(old_value):
-                should_copy = True
-            if not should_copy:
-                continue
-            group[key] = old_value
-            changed.append(key)
-        if not changed:
-            return
-        logger.info("[PrivateCompanion] 已将旧版扁平配置迁移到新版分组配置: %s 项", len(changed))
-        self._save_config_after_schema_migration(config)
-
-    @staticmethod
-    def _save_config_after_schema_migration(config: AstrBotConfig) -> None:
-        for method_name in ("save_config", "save", "save_conf"):
-            save = getattr(config, method_name, None)
-            if not callable(save):
-                continue
-            try:
-                result = save()
-                if asyncio.iscoroutine(result) or hasattr(result, "__await__"):
-                    try:
-                        asyncio.get_running_loop().create_task(result)
-                    except RuntimeError:
-                        close = getattr(result, "close", None)
-                        if callable(close):
-                            close()
-                        logger.debug("[PrivateCompanion] 配置分组迁移已写入运行态，当前无事件循环可异步保存")
-                return
-            except TypeError:
-                continue
-            except Exception as exc:
-                logger.warning("[PrivateCompanion] 保存配置分组迁移结果失败: %s", _single_line(exc, 160))
-                return
-
-    def _user_rest_silence_until(self, user: dict[str, Any], *, now: float | None = None) -> float:
-        check_now = _now_ts() if now is None else now
-        rest_until = _safe_float(user.get("user_rest_until"), 0)
-        if rest_until <= 0:
-            return 0.0
-        if rest_until <= check_now:
-            user["user_rest_until"] = 0
-            user["user_rest_reason"] = ""
-            user["user_rest_set_at"] = 0
-            return 0.0
-        return rest_until
-
-    def _next_user_rest_morning_ts(self, *, now: float) -> float:
-        timezone_name = _single_line(getattr(self, "environment_perception_timezone", ""), 64) or "Asia/Shanghai"
-        try:
-            tz = zoneinfo.ZoneInfo(timezone_name)
-        except Exception:
-            tz = zoneinfo.ZoneInfo("Asia/Shanghai")
-        current = datetime.fromtimestamp(now, tz)
-        target = current.replace(hour=8, minute=30, second=0, microsecond=0)
-        if target.timestamp() <= now + 3600:
-            target += timedelta(days=1)
-        return max(target.timestamp(), now + 6 * 3600)
-
-    def _detect_user_rest_silence_until(self, text: str, *, now: float | None = None) -> float:
-        cleaned = _single_line(text, 260).lower()
-        if not cleaned:
-            return 0.0
-        check_now = _now_ts() if now is None else now
-        # Do not treat debugging, quoted history, or keyword discussion as a real
-        # "please stop proactive messages" signal. A stray phrase like "我休息"
-        # in a rule discussion should not block proactive greetings.
-        if re.search(r"(?:关键词|关键字|正则|规则|命中|误判|拦截|挡了|工具|日志|之前对话|历史消息|提示词|注入|主动问候|主动消息)", cleaned):
-            return 0.0
-        quoted_or_report = bool(
-            re.search(r"(?:他说|她说|它说|bot说|模型说|原文|内容是|比如|例如|类似|这句|那句)", cleaned)
-            or any(mark in cleaned for mark in ("“", "”", '"', "'"))
-        )
-        cancel_pattern = (
-            r"(?:我|俺|咱|人家).{0,10}(?:醒了|起床了|睡醒了|不睡了|回来了|可以聊)"
-            r"|(?:睡醒了|起床了|不睡了|可以聊了|回来了)"
-        )
-        if re.search(cancel_pattern, cleaned):
-            return -1.0
-        hard_quiet = re.search(r"(?:别|不要|先别|暂时别|今晚别|今天别).{0,10}(?:打扰|吵|主动|发消息|找我)", cleaned)
-        tomorrow = re.search(r"(?:明天|明早|早上)再(?:聊|说|回|看|找我)", cleaned)
-        sleep = re.search(
-            r"(?:晚安|睡觉去了|先睡了|去睡了|睡了哈|睡啦|我睡了|我先睡|我去睡|我要睡|我准备睡|我困了先睡|困死了先睡|补觉去了|我要补觉|先补觉)",
-            cleaned,
-        )
-        nap = re.search(
-            r"(?:我|俺|咱|人家).{0,10}(?:要|先|去|准备|现在|马上)?(?:午休|眯一会|歇会儿?|躺会儿?|休息一下|休息会儿?)",
-            cleaned,
-        )
-        rest = re.search(
-            r"(?:我|俺|咱|人家).{0,10}(?:要|先|去|准备|现在|马上)(?:休息(?:一下|会儿?|一会儿?)?|歇一下|躺一下|缓一会儿?)",
-            cleaned,
-        )
-        if quoted_or_report and not (hard_quiet or tomorrow or sleep):
-            return 0.0
-        if hard_quiet or tomorrow or sleep:
-            return self._next_user_rest_morning_ts(now=check_now)
-        if nap:
-            return check_now + 90 * 60
-        if rest:
-            return check_now + 2 * 3600
-        return 0.0
-
-    def _clear_user_rest_pending_plan_fallback(self, user: dict[str, Any]) -> None:
-        for key, value in (
-            ("next_proactive_at", 0),
-            ("planned_proactive_reason", ""),
-            ("planned_proactive_action", ""),
-            ("planned_proactive_source", ""),
-            ("planned_proactive_motive", ""),
-            ("planned_proactive_topic", ""),
-            ("planned_proactive_impulse_id", ""),
-            ("planned_proactive_window_start_at", 0),
-            ("planned_proactive_best_until_at", 0),
-            ("planned_proactive_expire_at", 0),
-            ("planned_event_chain", []),
-            ("planned_opener_mode", ""),
-            ("planned_followup_kind", ""),
-            ("planned_proactive_quota_exempt", False),
-            ("planned_candidate_id", ""),
-        ):
-            user[key] = value
-        clear_trigger = getattr(self, "_clear_planned_proactive_trigger", None)
-        if callable(clear_trigger):
-            try:
-                clear_trigger(user)
-            except Exception:
-                pass
-
-    def _apply_user_rest_silence_from_message(
-        self,
-        user: dict[str, Any],
-        text: str,
-        *,
-        now: float | None = None,
-    ) -> bool:
-        check_now = _now_ts() if now is None else now
-        rest_until = self._detect_user_rest_silence_until(text, now=check_now)
-        if rest_until < 0:
-            if _safe_float(user.get("user_rest_until"), 0) > check_now:
-                user["user_rest_until"] = 0
-                user["user_rest_reason"] = ""
-                user["user_rest_set_at"] = 0
-                logger.info("[PrivateCompanion] 用户休息静默已解除: user=%s", user.get("user_id") or user.get("id") or "")
-                return True
-            return False
-        if rest_until <= check_now:
-            return False
-        user["user_rest_until"] = rest_until
-        user["user_rest_reason"] = _single_line(text, 120)
-        user["user_rest_set_at"] = check_now
-        if str(user.get("planned_proactive_source") or "") != "timer":
-            self._clear_user_rest_pending_plan_fallback(user)
-        logger.info(
-            "[PrivateCompanion] 已记录用户休息静默: user=%s until=%s reason=%s",
-            user.get("user_id") or user.get("id") or "",
-            self._environment_fromtimestamp(rest_until).strftime("%m-%d %H:%M"),
-            _single_line(text, 80),
-        )
-        return True
+    def _cfg_unit_interval(config: AstrBotConfig, key: str, default: float, minimum: float = 0.0) -> float:
+        original = _safe_float(_flat_get(config, key, default), default, minimum)
+        value = original / 100.0 if original > 1.0 else original
+        value = max(minimum, min(1.0, value))
+        if value != original:
+            _set_into_config(config, key, value)
+        return value
 
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -670,7 +496,11 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.data_dir = StarTools.get_data_dir(PLUGIN_NAME)
         os.makedirs(self.data_dir, exist_ok=True)
         self.data_file = os.path.join(self.data_dir, "companions.json")
-        self._migrate_flat_config_into_schema_groups(c)
+        migrate_flat_config_into_schema_groups(
+            c,
+            schema_path=Path(__file__).with_name("_conf_schema.json"),
+            logger=logger,
+        )
 
         self.enabled = self._cfg_bool(c, "enabled", True)
         self.enable_proactive_only_mode = self._cfg_bool(c, "enable_proactive_only_mode", False)
@@ -834,8 +664,8 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.allow_insomnia_night_message = self._cfg_bool(c, "allow_insomnia_night_message", True)
         self.proactive_reply_context_hours = self._cfg_int(c, "proactive_reply_context_hours", 12, 1, 72)
         self.enable_creative_writing = self._cfg_bool(c, "enable_creative_writing", True)
-        self.creative_inspiration_probability = min(1.0, self._cfg_float(c, "creative_inspiration_probability", 0.20, 0.0))
-        self.creative_share_probability = min(1.0, self._cfg_float(c, "creative_share_probability", 0.28, 0.0))
+        self.creative_inspiration_probability = self._cfg_unit_interval(c, "creative_inspiration_probability", 0.20, 0.0)
+        self.creative_share_probability = self._cfg_unit_interval(c, "creative_share_probability", 0.28, 0.0)
         self.creative_chars_per_session = self._cfg_int(
             c,
             "creative_chars_per_session",
@@ -1003,7 +833,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.skill_growth_custom_skills = self._cfg_str(c, "skill_growth_custom_skills", "")
         self.enable_skill_growth_passive_injection = self._cfg_bool(c, "enable_skill_growth_passive_injection", False)
         self.enable_skill_growth_schedule_influence = self._cfg_bool(c, "enable_skill_growth_schedule_influence", True)
-        self.skill_growth_schedule_influence_strength = max(0.0, min(1.0, self._cfg_float(c, "skill_growth_schedule_influence_strength", 0.35, 0.0)))
+        self.skill_growth_schedule_influence_strength = self._cfg_unit_interval(c, "skill_growth_schedule_influence_strength", 0.35, 0.0)
         self.memory_refresh_interval_minutes = self._cfg_int(c, "memory_refresh_interval_minutes", 360, 30, 4320)
         self.max_companion_memory_items = self._cfg_int(c, "max_companion_memory_items", 36, 8, 120)
         self.max_learned_expression_items = self._cfg_int(c, "max_learned_expression_items", 18, 4, 60)
@@ -1129,15 +959,15 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.enable_bilibili_integration = self._cfg_bool(c, "enable_bilibili_integration", True)
         self.enable_bilibili_boredom_watch = self._cfg_bool(c, "enable_bilibili_boredom_watch", True)
         self.bilibili_boredom_min_interval_hours = self._cfg_int(c, "bilibili_boredom_min_interval_hours", 8, 2, 72)
-        self.bilibili_share_probability = min(1.0, self._cfg_float(c, "bilibili_share_probability", 0.35, 0.0))
+        self.bilibili_share_probability = self._cfg_unit_interval(c, "bilibili_share_probability", 0.35, 0.0)
         self.bilibili_share_min_score = self._cfg_int(c, "bilibili_share_min_score", 7, 0, 10)
         self.enable_news_integration = self._cfg_bool(c, "enable_news_integration", False)
         self.enable_news_boredom_read = self._cfg_bool(c, "enable_news_boredom_read", True)
         self.enable_news_daily_hot_read = self._cfg_bool(c, "enable_news_daily_hot_read", self._cfg_bool(c, "enable_hot_trend_sources", True))
         self.news_min_interval_hours = self._cfg_int(c, "news_min_interval_hours", 6, 1, 72)
-        self.news_share_probability = min(1.0, self._cfg_float(c, "news_share_probability", 0.22, 0.0))
+        self.news_share_probability = self._cfg_unit_interval(c, "news_share_probability", 0.22, 0.0)
         self.enable_external_event_self_link = self._cfg_bool(c, "enable_external_event_self_link", True)
-        self.external_event_self_link_probability = min(1.0, self._cfg_float(c, "external_event_self_link_probability", 0.62, 0.0))
+        self.external_event_self_link_probability = self._cfg_unit_interval(c, "external_event_self_link_probability", 0.62, 0.0)
         self.external_event_self_link_cooldown_hours = self._cfg_int(c, "external_event_self_link_cooldown_hours", 12, 1, 168)
         self.news_max_items_per_source = self._cfg_int(c, "news_max_items_per_source", 5, 1, 20)
         self.news_hot_sources = self._cfg_str(c, "news_hot_sources", self._cfg_str(c, "hot_trend_sources", "weibo,hackernews"))
@@ -1159,7 +989,7 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.enable_web_exploration = self._cfg_bool(c, "enable_web_exploration", False)
         self.enable_web_exploration_boredom_search = self._cfg_bool(c, "enable_web_exploration_boredom_search", True)
         self.web_exploration_min_interval_hours = self._cfg_int(c, "web_exploration_min_interval_hours", 8, 1, 168)
-        self.web_exploration_share_probability = min(1.0, self._cfg_float(c, "web_exploration_share_probability", 0.18, 0.0))
+        self.web_exploration_share_probability = self._cfg_unit_interval(c, "web_exploration_share_probability", 0.18, 0.0)
         self.web_exploration_max_results = self._cfg_int(c, "web_exploration_max_results", 6, 3, 20)
         self.web_exploration_interests = self._cfg_str(
             c,
@@ -1171,13 +1001,13 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
         self.qzone_cookie = self._cfg_str(c, "QZONE_COOKIE", "")
         self.enable_qzone_life_publish = self._cfg_bool(c, "enable_qzone_life_publish", False)
         self.qzone_life_publish_min_interval_hours = self._cfg_int(c, "qzone_life_publish_min_interval_hours", 24, 4, 168)
-        self.qzone_life_publish_probability = min(1.0, self._cfg_float(c, "qzone_life_publish_probability", 0.18, 0.0))
+        self.qzone_life_publish_probability = self._cfg_unit_interval(c, "qzone_life_publish_probability", 0.18, 0.0)
         self.enable_qzone_generated_image_publish = self._cfg_bool(c, "enable_qzone_generated_image_publish", False)
-        self.qzone_generated_image_probability = min(1.0, self._cfg_float(c, "qzone_generated_image_probability", 0.25, 0.0))
+        self.qzone_generated_image_probability = self._cfg_unit_interval(c, "qzone_generated_image_probability", 0.25, 0.0)
         self.enable_qzone_emotional_vent_publish = self._cfg_bool(c, "enable_qzone_emotional_vent_publish", False)
         self.qzone_emotional_vent_threshold = self._cfg_int(c, "qzone_emotional_vent_threshold", 90, 40, 100)
         self.qzone_emotional_vent_cooldown_hours = self._cfg_int(c, "qzone_emotional_vent_cooldown_hours", 72, 4, 336)
-        self.qzone_emotional_vent_probability = min(1.0, self._cfg_float(c, "qzone_emotional_vent_probability", 0.35, 0.0))
+        self.qzone_emotional_vent_probability = self._cfg_unit_interval(c, "qzone_emotional_vent_probability", 0.35, 0.0)
         self.enable_jm_cosmos_integration = self._cfg_bool(
             c,
             "enable_private_reading_integration",
@@ -1207,19 +1037,13 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             8,
             120,
         )
-        self.jm_cosmos_share_probability = min(
-            1.0,
-            self._cfg_float(
-                c,
-                "private_reading_share_probability",
-                self._cfg_float(c, "jm_cosmos_share_probability", 0.18, 0.0),
-                0.0,
-            ),
+        self.jm_cosmos_share_probability = self._cfg_unit_interval(
+            c,
+            "private_reading_share_probability",
+            self._cfg_unit_interval(c, "jm_cosmos_share_probability", 0.18, 0.0),
+            0.0,
         )
-        self.private_reading_ask_probability = min(
-            1.0,
-            self._cfg_float(c, "private_reading_ask_probability", 0.16, 0.0),
-        )
+        self.private_reading_ask_probability = self._cfg_unit_interval(c, "private_reading_ask_probability", 0.16, 0.0)
         self.enable_private_reading_preference_influence = self._cfg_bool(
             c,
             "enable_private_reading_preference_influence",
@@ -1337,214 +1161,6 @@ class PrivateCompanionPlugin(CoreStoreMixin, AstrBotKnowledgeMixin, IntegrationS
             self._save_data_sync()
         self.page_api = None
         self._register_page_api_if_available()
-
-    def _clean_tool_plain_text_tts_markup(self, raw_text: Any) -> str:
-        text = str(raw_text or "")
-        if not text:
-            return ""
-        if not re.search(r"</?(?:pc[_-]?tts|t{2,}s)\b", text, flags=re.IGNORECASE):
-            return text
-        try:
-            normalizer = getattr(self, "_normalize_tts_tags", None)
-            normalized = normalizer(text) if callable(normalizer) else text
-            visible_getter = getattr(self, "_tts_visible_fallback_text", None)
-            visible = visible_getter(normalized, "") if callable(visible_getter) else ""
-        except Exception:
-            normalized = text
-            visible = ""
-        if not visible:
-            visible = re.sub(r"</?(?:pc[_-]?tts|t{2,}s)\b[^>]*>", "", normalized, flags=re.IGNORECASE).strip()
-        visible = re.sub(r"\n{3,}", "\n\n", str(visible or "").strip())
-        if visible and visible != text:
-            logger.info(
-                "[PrivateCompanion] 已清理工具直发文本中的 TTS 标签: before=%s after=%s",
-                _single_line(text, 120),
-                _single_line(visible, 120),
-            )
-        return visible
-
-    def _clean_send_message_to_user_tool_messages(self, messages: Any) -> Any:
-        if not isinstance(messages, list):
-            return messages
-        changed = False
-        cleaned_messages: list[Any] = []
-        for item in messages:
-            if not isinstance(item, dict):
-                cleaned_messages.append(item)
-                continue
-            copied = dict(item)
-            if str(copied.get("type") or "").strip().lower() == "plain":
-                cleaned_text = self._clean_tool_plain_text_tts_markup(copied.get("text"))
-                if cleaned_text != copied.get("text"):
-                    changed = True
-                    copied["text"] = cleaned_text
-            cleaned_messages.append(copied)
-        return cleaned_messages if changed else messages
-
-    async def _send_message_to_user_tool_with_tts_processing(
-        self,
-        tool_self: Any,
-        context: Any,
-        kwargs: dict[str, Any],
-    ) -> Any:
-        messages = kwargs.get("messages")
-        if not isinstance(messages, list) or not messages:
-            return None
-        if not any(
-            isinstance(item, dict)
-            and str(item.get("type") or "").strip().lower() == "plain"
-            and re.search(r"</?(?:pc[_-]?tts|t{2,}s)\b", str(item.get("text") or ""), flags=re.IGNORECASE)
-            for item in messages
-        ):
-            return None
-        try:
-            event = context.context.event
-            current_session = str(getattr(event, "unified_msg_origin", "") or "")
-        except Exception:
-            event = None
-            current_session = ""
-        session = str(kwargs.get("session") or current_session or "")
-        if not current_session or session != current_session:
-            return None
-        try:
-            import astrbot.core.message.components as Comp
-            from astrbot.core.message.message_event_result import MessageChain as CoreMessageChain
-            from astrbot.core.platform.message_session import MessageSession
-        except Exception as exc:
-            logger.debug("[PrivateCompanion] send_message_to_user TTS 接管不可用: %s", _single_line(exc, 120))
-            return None
-
-        components: list[Any] = []
-        for idx, msg in enumerate(messages):
-            if not isinstance(msg, dict):
-                return f"error: messages[{idx}] should be an object."
-            msg_type = str(msg.get("type") or "").strip().lower()
-            if not msg_type:
-                return f"error: messages[{idx}].type is required."
-            try:
-                if msg_type == "plain":
-                    text = str(msg.get("text") or "").strip()
-                    if not text:
-                        return f"error: messages[{idx}].text is required for plain component."
-                    if re.search(r"</?(?:pc[_-]?tts|t{2,}s)\b", text, flags=re.IGNORECASE):
-                        fallback_plain = self._clean_tool_plain_text_tts_markup(text)
-                        processor = getattr(self, "_process_tts_tags", None)
-                        tts_components = (
-                            await processor(text, event, fallback_plain=fallback_plain)
-                            if callable(processor) and bool(getattr(self, "enable_tts_enhancement", False))
-                            else []
-                        )
-                        if tts_components:
-                            components.extend(tts_components)
-                        elif fallback_plain:
-                            components.append(Comp.Plain(text=fallback_plain))
-                    else:
-                        components.append(Comp.Plain(text=text))
-                elif msg_type == "image":
-                    path = msg.get("path")
-                    url = msg.get("url")
-                    if path:
-                        local_path, _ = await tool_self._resolve_path_from_sandbox(context, path, component_type="image")
-                        components.append(Comp.Image.fromFileSystem(path=local_path))
-                    elif url:
-                        components.append(Comp.Image.fromURL(url=url))
-                    else:
-                        return f"error: messages[{idx}] must include path or url for image component."
-                elif msg_type == "record":
-                    path = msg.get("path")
-                    url = msg.get("url")
-                    if path:
-                        local_path, _ = await tool_self._resolve_path_from_sandbox(context, path, component_type="record")
-                        components.append(Comp.Record.fromFileSystem(path=local_path))
-                    elif url:
-                        components.append(Comp.Record.fromURL(url=url))
-                    else:
-                        return f"error: messages[{idx}] must include path or url for record component."
-                elif msg_type == "video":
-                    path = msg.get("path")
-                    url = msg.get("url")
-                    if path:
-                        local_path, _ = await tool_self._resolve_path_from_sandbox(context, path, component_type="video")
-                        components.append(Comp.Video.fromFileSystem(path=local_path))
-                    elif url:
-                        components.append(Comp.Video.fromURL(url=url))
-                    else:
-                        return f"error: messages[{idx}] must include path or url for video component."
-                elif msg_type == "file":
-                    path = msg.get("path")
-                    url = msg.get("url")
-                    name = (
-                        msg.get("text")
-                        or (os.path.basename(str(path)) if path else "")
-                        or (os.path.basename(str(url)) if url else "")
-                        or "file"
-                    )
-                    if path:
-                        local_path, _ = await tool_self._resolve_path_from_sandbox(context, path, component_type="file")
-                        components.append(Comp.File(name=name, file=local_path))
-                    elif url:
-                        components.append(Comp.File(name=name, url=url))
-                    else:
-                        return f"error: messages[{idx}] must include path or url for file component."
-                elif msg_type == "mention_user":
-                    mention_user_id = msg.get("mention_user_id")
-                    if not mention_user_id:
-                        return f"error: messages[{idx}].mention_user_id is required for mention_user component."
-                    components.append(Comp.At(qq=mention_user_id))
-                else:
-                    return f"error: unsupported message type '{msg_type}' at index {idx}."
-            except FileNotFoundError as exc:
-                return f"error: {exc}"
-            except PermissionError as exc:
-                return f"error: {exc}"
-            except Exception as exc:
-                return f"error: failed to build messages[{idx}] component: {exc}"
-        if not components:
-            return "error: messages became empty after TTS processing."
-        try:
-            target_session = MessageSession.from_str(session)
-        except Exception:
-            return f"error: invalid session: {session}"
-        await context.context.context.send_message(target_session, CoreMessageChain(chain=components))
-        logger.info(
-            "[PrivateCompanion] send_message_to_user 工具文本已接管 TTS 处理: session=%s components=%s",
-            _single_line(session, 120),
-            len(components),
-        )
-        return f"Message sent to session {target_session}"
-
-    def _install_send_message_to_user_tool_sanitizer(self) -> None:
-        try:
-            from astrbot.core.tools.message_tools import SendMessageToUserTool
-        except Exception as exc:
-            logger.debug("[PrivateCompanion] send_message_to_user 工具清理包装未安装: %s", _single_line(exc, 120))
-            return
-        original_call = getattr(SendMessageToUserTool, "_private_companion_tts_sanitizer_original_call", None)
-        if original_call is None:
-            original_call = SendMessageToUserTool.call
-
-        async def _private_companion_sanitized_call(tool_self, context, **kwargs):
-            plugin = _private_companion_plugin
-            if plugin is not None and bool(getattr(plugin, "enabled", False)) and isinstance(kwargs.get("messages"), list):
-                try:
-                    kwargs = dict(kwargs)
-                    processed = await plugin._send_message_to_user_tool_with_tts_processing(tool_self, context, kwargs)
-                    if processed is not None:
-                        return processed
-                    kwargs["messages"] = plugin._clean_send_message_to_user_tool_messages(kwargs.get("messages"))
-                except Exception as exc:
-                    logger.debug("[PrivateCompanion] send_message_to_user 文本清理失败: %s", _single_line(exc, 120))
-                    try:
-                        kwargs = dict(kwargs)
-                        kwargs["messages"] = plugin._clean_send_message_to_user_tool_messages(kwargs.get("messages"))
-                    except Exception:
-                        pass
-            return await original_call(tool_self, context, **kwargs)
-
-        setattr(SendMessageToUserTool, "_private_companion_tts_sanitizer_original_call", original_call)
-        SendMessageToUserTool.call = _private_companion_sanitized_call
-        setattr(SendMessageToUserTool, "_private_companion_tts_sanitizer_installed", True)
-        logger.info("[PrivateCompanion] send_message_to_user 工具 TTS 标签处理已安装/刷新")
 
     def _sqlite_wal_candidate_paths(self) -> list[Path]:
         data_root = Path(get_astrbot_data_path())

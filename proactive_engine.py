@@ -1149,6 +1149,51 @@ class ProactiveEngineMixin:
         }
         return result
 
+    def _format_proactive_source_model_hint(self, user: dict[str, Any]) -> str:
+        source = _single_line(user.get("planned_proactive_source"), 40)
+        reason = _single_line(user.get("planned_proactive_reason"), 40)
+        if source in {"pending_followup", "followup"}:
+            return "\n".join(
+                [
+                    "【来源专项改写：补一句】",
+                    "这类来源不是重新开话题，而是前一句还有一个具体点没落地。",
+                    "如果现在的 topic/motive 只是“再说一句/补一句/轻轻放一句/顺着那股劲”，优先 rewrite，不要直接 send。",
+                    "rewrite 后必须补出一个实质点：提醒、遗漏信息、没说完的小重点，或前一句里还挂着的小事。",
+                    "情绪可以很轻，但只允许当底色：一点点不甘心、惦记，或认真；不要把情绪本身写成内容。",
+                ]
+            )
+        if source == "daily_greeting" or reason in {"morning_greeting", "noon_greeting", "evening_greeting"}:
+            return "\n".join(
+                [
+                    "【来源专项改写：日常招呼】",
+                    "这类来源的价值在时机，不在“问候词”本身。",
+                    "如果现在的 topic/motive 只是早安午安晚安、吃了吗、忙吗、在干嘛，优先 rewrite。",
+                    "rewrite 后必须落在当前时段的一个小片段上：早晨刚醒/洗漱/出门前，中午刚吃完/发懒/准备午休，晚上收尾/回家/窝下来。",
+                    "最终效果要像按这个时段顺手冒个头，不像模板化签到。",
+                ]
+            )
+        if source == "random":
+            return "\n".join(
+                [
+                    "【来源专项改写：轻微想念】",
+                    "规则层已经判断这次“想来找一下”成立，但正文不能只剩关系姿态。",
+                    "如果现在的 topic/motive 只有“想你了/来看看你/在不在/忙不忙”，优先 rewrite。",
+                    "rewrite 后要补出一个很小的具体钩子：当前时段的小片段、刚冒出来的小念头，或能自然递过去的一点点内容。",
+                    "这类来源只能轻，不要写成索取回应，也不要写成无缘由的空泛表白。",
+                ]
+            )
+        if source == "state" or reason == "state_share":
+            return "\n".join(
+                [
+                    "【来源专项改写：身体小需求】",
+                    "这类来源不是汇报状态，而是身体上的那点小事带出来的话头。",
+                    "如果现在的 topic/motive 像“我饿了/我累了/状态不好”，优先 rewrite。",
+                    "rewrite 后要把它改成一个具体可聊的小需求，比如吃什么、要不要垫一口、想不想来点甜的；不要写成状态播报。",
+                    "语气要自然，不要像健康汇报、撒娇表演或硬找人陪。",
+                ]
+            )
+        return ""
+
     def _format_proactive_model_judge_prompt(self, user: dict[str, Any]) -> str:
         persona = str(self._get_default_persona_prompt() or "").strip()
         worldview = str(self._format_worldview_adaptation_prompt() or "").strip()
@@ -1164,6 +1209,7 @@ class ProactiveEngineMixin:
         semantics = self._planned_proactive_semantics(user)
         window_phase, window_detail = self._planned_impulse_window_phase(user)
         inner_readiness = self._proactive_inner_readiness(user)
+        source_hint = self._format_proactive_source_model_hint(user)
         role = self._private_user_role(user)
         nickname = _single_line(user.get("nickname"), 40) or self.default_nickname
         return f"""
@@ -1212,6 +1258,8 @@ class ProactiveEngineMixin:
 - 候选语义：{_single_line(semantics.get("kind"), 40)}/{_single_line(semantics.get("anchor_type"), 40)}｜score={_safe_float(semantics.get("score"), 0.5):.2f}｜pressure={_safe_float(semantics.get("pressure"), 0.4):.2f}｜risk={_safe_float(semantics.get("risk"), 0.0):.2f}｜{_single_line(semantics.get("note"), 140)}
 - 念头窗口：{window_phase}｜{window_detail}
 - 本地粗判：{_safe_float(local_alignment.get("score"), 0.0):.2f}｜{_single_line(local_alignment.get("note"), 140)}
+
+{source_hint}
 """.strip()
 
     async def _review_planned_proactive_with_model(
@@ -3779,12 +3827,12 @@ class ProactiveEngineMixin:
             "window": self._window_from_delay_minutes(4, width_minutes=18),
             "reason": _single_line(raw.get("complaint_reason"), 40) or "check_in",
             "action": "message",
-            "why": "之前只轻轻叫了用户一声,隔了挺久以后又想补一小句。",
+            "why": "之前只是叫了用户一声,隔了一阵还是想再说一句。",
             "topic": _single_line(raw.get("complaint_topic"), 80) or "刚才叫你的那一下",
-            "motive": _single_line(raw.get("complaint_motive"), 100) or f"刚刚只喊了{name}一声,那边还安静着,就想再轻轻放一句",
+            "motive": _single_line(raw.get("complaint_motive"), 100) or f"刚刚只喊了{name}一声,用户没回消息,所以想再接一句",
             "scene": "先前那句没得到回音以后",
-            "tone": _single_line(raw.get("complaint_tone"), 30) or "轻一点,不催促",
-            "impulse": "隔了一阵又想轻轻续一下,不要求对方立刻回",
+            "tone": _single_line(raw.get("complaint_tone"), 30) or "有点小别扭,但忍着",
+            "impulse": "开了口却没被接住,心里有一点小别扭,还是想再接一句",
             "_scheduled_ts": due_at,
             "_opener_followup": True,
             "_cancel_on_inbound": True,
@@ -3822,7 +3870,7 @@ class ProactiveEngineMixin:
             after_minutes = max(after_minutes, 75)
         topic = _single_line(current.get("topic"), 80) or "刚才那一下的后续"
         motive = self._normalize_internal_motive_text(
-            _single_line(current.get("motive"), 100) or "刚才那一下结束之后,心里还有一点话没完全散掉"
+            _single_line(current.get("motive"), 100) or "刚才那句话信息不够完整,所以想补充一句"
         )
         tone = _single_line(current.get("tone"), 30)
         return {
@@ -3830,12 +3878,12 @@ class ProactiveEngineMixin:
             "window": self._window_from_delay_minutes(after_minutes, width_minutes=18),
             "reason": follow_reason,
             "action": "message",
-            "why": "前一条主动消息后还留着一点后续,如果用户没回头,就顺着那股劲再续一句。",
+            "why": "刚才那句话还有个具体点没说完,如果用户还没接住,就把那一点补上。",
             "topic": topic,
             "motive": motive,
             "scene": "前一条主动消息发出去后又过了一阵",
-            "tone": "轻一点,不催促" if (origin_reason == "morning_greeting" or follow_reason == "morning_greeting") else (tone or "自然后续"),
-            "impulse": "隔了挺久才又想轻轻放一句,不要求对方立刻回" if (origin_reason == "morning_greeting" or follow_reason == "morning_greeting") else "刚才那一下还没完全落下去,所以想再续一句",
+            "tone": "克制一点,把重点补上" if (origin_reason == "morning_greeting" or follow_reason == "morning_greeting") else (tone or "有点认真,顺手补上"),
+            "impulse": "早上那句还差个重点,想补完整" if (origin_reason == "morning_greeting" or follow_reason == "morning_greeting") else "刚才那句话还有个点没落到实处,想补完整",
             "_scheduled_ts": now_ts + after_minutes * 60,
             "_origin_action": origin_action,
             "_origin_reason": origin_reason,
@@ -3963,13 +4011,13 @@ class ProactiveEngineMixin:
         now_dt = self._environment_fromtimestamp(now or _now_ts())
         minute = now_dt.hour * 60 + now_dt.minute
         anchors = [
-            ("morning_greeting", "07:45-10:20", "早上醒来后想打个招呼"),
-            ("noon_greeting", "12:05-13:35", "午休或午饭时想起用户"),
-            ("evening_greeting", "20:10-21:20", "晚间刚慢下来时轻轻问候一下"),
+            ("morning_greeting", "07:45-10:20", "早上刚开机时,顺手想来冒个头", "早上刚开机那一下"),
+            ("noon_greeting", "12:05-13:35", "中午松下来那一会儿,顺手想起用户", "中午松下来那一下"),
+            ("evening_greeting", "20:10-21:20", "晚上终于慢下来时,想先来你这边说一句", "晚上慢下来的这会儿"),
         ]
         today = now_dt.date()
         candidates = []
-        for reason, window, why in anchors:
+        for reason, window, why, topic in anchors:
             if reason in sent or reason in suppressed:
                 continue
             start, end = self._parse_window_minutes(window)
@@ -4004,7 +4052,7 @@ class ProactiveEngineMixin:
                         "action": "message",
                         "_daily_greeting": True,
                         "why": why,
-                        "topic": why,
+                        "topic": topic,
                         "_scheduled_ts": scheduled,
                     },
                 )
@@ -5474,7 +5522,7 @@ class ProactiveEngineMixin:
             "complaint_reason": _single_line((no_reply_step or {}).get("reason"), 40),
             "complaint_topic": _single_line((no_reply_step or {}).get("topic"), 80),
             "complaint_motive": self._normalize_internal_motive_text(_single_line((no_reply_step or {}).get("motive"), 100)),
-            "complaint_tone": "轻一点,不催促" if reason == "morning_greeting" else _single_line((no_reply_step or {}).get("tone"), 30),
+            "complaint_tone": "克制一点,把重点补上" if reason == "morning_greeting" else _single_line((no_reply_step or {}).get("tone"), 30),
             "second_followup": still_no_reply_step if isinstance(still_no_reply_step, dict) else {},
         }
 

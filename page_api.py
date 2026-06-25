@@ -49,6 +49,20 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         "tts_group_trigger_probability",
         "main_user_voice_probability",
     }
+    FRACTIONAL_PERCENT_SETTING_KEYS = {
+        "bilibili_share_probability",
+        "news_share_probability",
+        "external_event_self_link_probability",
+        "web_exploration_share_probability",
+        "qzone_life_publish_probability",
+        "qzone_generated_image_probability",
+        "qzone_emotional_vent_probability",
+        "private_reading_share_probability",
+        "private_reading_ask_probability",
+        "creative_inspiration_probability",
+        "creative_share_probability",
+        "skill_growth_schedule_influence_strength",
+    }
 
     def __init__(self, plugin: Any) -> None:
         self.plugin = plugin
@@ -7320,24 +7334,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 return max(0, min(100, int(round(raw * 100 if 0 <= raw <= 1 else raw))))
             except (TypeError, ValueError):
                 return 0
-        if key in {
-            "bilibili_share_probability",
-            "news_share_probability",
-            "external_event_self_link_probability",
-            "web_exploration_share_probability",
-            "qzone_life_publish_probability",
-            "qzone_generated_image_probability",
-            "qzone_emotional_vent_probability",
-            "private_reading_share_probability",
-            "private_reading_ask_probability",
-            "creative_inspiration_probability",
-            "creative_share_probability",
-            "skill_growth_schedule_influence_strength",
-        }:
-            try:
-                return max(0.0, min(1.0, float(value)))
-            except (TypeError, ValueError):
-                return 0.0
+        if key in self.FRACTIONAL_PERCENT_SETTING_KEYS:
+            return self._normalize_fractional_percent_value(value)
         if key == "skill_growth_rate":
             try:
                 return max(0.1, min(3.0, float(value)))
@@ -7493,6 +7491,16 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             return [self._single_line(item, 160) for item in parts if self._single_line(item, 160)]
         limit = 4000 if item_type == "text" else 1000
         return str(value if value is not None else default or "").strip()[:limit]
+
+    @staticmethod
+    def _normalize_fractional_percent_value(value: Any, default: float = 0.0) -> float:
+        try:
+            raw = float(value)
+        except (TypeError, ValueError):
+            raw = default
+        if raw > 1.0:
+            raw /= 100.0
+        return max(0.0, min(1.0, raw))
 
     @staticmethod
     def _normalize_multiline_source_config(value: Any, *, limit: int = 4000) -> str:
@@ -8705,13 +8713,58 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         }
         return extra.get(key) or _REASON_TEXT.get(key) or key
 
+    def _proactive_source_meta(self, source: Any) -> dict[str, str]:
+        key = self._single_line(source, 40)
+        if not key:
+            return {"label": "插件主动", "note": ""}
+        meta = {
+            "random": {
+                "label": "轻微想念",
+                "note": "没有明确外部触发，更像安静一阵后轻轻冒出来、想靠近你一下。",
+            },
+            "daily_greeting": {
+                "label": "日常招呼",
+                "note": "到了早中晚合适的那个点，顺手来冒个头，不是专门执行问候任务。",
+            },
+            "pending_followup": {
+                "label": "补一句",
+                "note": "前面那句还留着一个具体点没落地，所以隔一阵再接一句。",
+            },
+            "state": {
+                "label": "身体小需求",
+                "note": "不是汇报状态，而是身体上那点小事挂着，顺手拿来找你说一句。",
+            },
+            "event": {"label": "生活事件", "note": ""},
+            "story": {"label": "日常剧情", "note": ""},
+            "habit": {"label": "习惯关心", "note": ""},
+            "bilibili": {"label": "B站分享", "note": ""},
+            "bookshelf_reading": {"label": "私密阅读", "note": ""},
+            "creative_writing": {"label": "创作灵感", "note": ""},
+            "group_share": {"label": "群聊见闻", "note": ""},
+            "web_exploration": {"label": "主动搜索", "note": ""},
+            "news": {"label": "新闻阅读", "note": ""},
+            "candidate": {"label": "主动候选", "note": ""},
+            "followup": {"label": "补一句", "note": "前面的话还差个具体点，所以顺手再接一句。"},
+            "external": {"label": "外部主动能力", "note": ""},
+            "timer": {"label": "官方定时计划", "note": ""},
+            "proactive": {"label": "插件主动", "note": ""},
+            "unknown": {"label": "未记录来源", "note": ""},
+        }
+        return dict(meta.get(key) or {"label": key, "note": ""})
+
+    def _proactive_source_label(self, source: Any) -> str:
+        return self._proactive_source_meta(source).get("label") or "插件主动"
+
+    def _proactive_source_note(self, source: Any) -> str:
+        return self._single_line(self._proactive_source_meta(source).get("note"), 120)
+
     def _proactive_reason_detail(self, *, reason: Any, source: Any = "", topic: Any = "", motive: Any = "", note: Any = "") -> str:
         label = self._proactive_reason_label(reason)
         parts = [label]
         topic_text = self._single_line(topic, 80)
         motive_text = self._single_line(motive, 140)
         note_text = self._single_line(note, 120)
-        source_text = self._single_line(source, 40)
+        source_text = self._proactive_source_label(source)
         if topic_text:
             parts.append(f"话题：{topic_text}")
         if motive_text:
@@ -8854,6 +8907,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                         "user_role": user_meta["role"],
                         "user_role_label": user_meta["role_label"],
                         "source": display_source,
+                        "source_label": self._proactive_source_label(display_source),
+                        "source_note": self._proactive_source_note(display_source),
                         "reason": reason,
                         "reason_label": self._proactive_reason_label(reason),
                         "reason_detail": self._proactive_reason_detail(reason=reason, source=display_source, topic=topic, motive=motive, note=note),
@@ -9151,6 +9206,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     "user_role": user_summary.get("relationship_role") or "",
                     "user_role_label": user_summary.get("relationship_role_label") or "",
                     "source": source,
+                    "source_label": self._proactive_source_label(source),
+                    "source_note": self._proactive_source_note(source),
                     "status": status,
                     "action": action,
                     "reason": reason,
@@ -9261,6 +9318,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 "user_role_label": user_summary.get("relationship_role_label") or "",
                 "status": status,
                 "source": self._single_line(raw.get("source"), 40),
+                "source_label": self._proactive_source_label(raw.get("source")),
+                "source_note": self._proactive_source_note(raw.get("source")),
                 "reason": audit_reason,
                 "reason_label": self._proactive_reason_label(audit_reason),
                 "reason_detail": self._proactive_reason_detail(reason=audit_reason, source=raw.get("source"), topic=audit_topic, motive=audit_motive, note=note),

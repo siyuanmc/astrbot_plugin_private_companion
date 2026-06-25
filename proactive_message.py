@@ -1112,6 +1112,17 @@ class ProactiveMessageMixin:
         continuity_hint = self._format_proactive_continuity_hint(user, reason=reason, action=action)
         if continuity_hint:
             prompt = f"{prompt}\n\n{continuity_hint}"
+        followup_emotion_hint = self._format_proactive_followup_emotion_hint(
+            user,
+            reason=reason,
+            action=action,
+            motive=motive,
+        )
+        if followup_emotion_hint:
+            prompt = f"{prompt}\n\n{followup_emotion_hint}"
+        daily_greeting_hint = self._format_daily_greeting_hint(reason=reason)
+        if daily_greeting_hint:
+            prompt = f"{prompt}\n\n{daily_greeting_hint}"
         media_hint = self._format_proactive_media_truth_hint(action, action_context)
         if media_hint:
             prompt = f"{prompt}\n\n{media_hint}"
@@ -1247,6 +1258,66 @@ class ProactiveMessageMixin:
                 ]
             )
         return ""
+
+    def _format_proactive_followup_emotion_hint(
+        self,
+        user: dict[str, Any],
+        *,
+        reason: str,
+        action: str,
+        motive: str = "",
+    ) -> str:
+        followup_kind = str(user.get("planned_followup_kind") or "").strip()
+        source = str(user.get("planned_proactive_source") or "").strip()
+        chain = user.get("planned_event_chain")
+        has_event_chain = isinstance(chain, list) and any(isinstance(item, dict) for item in chain)
+        explicit_followup = bool(followup_kind or source in {"pending_followup", "followup"} or has_event_chain)
+        if not explicit_followup:
+            return ""
+        motive_text = _single_line(motive or user.get("planned_proactive_motive"), 160)
+        if followup_kind == "suspended_opener":
+            scenario = "这轮更像先开了口却没被接住，所以还是想再接一句。"
+            emotion = "优先底色：一点点不甘心或小别扭，但要忍着，不撒娇，不控诉。"
+        elif any(token in motive_text for token in ("补充", "说完整", "没说完", "信息", "重点", "讲清", "说明白")):
+            scenario = "这轮更像前一句信息没补齐，所以回来把关键点补上。"
+            emotion = "优先底色：一点点认真，不委屈，也不要表演想念。"
+        else:
+            scenario = "这轮更像前面那件事还挂着，所以顺手再提一下。"
+            emotion = "优先底色：一点点惦记，但不要把在意本身写成正文。"
+        return "\n".join(
+            [
+                "【续接情绪底色】",
+                scenario,
+                emotion,
+                "情绪只能当底色，必须服务于一个具体残留点：提醒、遗漏信息、没说完的小重点，或前一句里还没落地的那件小事。",
+                "不要把分寸感和关系管理写成正文。禁止出现“轻轻放一句”“顺着那股劲”“那一下没落下去”“不急”“别有压力”“看到再说”“我只是补一句”这类解释自己怎么拿捏分寸的话。",
+                "不要只剩情绪表态；先把那个具体点补出来，再带一点情绪。没有具体点，就不要把这轮 followup 写成长句。",
+            ]
+        )
+
+    def _format_daily_greeting_hint(self, *, reason: str) -> str:
+        if reason not in {"morning_greeting", "noon_greeting", "evening_greeting"}:
+            return ""
+        opening = {
+            "morning_greeting": "这轮是早上顺手冒个头，不是完成一条标准早安。",
+            "noon_greeting": "这轮是中午松下来时顺手来一句，不是完成一条标准午安。",
+            "evening_greeting": "这轮是晚上慢下来后冒个头，不是完成一条标准晚安。",
+        }.get(reason, "这轮是按时段顺手来一句。")
+        scene = {
+            "morning_greeting": "优先落在刚醒、洗漱、赖床、出门前、刚坐下这一类早晨小片段上。",
+            "noon_greeting": "优先落在刚吃完、准备午休、发懒、犯困、坐下一会儿这一类午间小片段上。",
+            "evening_greeting": "优先落在收尾、回到家、刷两下手机、灯光暗下来、终于松一口气这一类晚间小片段上。",
+        }.get(reason, "优先落在当前时段的小片段上。")
+        return "\n".join(
+            [
+                "【时段招呼写法】",
+                opening,
+                scene,
+                "问候词可以有，但不能只有“早安/午安/晚安”。如果写了问候词，后面必须马上接一个具体片段或具体意思。",
+                "不要默认去问“吃了吗”“忙吗”“睡了吗”“在干嘛”。没有具体由头时，宁可短一点，也不要写成整点打卡式问候。",
+                "整条消息更像正常私聊里顺手递过来的一句，不像礼貌签到，也不像群发模板。",
+            ]
+        )
 
     def _format_proactive_media_truth_hint(self, action: str, action_context: str = "") -> str:
         has_real_image = "真实图片文件：" in str(action_context or "") or "图片路径：" in str(action_context or "")
@@ -2567,11 +2638,11 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         if "voice" in action:
             return "像刚发完语音又补一句文字。短一点,带一点刚说完话的余温,别写成说明。"
         if reason == "morning_greeting":
-            return "像早上刚冒头时发来的消息。可以在语气上迷糊一点,但表达要清楚,不要把闹钟、起床过程或自己正在做什么当成主题；更像直接把早晨第一句话递过来。"
+            return "像早上顺手发来的一句。可以带一点刚醒的迟钝或清醒前的停顿，但正文重点要落在一个早晨小片段上，不要只喊早安，也不要把起床流程讲成汇报。"
         if reason == "noon_greeting":
-            return "像中午犯懒时发来的小消息。先从手边的小片段开口,比如刚坐下、刚吃完、午休前那一下发懒,再顺手碰到对方。别每次都问吃没吃。"
+            return "像中午松下来时顺手发来的一句。先从午间手边的小片段开口，比如刚坐下、刚吃完、准备午休、发懒那一下，再顺手碰到对方。别每次都问吃没吃。"
         if reason == "evening_greeting":
-            return "像晚上终于安静下来以后发来的私聊。先落在眼前的晚上片段上,轻一点,别像群发问候,也别把想念说满。"
+            return "像晚上慢下来以后发来的私聊。先落在眼前这一小段晚上片段上，比如收尾、回家、窝下来、灯光暗一点，不要写成群发问候，也别把想念说满。"
         if reason == "group_share":
             return f"像从共同{terms['group_chat']}里瞥见一小段对方可能会在意的内容,私下轻轻补一句。只说一个点,别像群聊日报,别逐条转述,也别固定用“群里刚刚”开头。"
         if reason == "bili_video_share":

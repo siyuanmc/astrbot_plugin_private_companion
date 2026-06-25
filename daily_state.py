@@ -931,8 +931,8 @@ class DailyStateMixin:
                     "impulse": "还没完全开机,但已经先想往你这边晃一下",
                     "chain": [
                         {"kind": "name_only_opener"},
-                        {"kind": "if_no_reply", "after_minutes": 80, "reason": "check_in", "topic": "早晨那句后面", "motive": "隔了挺久那边还安静着,就想再轻轻放一句", "tone": "轻一点"},
-                        {"kind": "if_still_no_reply", "after_minutes": 140, "reason": "morning_greeting", "topic": "早晨第二句", "motive": "早晨慢慢过去了,这句只当顺手放下", "tone": "不催促"},
+                        {"kind": "if_no_reply", "after_minutes": 80, "reason": "check_in", "topic": "早晨那句后面", "motive": "刚刚只喊了名字,用户没回消息,所以想再接一句", "tone": "有点小别扭,但忍着"},
+                        {"kind": "if_still_no_reply", "after_minutes": 140, "reason": "morning_greeting", "topic": "早晨第二句", "motive": "早晨那两句之间还差个实质点,所以想把重点补完整", "tone": "克制一点,把重点补上"},
                     ],
                     "mood": "迷糊",
                 }
@@ -951,7 +951,7 @@ class DailyStateMixin:
                     "impulse": "想在彻底清醒前先把一句话放你这",
                     "chain": [
                         {"kind": "name_only_opener"},
-                        {"kind": "if_no_reply", "after_minutes": 90, "reason": "check_in", "topic": "早晨那句后面", "motive": "隔了挺久那边还没什么动静,就想再轻轻放一句", "tone": "轻一点"},
+                        {"kind": "if_no_reply", "after_minutes": 90, "reason": "check_in", "topic": "早晨那句后面", "motive": "刚刚只冒了个头,用户没回消息,所以想再接一句", "tone": "有点小别扭,但收着"},
                     ],
                     "mood": "迟钝",
                 }
@@ -971,7 +971,7 @@ class DailyStateMixin:
                     "impulse": "想把第一小段清醒顺手分给你一点",
                     "chain": [
                         {"kind": "name_only_opener"},
-                        {"kind": "if_no_reply", "after_minutes": 85, "reason": "check_in", "topic": "早安后续", "motive": "早上那句放出去以后隔了挺久,又想轻轻碰一下", "tone": "轻一点"},
+                        {"kind": "if_no_reply", "after_minutes": 85, "reason": "check_in", "topic": "早安后续", "motive": "刚才那句信息不够完整,所以想补充一句", "tone": "有点认真,顺手补上"},
                     ],
                     "mood": "清醒",
                 }
@@ -1029,12 +1029,12 @@ class DailyStateMixin:
                     "window": "12:10-13:30",
                     "reason": "noon_greeting",
                     "action": "message",
-                    "why": "午后容易松一下,刚好适合发一条不费力的小消息。",
+                    "why": "中午节奏松下来时,很容易顺手来打个照面。",
                     "topic": "午后犯困",
-                    "motive": "中午这会儿人有点软下来,就想顺手晃到你这边",
+                    "motive": "中午这会儿人有点软下来,就想顺手来和你打个照面",
                     "scene": "午后松下来的一小段",
                     "tone": "懒洋洋",
-                    "impulse": "想轻轻来找你一下,不想把气氛弄得太用力",
+                    "impulse": "想趁午后松下来那一下顺手来和你说句话",
                     "mood": "懒洋洋",
                 }
             )
@@ -1139,9 +1139,9 @@ class DailyStateMixin:
             "important_date_share": "有个重要时间点值得提前提醒",
             "background_schedule": "当前日程有一点可以自然提到",
             "check_in": "刚好停下来,想确认用户在不在",
-            "morning_greeting": "早间开始时先和用户打招呼",
-            "noon_greeting": "午间休息时顺手问候一下",
-            "evening_greeting": "晚间节奏放缓时想和用户说一句",
+            "morning_greeting": "早上这会儿顺手来冒个头",
+            "noon_greeting": "中午松下来时顺手来打个照面",
+            "evening_greeting": "晚上慢下来时想先来你这边说一句",
         }.get(reason, "刚好停下来,想到可以和用户说一句")
         if action == "screen_peek":
             base = "刚好有点空,就想偷偷看你在忙什么"
@@ -8760,12 +8760,12 @@ class DailyStateMixin:
                                 "window": self._window_from_delay_minutes(after_minutes, width_minutes=18),
                                 "reason": second_reason,
                                 "action": "message",
-                                "why": "前一条早晨试探后隔了挺久,如果还想续,也只轻轻补一句。",
+                                "why": "前一条早晨试探后还差个具体点,如果还想续,就把那一点补上。",
                                 "topic": _single_line(second.get("topic"), 80) or "早晨那句后面",
                                 "motive": self._normalize_internal_motive_text(_single_line(second.get("motive"), 100)),
                                 "scene": "早晨那句试探之后又过了一阵",
-                                "tone": _single_line(second.get("tone"), 30) or "轻一点,不催促",
-                                "impulse": "隔了挺久才又想放一句,不要求对方立刻回",
+                                "tone": _single_line(second.get("tone"), 30) or "克制一点,把重点补上",
+                                "impulse": "早晨那句还差个重点,想补完整",
                                 "_scheduled_ts": _now_ts() + after_minutes * 60,
                                 "_cancel_on_inbound": True,
                             }

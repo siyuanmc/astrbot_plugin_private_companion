@@ -947,6 +947,10 @@ const configLabels = {
   group_conversation_followup_seconds: "群聊续接判断秒数",
   group_conversation_followup_max_turns: "群聊连续续接上限",
   enable_group_conversation_followup: "启用连续对话保持",
+  enable_group_context_injection: "群上下文注入",
+  enable_group_persona_denoise: "群聊人格降噪",
+  enable_group_scene_awareness: "群聊场景感知",
+  enable_group_privacy_guard: "群隐私保护",
   forward_message_mode: "合并消息适配方式",
   forward_message_max_messages: "合并消息最多读取条数",
   forward_message_max_chars: "合并消息注入字数上限",
@@ -1043,6 +1047,7 @@ const configLabels = {
   worldbook_auto_pending_observations: "低频待确认观察",
   worldbook_member_inject_limit: "单次注入节点数",
   worldbook_config_paths: "关系网配置路径",
+  cross_user_memory_owner_only: "仅主人可用",
   atrelay_require_worldbook_first: "优先按关系网解析",
   atrelay_member_cache_minutes: "群成员缓存分钟",
   atrelay_sensitive_confirm: "敏感转述确认",
@@ -1265,6 +1270,10 @@ const configDescriptions = {
   segmented_proactive_log_base: "对数间隔的底数。数值越小，长句间隔增长越明显。",
   group_conversation_followup_seconds: "群里用户叫过 Bot 后，后续未 @ 的消息在多久内可能被判断为仍在对 Bot 说。",
   group_conversation_followup_max_turns: "一次群聊连续对话最多自动续接几轮，防止 Bot 一直卷进对话。",
+  enable_group_context_injection: "开启后，群聊回复会参考最近群消息、当前话题、活跃成员和群内氛围；关闭后只按当前单条消息理解。",
+  enable_group_persona_denoise: "开启后，会主动压低群聊里的私聊腔、状态汇报和过于贴身的关系投射，让群聊发言更像在公共场合说话。",
+  enable_group_scene_awareness: "开启后，会判断当前这句话是在对 Bot、某个群友还是整个群说话，并结合上下文减少误接话。",
+  enable_group_privacy_guard: "开启后，群聊回复会额外防止把私聊记忆、私下关系细节或只适合一对一场景的信息带进群里。",
   group_interject_min_interval_minutes: "同一群两次主动插话之间的最小间隔。",
   group_interject_max_daily: "每个群每天最多允许几次主动插话。",
   group_repeat_trigger_threshold: "同一句话连续出现达到多少次后，才开始按概率跟读或打断。必须大于 2，默认 4；开启“复读只计不同用户”后，这里表示不同参与者数量。",
@@ -1391,6 +1400,7 @@ const configDescriptions = {
   worldbook_auto_pending_observations: "根据低频互动生成待确认观察，不直接写死到资料正文。",
   worldbook_member_inject_limit: "单次回复最多自动注入多少个相关用户词条。",
   worldbook_config_paths: "关系网资料来源路径。用于读取既有资料，不应写死在代码里。",
+  cross_user_memory_owner_only: "开启后，只有主人能在私聊里查询 Bot 与其他用户或群聊之间的近期互动摘要；关闭后所有目标私聊用户都可查询。",
   atrelay_require_worldbook_first: "转述或 @ 群友时优先用关系网解析，避免群名片变化导致认错人。",
   atrelay_member_cache_minutes: "群成员列表缓存时间，减少频繁查询。",
   atrelay_sensitive_confirm: "敏感、私密或带情绪的转述是否先向用户确认。",
@@ -7168,8 +7178,17 @@ function renderProactiveCandidates() {
     proactiveSummaryCard("执行审计", taskData.audit_total || 0, `${Object.keys(taskData.audit_status_counts || {}).length || 0} 类结果`),
     proactiveSummaryCard("循环状态", runtime.healthy ? "正常" : "待确认", runtime.last_tick_started_ts ? `最近 ${runtime.last_tick_started}` : "尚无心跳"),
   ].join("");
-  $("#proactiveSourceChart").innerHTML = donutChart(sourceCounts);
-  $("#proactiveStatusChart").innerHTML = donutChart(counts || {});
+  $("#proactiveSourceChart").innerHTML = donutChart(sourceCounts, {
+    emptyText: "暂无来源数据",
+    labelFormatter: (label) => proactiveCandidateSourceLabel(label),
+    maxSegments: 6,
+    mergeBelowPercent: 0.035,
+    otherLabel: "其他来源",
+  });
+  $("#proactiveStatusChart").innerHTML = donutChart(counts || {}, {
+    emptyText: "暂无状态数据",
+    labelFormatter: (label) => proactiveStatusLabel(label),
+  });
   renderProactiveTasks();
   renderProactiveCandidateFilters(users, selectedFilter, data.total || allItems.length, total, items.length);
   if (!items.length) {
@@ -7181,13 +7200,14 @@ function renderProactiveCandidates() {
     const repeat = Number(item.repeat_count || 1);
     const userLabel = item.user_label || item.user_id || "-";
     const roleLabel = item.user_role_label || (item.user_role === "owner" ? "主人" : "朋友");
+    const sourceLabel = item.source_label || proactiveCandidateSourceLabel(item.source);
     const semanticMeta = proactiveSemanticMeta(item);
     return `
       <section class="proactive-candidate ${escapeHtml(item.status || "unknown")}">
         <div class="proactive-candidate-head">
           <div>
             <b>${escapeHtml(item.topic || item.reason_label || item.reason || "未命名候选")}</b>
-            <span>${escapeHtml(userLabel)} · ${escapeHtml(roleLabel)} · ${escapeHtml(item.source || "-")} · ${escapeHtml(item.reason_label || item.reason || "-")} · ${escapeHtml(item.action || "message")}</span>
+            <span>${escapeHtml(userLabel)} · ${escapeHtml(roleLabel)} · ${escapeHtml(sourceLabel)} · ${escapeHtml(item.reason_label || item.reason || "-")} · ${escapeHtml(item.action || "message")}</span>
           </div>
           <span class="badge">${escapeHtml(repeat > 1 ? `${status} x${repeat}` : status)}</span>
         </div>
@@ -7364,9 +7384,11 @@ function proactiveAuditHtml(items) {
   return visibleItems.slice(0, 30).map((item) => {
     const status = proactiveAuditStatusLabel(item.status);
     const title = item.topic || item.reason_label || item.reason || item.note || "主动执行记录";
+    const sourceLabel = item.source_label || proactiveCandidateSourceLabel(item.source);
     const semanticMeta = proactiveSemanticMeta(item);
     const meta = [
       `用户：${item.user_label || item.user_id || "-"}`,
+      `来源：${sourceLabel}`,
       `动作：${item.action || "message"}`,
       item.reason_label ? `原因：${item.reason_label}` : (item.reason ? `原因：${item.reason}` : ""),
       item.reason_detail ? `为什么：${item.reason_detail}` : "",
@@ -7384,7 +7406,7 @@ function proactiveAuditHtml(items) {
         <div class="proactive-task-head">
           <div>
             <b>${escapeHtml(title)}</b>
-            <span>${escapeHtml(item.user_label || item.user_id || "-")} · ${escapeHtml(item.user_role_label || "-")} · ${escapeHtml(item.source || "proactive")}</span>
+            <span>${escapeHtml(item.user_label || item.user_id || "-")} · ${escapeHtml(item.user_role_label || "-")} · ${escapeHtml(sourceLabel)}</span>
           </div>
           <span class="badge">${escapeHtml(status)}</span>
         </div>
@@ -7426,9 +7448,35 @@ function proactiveAuditStatusLabel(status) {
 function proactiveTaskSourceLabel(source, hasTimerEvent = false) {
   if (source === "timer" || hasTimerEvent) return "官方定时计划";
   if (source === "candidate") return "主动候选";
-  if (source === "followup") return "链式追问";
+  if (source === "followup" || source === "pending_followup") return "补一句";
+  if (source === "state") return "身体小需求";
+  if (source === "daily_greeting") return "日常招呼";
   if (source === "external") return "外部主动能力";
   return source || "插件主动";
+}
+
+function proactiveCandidateSourceLabel(source) {
+  return {
+    random: "轻微想念",
+    daily_greeting: "日常招呼",
+    pending_followup: "补一句",
+    state: "身体小需求",
+    event: "生活事件",
+    story: "日常剧情",
+    habit: "习惯关心",
+    bilibili: "B站分享",
+    bookshelf_reading: "私密阅读",
+    creative_writing: "创作灵感",
+    group_share: "群聊见闻",
+    web_exploration: "主动搜索",
+    news: "新闻阅读",
+    candidate: "主动候选",
+    followup: "补一句",
+    external: "外部主动能力",
+    timer: "官方定时计划",
+    proactive: "插件主动",
+    unknown: "未记录来源",
+  }[source] || source || "插件主动";
 }
 
 function validProactiveCandidateFilter(data, value) {
@@ -9808,7 +9856,7 @@ function featureRelatedSettings(key) {
           ? providers[item]
           : state.featureDraft[item],
       feature: Object.prototype.hasOwnProperty.call(state.featureDraft || {}, item),
-      description: configDescriptions[item] || "这个参数会影响该功能的触发频率、上下文范围或行为边界。",
+      description: configDescriptions[item] || featureDescription(item) || "这个参数会影响该功能的触发频率、上下文范围或行为边界。",
     }));
 }
 
@@ -10623,7 +10671,7 @@ function featureImpactLines(key) {
 }
 
 function configLabel(name) {
-  const label = configLabels[name] || name.replace(/^enable_/, "").replaceAll("_", " ");
+  const label = configLabels[name] || featureLabel(name) || name.replace(/^enable_/, "").replaceAll("_", " ");
   if ((isFractionalPercentSetting(name) || percentSettingKeys.has(name)) && !/[（(]%[）)]/.test(label)) {
     return `${label}（%）`;
   }
@@ -11532,14 +11580,46 @@ function shortName(value, limit) {
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 
-function donutChart(data) {
-  const entries = Object.entries(data).filter(([, value]) => Number(value) > 0);
-  if (!entries.length) return `<div class="empty small">暂无记忆数据</div>`;
-  const total = entries.reduce((sum, [, value]) => sum + Number(value), 0);
+function donutChart(data, options = {}) {
+  const {
+    emptyText = "暂无记忆数据",
+    labelFormatter = null,
+    maxSegments = 0,
+    mergeBelowPercent = 0,
+    otherLabel = "其他",
+  } = options;
+  const grouped = new Map();
+  for (const [rawLabel, rawValue] of Object.entries(data || {})) {
+    const value = Number(rawValue);
+    if (value <= 0) continue;
+    const label = String(labelFormatter ? labelFormatter(rawLabel, value) : rawLabel || "未命名");
+    grouped.set(label, (grouped.get(label) || 0) + value);
+  }
+  let entries = Array.from(grouped.entries())
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value);
+  if (!entries.length) return `<div class="empty small">${escapeHtml(emptyText)}</div>`;
+  const total = entries.reduce((sum, item) => sum + item.value, 0);
+  if (mergeBelowPercent > 0 || maxSegments > 0) {
+    const kept = [];
+    let otherValue = 0;
+    entries.forEach((item, index) => {
+      const pct = total > 0 ? item.value / total : 0;
+      const overflow = maxSegments > 0 && index >= maxSegments;
+      const tooSmall = mergeBelowPercent > 0 && pct < mergeBelowPercent;
+      if (overflow || tooSmall) {
+        otherValue += item.value;
+      } else {
+        kept.push(item);
+      }
+    });
+    entries = kept;
+    if (otherValue > 0) entries.push({ label: otherLabel, value: otherValue });
+  }
   let offset = 0;
   const colors = ["#2f7566", "#8a6f3e", "#4d7ea8", "#a15f26", "#6e7f3f"];
-  const circles = entries.map(([label, value], index) => {
-    const pct = (Number(value) / total) * 100;
+  const circles = entries.map((item, index) => {
+    const pct = (item.value / total) * 100;
     const circle = `<circle r="42" cx="60" cy="60" pathLength="100" stroke="${colors[index % colors.length]}" stroke-dasharray="${pct} ${100 - pct}" stroke-dashoffset="${-offset}"></circle>`;
     offset += pct;
     return circle;
@@ -11549,10 +11629,19 @@ function donutChart(data) {
       <svg class="donut" viewBox="0 0 120 120">
         <circle r="42" cx="60" cy="60" class="donut-bg"></circle>
         ${circles}
-        <text x="60" y="64" text-anchor="middle">${escapeHtml(total)}</text>
+        <text x="60" y="64" text-anchor="middle">${escapeHtml(formatNumber(total))}</text>
       </svg>
       <div class="donut-legend">
-        ${entries.map(([label, value], index) => `<span><i style="background:${colors[index % colors.length]}"></i>${escapeHtml(label)} ${escapeHtml(value)}</span>`).join("")}
+        ${entries.map((item, index) => {
+          const pct = total > 0 ? (item.value / total) * 100 : 0;
+          const pctText = pct >= 1 ? `${pct.toFixed(1)}%` : (pct > 0 ? `${pct.toFixed(1)}%` : "0%");
+          return `
+            <span class="donut-legend-item">
+              <span class="donut-legend-label"><i style="background:${colors[index % colors.length]}"></i>${escapeHtml(item.label)}</span>
+              <span class="donut-legend-value">${escapeHtml(formatNumber(item.value))} · ${escapeHtml(pctText)}</span>
+            </span>
+          `;
+        }).join("")}
       </div>
     </div>
   `;

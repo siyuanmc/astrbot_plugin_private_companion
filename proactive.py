@@ -1120,6 +1120,42 @@ class ProactiveMixin:
             return minute < 14 * 60
         return False
 
+    def _random_proactive_impulse_context(
+        self,
+        user: dict[str, Any],
+        *,
+        now: float,
+    ) -> dict[str, Any]:
+        state = self.data.get("daily_state", {})
+        if not isinstance(state, dict):
+            state = {}
+        energy = _safe_int(state.get("energy"), 70, 0, 100)
+        mood = _single_line(state.get("mood_bias") or state.get("mood"), 24)
+        note = _single_line(state.get("note"), 120)
+        ignored_streak = _safe_int(user.get("ignored_streak"), 0, 0, 20)
+        awaiting_since = _safe_float(user.get("awaiting_reply_since"), 0)
+        last_sent = _safe_float(user.get("last_sent"), 0)
+        reasons: list[str] = []
+        suggest_soft_reason = False
+        if awaiting_since > 0:
+            silent_hours = (now - awaiting_since) / 3600.0
+            if silent_hours >= 3.0:
+                reasons.append(f"已等待回复 {silent_hours:.1f}h")
+                suggest_soft_reason = True
+        elif ignored_streak >= 1 and last_sent > 0 and now - last_sent >= 3 * 3600:
+            reasons.append(f"未回应 {ignored_streak} 次")
+            suggest_soft_reason = True
+        low_energy = energy <= 45
+        quiet_mood = mood in {"安静", "疲惫", "低落", "收声", "困倦"}
+        if low_energy or quiet_mood or any(token in note for token in ("疲惫", "困", "低电量", "收声", "慢一点", "安静")):
+            reasons.append(f"状态偏低({energy}/{mood or '平稳'})")
+            suggest_soft_reason = True
+        return {
+            "allowed": bool(reasons),
+            "reasons": reasons,
+            "suggest_soft_reason": suggest_soft_reason,
+        }
+
     def _queue_event_driven_proactive_impulses(
         self,
         user: dict[str, Any],
@@ -1214,7 +1250,12 @@ class ProactiveMixin:
         now: float,
         delay_hours: tuple[float, float],
     ) -> dict[str, Any] | None:
+        context = self._random_proactive_impulse_context(user, now=now)
+        if not bool(context.get("allowed")):
+            return None
         reason = self._choose_planned_reason()
+        if bool(context.get("suggest_soft_reason")) and reason in {"check_in", "state_share"}:
+            reason = "quiet_care"
         motive = self._choose_proactive_motive(reason, user)
         action = self._choose_action_for_reason(reason, user, motive=motive)
         action = self._maybe_upgrade_planned_message_action(

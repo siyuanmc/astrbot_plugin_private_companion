@@ -4748,9 +4748,9 @@
       },
       "enable_maintenance_token_saver": {
         "description": "旧版 Token 节省开关",
-        "type": "string",
+        "type": "bool",
         "hint": "旧版配置项；现在请使用 enable_daily_token_soft_limit。",
-        "default": "",
+        "default": false,
         "invisible": true
       },
       "maintenance_token_soft_limit": {
@@ -4818,9 +4818,9 @@
       },
       "enable_hot_trend_sources": {
         "description": "旧版热榜开关",
-        "type": "string",
+        "type": "bool",
         "hint": "旧版配置项；现在请使用 enable_news_daily_hot_read。",
-        "default": "",
+        "default": false,
         "invisible": true
       },
       "hot_trend_sources": {
@@ -4839,16 +4839,16 @@
       },
       "enable_jm_cosmos_integration": {
         "description": "旧版夹层阅读开关",
-        "type": "string",
+        "type": "bool",
         "hint": "旧版配置项；现在请使用 enable_private_reading_integration。",
-        "default": "",
+        "default": false,
         "invisible": true
       },
       "enable_jm_cosmos_boredom_read": {
         "description": "旧版无聊阅读开关",
-        "type": "string",
+        "type": "bool",
         "hint": "旧版配置项；现在请使用 enable_private_reading_boredom_read。",
-        "default": "",
+        "default": false,
         "invisible": true
       },
       "jm_cosmos_min_interval_hours": {
