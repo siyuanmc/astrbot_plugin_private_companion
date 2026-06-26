@@ -6945,7 +6945,15 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         if key == "QZONE_COOKIE":
             return str(value or "").replace("\r", ";").replace("\n", ";").strip()[:8000]
         if key in {"group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "recall_forbidden_words"}:
-            return str(value or "").strip()[:1200]
+            parser = getattr(self.plugin, "_parse_text_list_config", None)
+            if callable(parser):
+                limit = 300 if key == "recall_forbidden_words" else 120
+                return parser(value, limit=limit)
+            if isinstance(value, list):
+                return [v for v in value if v]
+            if isinstance(value, str):
+                return [v for v in re.split(r"[\n,，、;；]+", value) if v.strip()]
+            return []
         if key == "recall_forbidden_scope":
             scope = str(value or "bot_and_group").strip().lower()
             return scope if scope in {"bot_only", "group_only", "bot_and_group"} else "bot_and_group"
