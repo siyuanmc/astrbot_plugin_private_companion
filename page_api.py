@@ -902,9 +902,11 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 reference_image_path = self._single_line(reference_getter(), 260)
             except Exception:
                 reference_image_path = ""
+        configured_reference = self._single_line(getattr(self.plugin, "photo_persona_reference_image_path", ""), 1000).strip().strip('"').strip("'")
+        has_reference_source = bool(reference_image_path or re.match(r"^https?://", configured_reference, flags=re.I))
         workflow_kind = self._single_line(payload.get("workflow_kind"), 20)
         if not workflow_kind:
-            workflow_kind = "selfie" if reference_image_path else "text2img"
+            workflow_kind = "selfie" if has_reference_source else "text2img"
         prompt_text = self._single_line(payload.get("prompt"), 600)
         if not prompt_text and workflow_kind in {"selfie", "portrait", "自拍", "人像"}:
             prompt_text = (
@@ -930,7 +932,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "[PrivateCompanionPage] 图片生成排障测试开始: workflow_kind=%s prompt_chars=%s reference=%s prompt=%s",
             self._single_line(workflow_kind, 40),
             len(str(prompt_text or "")),
-            bool(reference_image_path),
+            has_reference_source,
             self._single_line(prompt_text, 180),
         )
         timeout = max(

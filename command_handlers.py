@@ -220,9 +220,11 @@ class CommandHandlersMixin:
         return "", "", saw_image
 
     def _resolve_photo_reference_command_path(self, value: str) -> tuple[str, str]:
-        raw = _single_line(value, 260).strip().strip('"').strip("'")
+        raw = _single_line(value, 1000).strip().strip('"').strip("'")
         if not raw:
-            return "", "请这样设置：陪伴 参考图 <本地图片路径>"
+            return "", "请这样设置：陪伴 参考图 <本地图片路径或图片URL>"
+        if re.match(r"^https?://", raw, flags=re.I):
+            return raw, ""
         expanded = os.path.expandvars(os.path.expanduser(raw))
         candidates = [Path(expanded)]
         if not candidates[0].is_absolute():
@@ -237,7 +239,7 @@ class CommandHandlersMixin:
             if resolved.suffix.lower() not in _PHOTO_REFERENCE_SUFFIXES:
                 return "", "参考图只支持 png、jpg、jpeg、webp。"
             return str(resolved), ""
-        return "", "没有找到这张本地图片。请确认路径存在，并且 Bot 所在机器能访问。"
+        return "", "没有找到这张本地图片。请确认路径存在，并且 Bot 所在机器能访问；也可以直接填写 http(s) 图片 URL。"
 
     def _set_photo_reference_config_path(self, path: str) -> bool:
         clean = _single_line(path, 260)
@@ -251,7 +253,7 @@ class CommandHandlersMixin:
             return False
 
     async def _photo_reference_command_text(self, event: AstrMessageEvent, user_id: str, value: str = "") -> str:
-        action = _single_line(value, 260)
+        action = _single_line(value, 1000)
         if action in {"清空", "删除", "移除", "clear", "none", "空"}:
             saved = self._set_photo_reference_config_path("")
             return "已清空主动自拍人设参考图。" + ("" if saved else "\n但配置保存可能失败，请稍后在配置页确认。")
@@ -276,11 +278,12 @@ class CommandHandlersMixin:
             configured = _single_line(getattr(self, "photo_persona_reference_image_path", ""), 260)
             resolved = self._photo_persona_reference_image_path() if callable(getattr(self, "_photo_persona_reference_image_path", None)) else ""
             if not configured:
-                return "当前没有设置主动自拍人设参考图。\n设置方式：陪伴 参考图 <本地图片路径>；也可以发送图片并附上“陪伴 参考图”。"
+                return "当前没有设置主动自拍人设参考图。\n设置方式：陪伴 参考图 <本地图片路径或图片URL>；也可以发送图片并附上“陪伴 参考图”。"
+            status = "可用" if resolved else "URL 待首次使用时下载" if re.match(r"^https?://", configured.strip(), flags=re.I) else "路径不可用或格式不支持"
             return (
                 "当前主动自拍人设参考图：\n"
                 f"{configured}\n"
-                f"状态：{'可用' if resolved else '路径不可用或格式不支持'}"
+                f"状态：{status}"
             )
         path, error = self._resolve_photo_reference_command_path(action)
         if error:

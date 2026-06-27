@@ -767,6 +767,7 @@ class PrivateCompanionPlugin(
         self.external_image_api_timeout_seconds = self._cfg_int(c, "external_image_api_timeout_seconds", 180, 20, 600)
         self.photo_generation_style = self._cfg_str(c, "photo_generation_style", "真实", "真实")
         self.photo_generation_style_custom_prompt = self._cfg_str(c, "photo_generation_style_custom_prompt", "")
+        self.photo_generation_fixed_prompt = self._cfg_str(c, "photo_generation_fixed_prompt", "")
         self.enable_daily_outfit_photo = self._cfg_bool(c, "enable_daily_outfit_photo", False)
         self.daily_outfit_photo_prompt = self._cfg_str(c, "daily_outfit_photo_prompt", "")
         self.enable_natural_language_photo_generation = self._cfg_bool(c, "enable_natural_language_photo_generation", False)
@@ -5981,7 +5982,7 @@ class PrivateCompanionPlugin(
             and _single_line(signals.get("self_id"), 80)
             and _single_line(signals.get("reply_to_id"), 80) == _single_line(signals.get("self_id"), 80)
         )
-        if (at_bot or reply_to_bot or getattr(event, "is_at_or_wake_command", False) or getattr(event, "is_wake", False)) and await self._maybe_handle_natural_language_photo_request(event, sender_id, text):
+        if (at_bot or reply_to_bot) and await self._maybe_handle_natural_language_photo_request(event, sender_id, text):
             return
         registration_payload = None
         continuation: bool | None = False

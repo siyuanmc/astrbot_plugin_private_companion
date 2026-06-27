@@ -4093,6 +4093,15 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             f"external_base={external_base or '-'}"
         )
 
+    def _apply_photo_generation_fixed_prompt(self, prompt_text: str) -> str:
+        prompt = str(prompt_text or "").strip()
+        fixed = _single_line(getattr(self, "photo_generation_fixed_prompt", ""), 500)
+        if not fixed:
+            return prompt
+        if fixed in prompt:
+            return _single_line(prompt, 1800)
+        return _single_line(f"{prompt}\n\n【固定生图提示词】\n{fixed}".strip(), 1800)
+
     async def _generate_photo_image(
         self,
         *,
@@ -4104,7 +4113,10 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
     ) -> tuple[str, str, str]:
         started = time.time()
         trace_id = self._photo_generation_trace_id(session_key, workflow_kind)
-        reference_image_path = _single_line(reference_image_path, 260) or self._photo_persona_reference_image_for_kind(workflow_kind)
+        prompt_text = self._apply_photo_generation_fixed_prompt(prompt_text)
+        reference_image_path = _single_line(reference_image_path, 260)
+        if not reference_image_path:
+            reference_image_path = await self._photo_persona_reference_image_for_kind_async(workflow_kind)
         preferred = self.photo_generation_backend
         try:
             reference_exists = bool(reference_image_path and Path(reference_image_path).exists())
@@ -4327,10 +4339,12 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         return "真实", "真实摄影风格,像手机随手拍到的生活照片,光线自然,细节可信"
 
     def _photo_persona_reference_image_path(self) -> str:
-        raw = _single_line(getattr(self, "photo_persona_reference_image_path", ""), 260)
+        raw = _single_line(getattr(self, "photo_persona_reference_image_path", ""), 1000)
         if not raw:
             return ""
         raw = raw.strip().strip('"').strip("'")
+        if re.match(r"^https?://", raw, flags=re.I):
+            return ""
         candidates = [Path(raw).expanduser()]
         if not candidates[0].is_absolute():
             candidates.append(Path(self.data_dir) / raw)
@@ -4350,6 +4364,38 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         if str(workflow_kind or "").strip().lower() not in {"selfie", "portrait", "自拍", "人像"}:
             return ""
         return self._photo_persona_reference_image_path()
+
+    async def _photo_persona_reference_image_path_async(self) -> str:
+        local_path = self._photo_persona_reference_image_path()
+        if local_path:
+            return local_path
+        raw = _single_line(getattr(self, "photo_persona_reference_image_path", ""), 1000).strip().strip('"').strip("'")
+        if not raw or not re.match(r"^https?://", raw, flags=re.I):
+            return ""
+        resolver = getattr(self, "_photo_reference_source_to_stable_path", None)
+        if not callable(resolver):
+            return ""
+        try:
+            stable_path = await resolver(raw, stem="config_url_reference")
+        except Exception as exc:
+            logger.info("[PrivateCompanion] 配置页人设参考图 URL 下载失败: %s url=%s", _single_line(exc, 120), _single_line(raw, 120))
+            return ""
+        if not stable_path:
+            logger.info("[PrivateCompanion] 配置页人设参考图 URL 未能转为本地参考图: url=%s", _single_line(raw, 120))
+            return ""
+        setter = getattr(self, "_set_photo_reference_config_path", None)
+        if callable(setter):
+            try:
+                setter(stable_path)
+            except Exception as exc:
+                logger.info("[PrivateCompanion] 配置页人设参考图 URL 已下载但回写失败: %s path=%s", _single_line(exc, 120), _single_line(stable_path, 160))
+        logger.info("[PrivateCompanion] 配置页人设参考图 URL 已缓存为本地文件: path=%s", _single_line(stable_path, 160))
+        return stable_path
+
+    async def _photo_persona_reference_image_for_kind_async(self, workflow_kind: str) -> str:
+        if str(workflow_kind or "").strip().lower() not in {"selfie", "portrait", "自拍", "人像"}:
+            return ""
+        return await self._photo_persona_reference_image_path_async()
 
     async def _run_comfyui_photo_workflow(
         self,

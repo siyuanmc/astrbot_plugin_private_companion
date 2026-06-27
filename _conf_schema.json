@@ -2328,7 +2328,7 @@
     "invisible": true
   },
   "photo_persona_reference_image_path": {
-    "description": "Legacy flat config: 本地人设参考图路径",
+    "description": "Legacy flat config: 人设参考图路径或图片 URL",
     "type": "string",
     "default": "",
     "invisible": true
@@ -2425,6 +2425,12 @@
   },
   "photo_generation_style_custom_prompt": {
     "description": "Legacy flat config: 主动生图自定义风格说明",
+    "type": "string",
+    "default": "",
+    "invisible": true
+  },
+  "photo_generation_fixed_prompt": {
+    "description": "Legacy flat config: 生图固定附加提示词",
     "type": "string",
     "default": "",
     "invisible": true
@@ -6764,16 +6770,16 @@
       "COMFYUI_SELFIE_WORKFLOW_NAME": {
         "description": "主动自拍工作流名",
         "type": "string",
-        "hint": "用于自拍/人像类 photo_text 主动行为。若配置了本地人设参考图，会优先寻找 images=1、texts>=1、videos=0 的 ComfyUI 工作流；找不到则回退到纯文生图工作流。",
+        "hint": "用于自拍/人像类 photo_text 主动行为。若配置了人设参考图，会优先寻找 images=1、texts>=1、videos=0 的 ComfyUI 工作流；找不到则回退到纯文生图工作流。",
         "default": "",
         "condition": {
           "enable_photo_text_action": true
         }
       },
       "photo_persona_reference_image_path": {
-        "description": "本地人设参考图路径",
+        "description": "人设参考图路径或图片 URL",
         "type": "string",
-        "hint": "可填 png/jpg/jpeg/webp 本地文件路径，仅在自拍/人像类主动生图时使用。ComfyUI 会把它作为图片输入传给支持 images=1 的自拍工作流；在线图片 API 会优先尝试 OpenAI 兼容 /images/edits 参考图接口，不支持时回退纯文生图；SDGen 仍按提示词生成。",
+        "hint": "可填 png/jpg/jpeg/webp 本地文件路径，也可填 http(s) 图片 URL；URL 会在首次自拍/人像生图前下载一次并自动回写为本地缓存路径。仅在自拍/人像类主动生图时使用。ComfyUI 会把它作为图片输入传给支持 images=1 的自拍工作流；在线图片 API 会优先尝试 OpenAI 兼容 /images/edits 参考图接口，不支持时回退纯文生图；SDGen 仍按提示词生成。",
         "default": "",
         "condition": {
           "enable_photo_text_action": true
@@ -6953,6 +6959,15 @@
         "description": "主动生图自定义风格说明",
         "type": "string",
         "hint": "当主动生图风格设为“其他”时，会把这里的内容作为额外风格要求注入提示词，例如：胶片感、像素风、轻复古插画。",
+        "default": "",
+        "condition": {
+          "enable_photo_text_action": true
+        }
+      },
+      "photo_generation_fixed_prompt": {
+        "description": "生图固定附加提示词",
+        "type": "string",
+        "hint": "可选。所有生图提交后端前都会追加这段固定提示词，包括主动随手拍、每日穿搭、自然语言文生图和引用/携带图片改图。适合放固定画质、角色细节、安全区或负面约束；留空不追加。",
         "default": "",
         "condition": {
           "enable_photo_text_action": true
