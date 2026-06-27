@@ -2327,6 +2327,36 @@
     "default": "",
     "invisible": true
   },
+  "photo_persona_reference_image_path": {
+    "description": "Legacy flat config: 本地人设参考图路径",
+    "type": "string",
+    "default": "",
+    "invisible": true
+  },
+  "enable_daily_outfit_photo": {
+    "description": "Legacy flat config: 每日穿搭照片",
+    "type": "bool",
+    "default": false,
+    "invisible": true
+  },
+  "daily_outfit_photo_prompt": {
+    "description": "Legacy flat config: 每日穿搭额外提示词",
+    "type": "string",
+    "default": "",
+    "invisible": true
+  },
+  "enable_natural_language_photo_generation": {
+    "description": "Legacy flat config: 自然语言生图/改图",
+    "type": "bool",
+    "default": false,
+    "invisible": true
+  },
+  "natural_language_photo_generation_max_daily": {
+    "description": "Legacy flat config: 自然语言生图/改图每日上限",
+    "type": "int",
+    "default": 2,
+    "invisible": true
+  },
   "comfyui_photo_wait_seconds": {
     "description": "Legacy flat config: 主动拍照等待生图秒数",
     "type": "int",
@@ -6716,7 +6746,7 @@
       "photo_generation_backend": {
         "description": "主动生图后端",
         "type": "string",
-        "hint": "可填：auto、comfyui、sdgen、external。auto 会优先尝试本地 ComfyUI，再尝试 astrbot_plugin_SDGen，最后回退到在线图片 API。",
+        "hint": "可填：auto、comfyui、sdgen、external。auto 会在在线图片 API 配置完整时优先尝试在线 API，失败后回退本地 ComfyUI/astrbot_plugin_SDGen；未配置在线 API 时使用本地后端。",
         "default": "auto",
         "condition": {
           "enable_photo_text_action": true
@@ -6734,10 +6764,62 @@
       "COMFYUI_SELFIE_WORKFLOW_NAME": {
         "description": "主动自拍工作流名",
         "type": "string",
-        "hint": "用于自拍/人像类 photo_text 主动行为。适合使用已在工作流里预置人设图的 ComfyUI 工作流；需要从文本提示词生成输出图片。",
+        "hint": "用于自拍/人像类 photo_text 主动行为。若配置了本地人设参考图，会优先寻找 images=1、texts>=1、videos=0 的 ComfyUI 工作流；找不到则回退到纯文生图工作流。",
         "default": "",
         "condition": {
           "enable_photo_text_action": true
+        }
+      },
+      "photo_persona_reference_image_path": {
+        "description": "本地人设参考图路径",
+        "type": "string",
+        "hint": "可填 png/jpg/jpeg/webp 本地文件路径，仅在自拍/人像类主动生图时使用。ComfyUI 会把它作为图片输入传给支持 images=1 的自拍工作流；在线图片 API 会优先尝试 OpenAI 兼容 /images/edits 参考图接口，不支持时回退纯文生图；SDGen 仍按提示词生成。",
+        "default": "",
+        "condition": {
+          "enable_photo_text_action": true
+        }
+      },
+      "enable_daily_outfit_photo": {
+        "description": "每日穿搭照片",
+        "type": "bool",
+        "hint": "默认关闭。开启后，每天日程生成并保存后会额外调用一次自拍/人像生图能力，根据当天日程、天气和状态生成角色当天穿搭照片，用作拓展页左上角 Logo。失败会记录当天结果，不会因刷新页面反复请求。",
+        "default": false,
+        "condition": {
+          "enable_photo_text_action": true
+        }
+      },
+      "daily_outfit_photo_prompt": {
+        "description": "每日穿搭额外提示词",
+        "type": "string",
+        "hint": "可选。补充角色今天穿搭的偏好，例如校服、便服、季节感、配色或固定饰品；留空则优先根据当天日程里的上课、出门、居家、雨天、换衣和饰品线索自动组织。",
+        "default": "",
+        "condition": {
+          "enable_photo_text_action": true,
+          "enable_daily_outfit_photo": true
+        }
+      },
+      "enable_natural_language_photo_generation": {
+        "description": "自然语言生图/改图",
+        "type": "bool",
+        "hint": "默认关闭，避免和独立生图插件抢触发。开启后，私聊里明确说“帮我画/生成图片”会直接调用生图；随消息带图或引用图片并说“改成/加上/去掉”等会尝试改图。该入口只对主人私聊开放。",
+        "default": false,
+        "condition": {
+          "enable_photo_text_action": true
+        }
+      },
+      "natural_language_photo_generation_max_daily": {
+        "description": "自然语言生图/改图每日上限",
+        "type": "int",
+        "hint": "独立于主动生图额度和每日穿搭。成功生成或已实际请求后端但失败的情况会计入，避免接口异常时被反复请求。0 表示关闭自然语言生图/改图。",
+        "slider": {
+          "min": 0,
+          "max": 10,
+          "step": 1
+        },
+        "default": 2,
+        "condition": {
+          "enable_photo_text_action": true,
+          "enable_natural_language_photo_generation": true
         }
       },
       "comfyui_photo_wait_seconds": {
@@ -6829,7 +6911,7 @@
       "EXTERNAL_IMAGE_API_MODEL": {
         "description": "在线图片模型",
         "type": "string",
-        "hint": "例如某个平台提供的图片模型名。插件会按 OpenAI 兼容 images/generations 请求格式提交 prompt。",
+        "hint": "必须填写该平台的图片模型名，不能填写 gpt-5.5、deepseek、claude、qwen 等聊天/文本模型。插件会按 OpenAI 兼容 images/generations 请求格式提交 prompt；自拍参考图会尝试 images/edits。",
         "default": "",
         "condition": {
           "enable_photo_text_action": true

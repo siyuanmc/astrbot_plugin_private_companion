@@ -414,7 +414,7 @@ _PROACTIVE_ONLY_TEMP_UNLOCK_RELATED = {
     PLUGIN_NAME,
     "menglimi",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "5.2.1",
+    "5.3.0",
 )
 class PrivateCompanionPlugin(
     CoreStoreMixin,
@@ -750,6 +750,7 @@ class PrivateCompanionPlugin(
         self.comfyui_photo_workflow_name = self._cfg_str(c, "COMFYUI_PHOTO_WORKFLOW_NAME", "")
         self.comfyui_text2img_workflow_name = self._cfg_str(c, "COMFYUI_TEXT2IMG_WORKFLOW_NAME", self.comfyui_photo_workflow_name)
         self.comfyui_selfie_workflow_name = self._cfg_str(c, "COMFYUI_SELFIE_WORKFLOW_NAME", self.comfyui_photo_workflow_name)
+        self.photo_persona_reference_image_path = self._cfg_str(c, "photo_persona_reference_image_path", "")
         self.comfyui_photo_wait_seconds = self._cfg_int(c, "comfyui_photo_wait_seconds", 90, 5, 600)
         self.photo_generation_backend = self._cfg_str(c, "photo_generation_backend", "auto", "auto").strip().lower()
         if self.photo_generation_backend not in {"auto", "comfyui", "sdgen", "external"}:
@@ -766,6 +767,10 @@ class PrivateCompanionPlugin(
         self.external_image_api_timeout_seconds = self._cfg_int(c, "external_image_api_timeout_seconds", 180, 20, 600)
         self.photo_generation_style = self._cfg_str(c, "photo_generation_style", "真实", "真实")
         self.photo_generation_style_custom_prompt = self._cfg_str(c, "photo_generation_style_custom_prompt", "")
+        self.enable_daily_outfit_photo = self._cfg_bool(c, "enable_daily_outfit_photo", False)
+        self.daily_outfit_photo_prompt = self._cfg_str(c, "daily_outfit_photo_prompt", "")
+        self.enable_natural_language_photo_generation = self._cfg_bool(c, "enable_natural_language_photo_generation", False)
+        self.natural_language_photo_generation_max_daily = self._cfg_int(c, "natural_language_photo_generation_max_daily", 2, 0, 10)
         self.enable_weather_context = self._cfg_bool(c, "enable_weather_context", True)
         self.weather_api_key = self._cfg_str(c, "weather_api_key", "")
         self.weather_city = self._cfg_str(c, "weather_city", "")
@@ -5016,7 +5021,8 @@ class PrivateCompanionPlugin(
             "重置插件", "重置", "全部重置",
             "查看提示词", "提示词", "prompt",
             "重置细化",
-            "重置日程",
+            "重置日程", "生成日程", "刷新日程",
+            "生成穿搭", "刷新穿搭", "重置穿搭",
             "生成状态", "刷新状态", "重生状态",
             "增添状态", "添加状态",
             "生成日记", "刷新日记",
@@ -5037,7 +5043,8 @@ class PrivateCompanionPlugin(
         management_actions = {
             "重置插件", "重置", "全部重置",
             "查看提示词", "提示词", "prompt",
-            "重置细化", "重置日程",
+            "重置细化", "重置日程", "生成日程", "刷新日程",
+            "生成穿搭", "刷新穿搭", "重置穿搭",
             "生成状态", "刷新状态", "重生状态",
             "增添状态", "添加状态",
             "生成日记", "刷新日记",
@@ -5051,6 +5058,7 @@ class PrivateCompanionPlugin(
             "日期删除", "删除日期", "重要日期删除",
             "话头删除", "删除话头", "未完话头删除", "删除未完话头",
             "清空记忆", "忘记我",
+            "参考图", "人设参考图", "自拍参考图",
         }
         if action in management_actions and not self._can_manage_private_companion(event):
             await self._reply(event, self._management_denied_text())
@@ -5107,6 +5115,8 @@ class PrivateCompanionPlugin(
                     if tts_parts and tts_parts[0].strip().lower() in {"语种", "语言", "language", "lang"}:
                         tts_value = tts_parts[1].strip() if len(tts_parts) >= 2 else ""
                 response = self._set_tts_voice_language_from_command(tts_value)
+            elif action in {"参考图", "人设参考图", "自拍参考图"}:
+                response = await self._photo_reference_command_text(event, user_id, value)
             elif action in {"查看主动判定", "主动判定", "判定"}:
                 response = self._explain_proactive_decision(user)
             elif action in {"能力列表", "主动能力", "工具列表"}:
@@ -5121,11 +5131,13 @@ class PrivateCompanionPlugin(
                 response = "正在把这个状态加进去。"
             elif action in {"当前细化", "查看当前细化"}:
                 response = self._format_current_detail_view()
-            elif action in {"查看今日日程"}:
+            elif action in {"查看今日日程", "查看日程", "今日日程", "日程"}:
                 plan = self.data.get("daily_plan", {})
                 response = self._format_daily_plan(plan)
-            elif action in {"重置日程"}:
+            elif action in {"重置日程", "生成日程", "刷新日程"}:
                 response = "正在生成今天的日程,我先把今天怎么过想清楚。"
+            elif action in {"生成穿搭", "刷新穿搭", "重置穿搭"}:
+                response = "正在按今日日程生成每日穿搭照片。"
             elif action in {"生成状态", "刷新状态", "重生状态"}:
                 response = "正在刷新今天的拟人状态。"
             elif action in {"梦境", "做了什么梦", "今日梦境"}:
@@ -5268,7 +5280,7 @@ class PrivateCompanionPlugin(
                 + "\n\n"
                 + self._format_daily_plan(plan or {}),
             )
-        if action in {"重置日程"}:
+        if action in {"重置日程", "生成日程", "刷新日程"}:
             plan = await self._ensure_daily_plan(force=True)
             async with self._data_lock:
                 self.data["detail_enhanced_day"] = str((plan or {}).get("date") or _today_key())
@@ -5276,6 +5288,31 @@ class PrivateCompanionPlugin(
                 self.data["daily_story_plan"] = {}
                 self._save_data_sync()
             await self._reply(event, self._format_daily_plan(plan or {}))
+        if action in {"生成穿搭", "刷新穿搭", "重置穿搭"}:
+            await self._reply(event, "等我换身衣服哦")
+            async with self._data_lock:
+                self.data.pop("daily_outfit_photo", None)
+                self._save_data_sync()
+            plan = await self._ensure_daily_plan(force=False)
+            if not plan:
+                plan = await self._ensure_daily_plan(force=True)
+            outfit_generator = getattr(self, "_ensure_daily_outfit_photo", None)
+            outfit = await outfit_generator(force=True) if callable(outfit_generator) else None
+            if isinstance(outfit, dict) and outfit.get("path"):
+                image_path = _single_line(outfit.get("path"), 300)
+                if not os.path.exists(image_path):
+                    await self._reply(event, f"每日穿搭照片未生成：图片文件不存在 {image_path}")
+                    event.stop_event()
+                    return
+                try:
+                    await event.send(self._build_outbound_result("换好啦，你看", image_path))
+                except Exception:
+                    chain = self._build_outbound_chain("换好啦，你看", image_path)
+                    await event.send(event.chain_result(chain))
+            else:
+                error = _single_line((outfit or {}).get("error") if isinstance(outfit, dict) else "", 180)
+                note = _single_line((outfit or {}).get("note") if isinstance(outfit, dict) else "", 180)
+                await self._reply(event, f"每日穿搭照片未生成：{error or note or '没有可用结果'}")
         if action in {"生成状态", "刷新状态", "重生状态"}:
             state = await self._ensure_daily_state(force=True)
             async with self._data_lock:
@@ -5364,6 +5401,9 @@ class PrivateCompanionPlugin(
                 _single_line(text, 80),
                 _single_line(existing_reply_preview, 120),
             )
+            return
+        natural_photo_text = _single_line(event.message_str, 800)
+        if natural_photo_text and await self._maybe_handle_natural_language_photo_request(event, user_id, natural_photo_text):
             return
         if self._proactive_only_blocks_passive_event(event, "private_event_pipeline"):
             await self._record_proactive_only_private_feedback(

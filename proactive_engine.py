@@ -3645,6 +3645,7 @@ class ProactiveEngineMixin:
             event_text,
             motive,
             user.get("planned_proactive_topic"),
+            user=user,
         )
         if self._photo_text_available(user) and photo_probability > 0 and random.random() < photo_probability:
             return "photo_text"
@@ -4719,6 +4720,69 @@ class ProactiveEngineMixin:
         )
         return sum(1 for token in visual_tokens if token in text) >= 2
 
+    def _days_since_last_photo_sent(self, user: dict[str, Any] | None = None) -> int | None:
+        if not isinstance(user, dict):
+            return None
+        day_text = str(user.get("photo_sent_day") or "").strip()
+        if not day_text:
+            return None
+        try:
+            last_day = datetime.strptime(day_text[:10], "%Y-%m-%d").date()
+            today = datetime.strptime(_today_key(), "%Y-%m-%d").date()
+            return max(0, (today - last_day).days)
+        except Exception:
+            return None
+
+    def _photo_text_overdue_boost(self, user: dict[str, Any] | None = None) -> float:
+        days = self._days_since_last_photo_sent(user)
+        if days is None:
+            return 0.18
+        if days >= 10:
+            return 0.22
+        if days >= 5:
+            return 0.12
+        if days >= 2:
+            return 0.05
+        return 0.0
+
+    def _photo_text_plan_field_patch(
+        self,
+        *,
+        reason: str,
+        topic: str = "",
+        motive: str = "",
+        planned_event: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
+        current_text = self._format_plan_item_for_prompt(current_item)
+        event_text = ""
+        if isinstance(planned_event, dict):
+            event_text = " ".join(
+                _single_line(planned_event.get(key), 80)
+                for key in ("topic", "scene", "why", "motive", "impulse")
+            )
+        seed = _single_line(topic, 60) or _single_line(event_text, 60) or _single_line(current_text, 60)
+        if not seed:
+            seed = {
+                "morning_greeting": "早上眼前那点小画面",
+                "noon_greeting": "中午手边的小东西",
+                "evening_greeting": "晚一点的光线",
+                "diary_share": "今天记下来的画面",
+                "background_schedule": "手边这一小段",
+            }.get(reason, "眼前这个小画面")
+        cleaned_seed = re.sub(r"^(?:刚刚|刚才|现在|这会儿)\s*", "", seed).strip(" ，,。")
+        patched_topic = _single_line(cleaned_seed, 60) or "眼前这个小画面"
+        text = " ".join([motive, topic, event_text, current_text])
+        selfie_tokens = ("自拍", "穿搭", "衣服", "校服", "镜子", "发型", "脸", "表情")
+        if any(token in text for token in selfie_tokens):
+            patched_motive = f"看到“{patched_topic}”那一下,第一反应是想自拍一张给你看"
+        else:
+            patched_motive = f"看到“{patched_topic}”那一下,第一反应是想拍下来发给你"
+        return {
+            "topic": self._soften_topic_hook(patched_topic),
+            "motive": self._normalize_internal_motive_text(patched_motive),
+        }
+
     def _pick_life_thought_topic(self, reason: str = "") -> str:
         terms = self._worldview_terms()
         if reason == "group_share":
@@ -4975,11 +5039,21 @@ class ProactiveEngineMixin:
     def _external_photo_available(self) -> bool:
         if not self.enable_photo_text_action:
             return False
-        return bool(
+        configured = bool(
             self.external_image_api_base_url
             and self.external_image_api_key
             and self.external_image_api_model
         )
+        if not configured:
+            return False
+        checker = getattr(self, "_external_image_model_misconfiguration_note", None)
+        if callable(checker):
+            try:
+                if checker():
+                    return False
+            except Exception:
+                pass
+        return True
 
     def _sdgen_photo_available(self) -> bool:
         if not self.enable_photo_text_action:
@@ -5053,10 +5127,16 @@ class ProactiveEngineMixin:
     def _action_has_photo_text(self, action: str) -> bool:
         return "photo_text" in {part.strip() for part in str(action or "").split("+") if part.strip()}
 
-    def _proactive_photo_text_trigger_probability(self, reason: str, *parts: Any) -> float:
+    def _proactive_photo_text_trigger_probability(
+        self,
+        reason: str,
+        *parts: Any,
+        user: dict[str, Any] | None = None,
+    ) -> float:
         base = max(0.0, min(1.0, float(getattr(self, "proactive_photo_text_probability", 0.18))))
         if base <= 0:
             return 0.0
+        base = max(base, min(0.45, base + self._photo_text_overdue_boost(user)))
         hard_reasons = {"activity_share", "diary_share", "background_schedule", "noon_greeting", "evening_greeting"}
         soft_reasons = {"check_in", "quiet_care", "state_share"}
         text = " ".join(_single_line(part, 180) for part in parts if _single_line(part, 180))
@@ -5106,6 +5186,8 @@ class ProactiveEngineMixin:
     def _photo_text_available(self, user: dict[str, Any] | None = None) -> bool:
         if not self.enable_photo_text_action:
             return False
+        if isinstance(user, dict) and self._private_user_role(user) == "friend":
+            return False
         if self._daily_token_soft_limit_should_defer("photo_prompt"):
             return False
         if self.photo_generation_backend == "comfyui":
@@ -5149,29 +5231,6 @@ class ProactiveEngineMixin:
         except Exception as exc:
             logger.debug("[PrivateCompanion] 主动生图规划可用性检查失败: %s", _single_line(exc, 120))
             return False
-
-    def _recent_owner_generated_photo_path(self, *, max_age_hours: float = 24.0) -> str:
-        users = self.data.get("users", {})
-        if not isinstance(users, dict):
-            return ""
-        now = _now_ts()
-        candidates: list[tuple[float, str]] = []
-        for user_id, user in users.items():
-            if not isinstance(user, dict):
-                continue
-            if self._private_user_role(user, str(user_id)) != "owner":
-                continue
-            image_path = _single_line(user.get("last_generated_photo_path"), 260)
-            if not image_path or not os.path.exists(image_path):
-                continue
-            generated_at = _safe_float(user.get("last_generated_photo_at"), 0)
-            if generated_at > 0 and now - generated_at > max(60.0, max_age_hours * 3600):
-                continue
-            candidates.append((generated_at, image_path))
-        if not candidates:
-            return ""
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        return candidates[0][1]
 
     def _poke_available(self) -> bool:
         if not self.enable_poke_action:
@@ -5279,6 +5338,7 @@ class ProactiveEngineMixin:
             user.get("planned_proactive_topic") if isinstance(user, dict) else "",
             weather,
             current_item_text,
+            user=user,
         )
         if self._photo_text_available(user) and photo_probability > 0 and random.random() < photo_probability:
             return "photo_text"

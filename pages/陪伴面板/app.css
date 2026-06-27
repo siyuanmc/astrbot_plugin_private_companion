@@ -161,6 +161,29 @@ body::after {
   filter: drop-shadow(0 8px 16px rgba(15,42,74,0.08));
 }
 
+.daily-outfit-logo {
+  position: relative;
+  z-index: 4;
+  width: 252px;
+  height: 252px;
+  display: none;
+  object-fit: contain;
+  border: 1px solid rgba(26, 75, 140, 0.24);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow:
+    0 12px 28px rgba(15, 42, 74, 0.16),
+    0 0 0 10px rgba(255, 255, 255, 0.32);
+}
+
+.folio-plate.has-daily-outfit .daily-outfit-logo {
+  display: block;
+}
+
+.folio-plate.has-daily-outfit .vitruvian {
+  display: none;
+}
+
 .vitruvian-geometry {
   stroke: rgba(26, 75, 140, 0.48);
   stroke-width: 0.7;
@@ -11912,6 +11935,11 @@ pre {
   }
 
   .vitruvian {
+    width: 180px;
+    height: 180px;
+  }
+
+  .daily-outfit-logo {
     width: 180px;
     height: 180px;
   }

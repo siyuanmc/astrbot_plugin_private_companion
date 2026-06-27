@@ -714,6 +714,27 @@ class IntegrationStatusMixin:
         platform = await self._format_platform_perception(event)
         if platform:
             lines.append(f"会话：{platform}")
+        try:
+            is_private_chat = bool(getattr(event, "is_private_chat", lambda: False)())
+        except Exception:
+            is_private_chat = False
+        if not is_private_chat:
+            try:
+                sender_id = _single_line(str(event.get_sender_id()), 40)
+            except Exception:
+                sender_id = ""
+            sender_name = ""
+            try:
+                sender_name = _single_line(self._sender_display_name(event), 40)
+            except Exception:
+                sender_name = ""
+            if sender_id:
+                label = f"{sender_name}[QQ:{sender_id}]" if sender_name and sender_name != sender_id else f"QQ:{sender_id}"
+                lines.append(
+                    "群聊身份边界：本轮当前发言者是"
+                    f"{label}；环境感知只提供当前消息背景，不能把上一位说话人的主人/比折身份继承给当前发言者；"
+                    "该 ID 只供内部判断，不要在回复正文里复述。"
+                )
         model = self._format_model_perception(event)
         if model:
             lines.append(f"模型：{model}")

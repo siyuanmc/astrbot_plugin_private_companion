@@ -647,8 +647,7 @@ class WorldbookMixin:
         )
         return text.translate(table)
 
-    @staticmethod
-    def _normalize_worldbook_self_name(value: Any) -> str:
+    def _normalize_worldbook_self_name(self, value: Any) -> str:
         text = _single_line(value, 24)
         text = re.sub(r"^(叫|是|为|做|作)", "", text)
         text = re.sub(r"(就行|好了|吧|呀|啦|哦|啊)$", "", text).strip()
@@ -669,6 +668,15 @@ class WorldbookMixin:
         if any(re.search(pattern, text, re.IGNORECASE) for pattern in unsafe_patterns):
             return ""
         if any(re.search(pattern, skeleton, re.IGNORECASE) for pattern in unsafe_patterns):
+            return ""
+        protected_getter = getattr(self, "_protected_owner_nickname_tokens", None)
+        protected_names = protected_getter() if callable(protected_getter) else set()
+        protected_keys = {
+            WorldbookMixin._worldbook_name_skeleton(item)
+            for item in protected_names
+            if WorldbookMixin._worldbook_name_skeleton(item)
+        }
+        if skeleton and skeleton in protected_keys:
             return ""
         if re.search(r"^(?:你|妳|您).{0,4}$", text):
             return ""

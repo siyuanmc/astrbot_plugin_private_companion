@@ -3805,16 +3805,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         if not self.enable_photo_text_action:
             return "photo_text：未启用"
         if self._private_user_role(user) == "friend":
-            image_path = self._recent_owner_generated_photo_path()
-            if image_path:
-                return (
-                    "photo_text：复用主人最近生成的真实图片\n"
-                    f"图片类型：reused_owner_photo\n"
-                    f"后端：reuse\n"
-                    f"图片路径：{image_path}\n"
-                    "画面：复用主人最近生成过的一张生活碎片图。\n"
-                    "生图提示：复用既有图片,未调用生图后端"
-                )
+            return "photo_text：朋友关系不使用主动生图或复用主人图片,不能假装已经拍照"
         load_defer_note = self._photo_text_load_defer_note("photo_text", force_refresh=True)
         if load_defer_note:
             return f"photo_text：{load_defer_note},不能假装已经拍照"
@@ -3832,10 +3823,16 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             session_key=session_key,
         )
         if not image_path:
+            counted_attempt = self._photo_generation_failure_counts_as_attempt(workflow_note)
+            if counted_attempt:
+                async with self._data_lock:
+                    self._note_photo_generation_attempt(str(user.get("user_id") or ""), image_path="")
+                    self._save_data_sync()
             return (
                 "photo_text：生图失败,不能假装已经拍照\n"
                 f"画面草稿：{scene['caption']}\n"
                 f"失败原因：{_single_line(workflow_note, 160)}"
+                + ("\n本次已计入今日生图尝试额度,避免接口失败时反复请求。" if counted_attempt else "")
             )
         async with self._data_lock:
             self._note_photo_generation_attempt(str(user.get("user_id") or ""), image_path=image_path)
@@ -3849,6 +3846,214 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             f"生图提示：{_single_line(scene['prompt'], 240)}"
         )
 
+    def _photo_generation_failure_counts_as_attempt(self, note: str) -> bool:
+        text = _single_line(note, 500)
+        if not text:
+            return False
+        count_tokens = (
+            "HTTP",
+            "超时",
+            "请求",
+            "接口",
+            "上游",
+            "upstream",
+            "返回格式",
+            "未返回",
+            "返回空",
+            "下载",
+            "保存",
+            "响应不是图片",
+            "输出不是图片",
+            "工作流完成但图片",
+            "Error code",
+            "Exception",
+        )
+        if any(token in text for token in count_tokens):
+            return True
+        skip_tokens = (
+            "未启用",
+            "未配置",
+            "不可用或未配置",
+            "后端不可用",
+            "插件不可用",
+            "工作流名",
+            "未找到匹配工作流",
+            "电脑高负荷",
+            "负载偏高",
+            "今日发图额度",
+            "文本/聊天模型",
+            "请改成图片模型",
+        )
+        return not any(token in text for token in skip_tokens)
+
+    async def _ensure_daily_outfit_photo(
+        self,
+        diary: dict[str, Any] | None = None,
+        *,
+        force: bool = False,
+    ) -> dict[str, Any] | None:
+        if not force and not getattr(self, "enable_daily_outfit_photo", False):
+            return None
+        today = _today_key()
+        async with self._data_lock:
+            existing = self.data.get("daily_outfit_photo") if isinstance(self.data.get("daily_outfit_photo"), dict) else {}
+            if existing.get("date") == today:
+                return dict(existing)
+        if not self.enable_photo_text_action:
+            return await self._record_daily_outfit_photo_result(today, "", "主动拍照/生图未开启")
+        if not self._photo_text_available():
+            return await self._record_daily_outfit_photo_result(today, "", "当前没有可用的生图后端")
+        prompt_text = self._build_daily_outfit_photo_prompt(diary if isinstance(diary, dict) else {})
+        backend_name, image_path, note = await self._generate_photo_image(
+            workflow_kind="selfie",
+            prompt_text=prompt_text,
+            session_key="daily_outfit",
+            image_size="1024x1024",
+        )
+        if image_path:
+            return await self._record_daily_outfit_photo_result(
+                today,
+                image_path,
+                "",
+                backend=backend_name,
+                prompt=prompt_text,
+                note=note,
+            )
+        return await self._record_daily_outfit_photo_result(
+            today,
+            "",
+            _single_line(note, 220) or "生图失败",
+            backend=backend_name,
+            prompt=prompt_text,
+            note=note,
+        )
+
+    async def _record_daily_outfit_photo_result(
+        self,
+        date_key: str,
+        image_path: str,
+        error: str = "",
+        *,
+        backend: str = "",
+        prompt: str = "",
+        note: str = "",
+    ) -> dict[str, Any]:
+        item = {
+            "date": _single_line(date_key, 20),
+            "path": _single_line(image_path, 300),
+            "error": _single_line(error, 240),
+            "backend": _single_line(backend, 80),
+            "prompt": _single_line(prompt, 500),
+            "note": _single_line(note, 220),
+            "generated_at": _now_ts(),
+        }
+        async with self._data_lock:
+            self.data["daily_outfit_photo"] = item
+            self._save_data_sync()
+        if image_path:
+            logger.info(
+                "[PrivateCompanion] 每日穿搭照片已生成: backend=%s path=%s",
+                _single_line(backend, 80) or "-",
+                _single_line(image_path, 160),
+            )
+        else:
+            logger.info("[PrivateCompanion] 每日穿搭照片未生成: %s", _single_line(error or note, 180))
+        return item
+
+    def _daily_outfit_schedule_text(self) -> str:
+        plan = self.data.get("daily_plan", {}) if isinstance(getattr(self, "data", {}), dict) else {}
+        if not isinstance(plan, dict):
+            return ""
+        items = plan.get("items")
+        if not isinstance(items, list) or not items:
+            return ""
+        lines: list[str] = []
+        for item in items[:12]:
+            if not isinstance(item, dict):
+                continue
+            time_text = _single_line(item.get("time"), 12)
+            activity = _single_line(item.get("activity"), 120)
+            mood = _single_line(item.get("mood"), 24)
+            if not activity:
+                continue
+            line = f"{time_text} {activity}".strip()
+            if mood:
+                line = f"{line}（{mood}）"
+            lines.append(line)
+        return _single_line("；".join(lines), 620)
+
+    def _build_daily_outfit_photo_prompt(self, diary: dict[str, Any]) -> str:
+        persona = self._daily_outfit_role_appearance_text()
+        style_name, style_instruction = self._get_photo_style_instruction()
+        state = self.data.get("daily_state", {}) if isinstance(getattr(self, "data", {}), dict) else {}
+        weather = self._format_weather_for_prompt() if callable(getattr(self, "_format_weather_for_prompt", None)) else ""
+        schedule_hint = self._daily_outfit_schedule_text()
+        diary_hint = _single_line(
+            (diary or {}).get("summary")
+            or (diary or {}).get("share_seed")
+            or (diary or {}).get("body"),
+            180,
+        )
+        custom = _single_line(getattr(self, "daily_outfit_photo_prompt", ""), 220)
+        parts = [
+            "在今日日程生成后,生成一张角色今天的自拍式穿搭照片,用于私人陪伴插件拓展页左上角封面。",
+            f"角色外貌与身份线索：{persona or '参考当前人格设定与人设参考图,保持角色外观稳定。'}",
+            f"今日状态：{self._format_state_for_prompt(state if isinstance(state, dict) else {})}",
+            f"天气与时令：{weather or '按当前日期和日常生活氛围处理。'}",
+            f"今日日程穿搭依据：{schedule_hint or '没有明确日程时,按普通居家日常处理。'}",
+            "穿搭决策：优先服从日程里明确出现的衣服、外套、校服、睡衣、发夹、饰品、出门、上课、运动、雨天或居家线索；如果一天有多段活动,选最能代表白天主要生活/外出安排的一套,不要只按深夜睡前状态生成睡衣。",
+            f"补充生活余味：{diary_hint or '暂无额外余味,主要服从今日日程、天气和状态来决定当天搭配。'}",
+            "画面要求：角色本人必须露脸,头部、脸、发型和表情完整入镜；可以是半身、七分身或全身,但绝不能裁掉头、遮住脸或只拍衣服。衣服搭配要清楚,姿态自然,像今天顺手拍下来的 selfie outfit photo。",
+            "尺寸与安全区：按 1:1 方形头像/封面构图生成,角色的脸、头发、肩颈和主要穿搭都要落在画面中央安全区内,四周留出足够边距,缩进方形卡片时也不能裁脸或裁身体主体。",
+            "构图要求：主体居中或略偏中,脸部位于画面上半部但要和画面上边缘保持明显留白,肩颈和上半身自然可见；不要极近自拍、手臂占据前景、无头构图、背影、低头挡脸、书本/手机/头发遮脸、只拍身体局部、只拍裙子或外套。",
+            "不要出现用户、其他人物、文字、水印、Logo、奇怪手指、暴露或色情内容。负面构图：cropped head, headless, faceless, face hidden, extreme close-up, arm in foreground, body only, outfit only, back view。",
+            f"风格：{style_name}；{style_instruction}",
+        ]
+        if custom:
+            parts.append(f"额外穿搭偏好：{custom}")
+        return _single_line(" ".join(parts), 1400)
+
+    def _daily_outfit_role_appearance_text(self) -> str:
+        persona = str(getattr(self, "schedule_persona_prompt", "") or "")
+        recognition = str(getattr(self, "private_image_self_recognition_hint", "") or "")
+        labels = {
+            "姓名",
+            "种族",
+            "性别",
+            "识别点",
+            "外貌",
+            "主要识别点",
+            "发型发色",
+            "发色",
+            "发型",
+            "瞳色",
+            "眼睛",
+            "服饰风格",
+            "服装",
+            "衣着",
+            "职业/身份",
+        }
+        parts: list[str] = []
+        for line in persona.replace("\r", "\n").split("\n"):
+            text = line.strip()
+            if not text or ("：" not in text and ":" not in text):
+                continue
+            label, value = text.split("：", 1) if "：" in text else text.split(":", 1)
+            label = label.strip()
+            value = _single_line(value, 160)
+            if label in labels and value:
+                parts.append(f"{label}：{value}")
+        if recognition:
+            parts.append(f"补充识别线索：{_single_line(recognition, 180)}")
+        seen: set[str] = set()
+        unique = []
+        for item in parts:
+            if item in seen:
+                continue
+            seen.add(item)
+            unique.append(item)
+        return _single_line("；".join(unique), 620)
+
     def _choose_photo_workflow_name(self, kind: str) -> str:
         normalized = str(kind or "").strip().lower()
         if normalized in {"selfie", "portrait", "自拍", "人像"}:
@@ -3861,7 +4066,10 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         workflow_kind: str,
         prompt_text: str,
         session_key: str,
+        reference_image_path: str = "",
+        image_size: str = "",
     ) -> tuple[str, str, str]:
+        reference_image_path = _single_line(reference_image_path, 260) or self._photo_persona_reference_image_for_kind(workflow_kind)
         preferred = self.photo_generation_backend
         if preferred == "comfyui":
             if not self._comfyui_photo_available():
@@ -3876,6 +4084,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 workflow_name,
                 prompt_text,
                 session_key=session_key,
+                reference_image_path=reference_image_path,
             )
             return "ComfyUI", image_path, note
         if preferred == "sdgen":
@@ -3895,8 +4104,23 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             image_path, note = await self._run_external_photo_generation(
                 prompt_text,
                 session_key=session_key,
+                reference_image_path=reference_image_path,
+                image_size=image_size,
             )
             return "在线图片 API", image_path, note
+        external_note = ""
+        if self._external_photo_available():
+            image_path, note = await self._run_external_photo_generation(
+                prompt_text,
+                session_key=session_key,
+                reference_image_path=reference_image_path,
+                image_size=image_size,
+            )
+            if image_path:
+                return "在线图片 API", image_path, note
+            external_note = note
+        else:
+            external_note = "在线图片 API 后端不可用或未配置"
         if self._comfyui_photo_available():
             busy_state = self._local_photo_generation_busy_state(force_refresh=True)
             if busy_state:
@@ -3908,6 +4132,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                         workflow_name,
                         prompt_text,
                         session_key=session_key,
+                        reference_image_path=reference_image_path,
                     )
                     if image_path:
                         return "ComfyUI", image_path, note
@@ -3930,15 +4155,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 sdgen_note = note
         else:
             sdgen_note = "SDGen 插件不可用或未配置"
-        if self._external_photo_available():
-            image_path, note = await self._run_external_photo_generation(
-                prompt_text,
-                session_key=session_key,
-            )
-            if image_path:
-                return "在线图片 API", image_path, note
-            return "在线图片 API", "", f"ComfyUI 失败：{comfyui_note}；SDGen 失败：{sdgen_note}；在线图片 API 失败：{note}"
-        return "SDGen", "", f"ComfyUI 失败：{comfyui_note}；SDGen 失败：{sdgen_note}"
+        return "在线图片 API", "", f"在线图片 API 失败：{external_note}；ComfyUI 失败：{comfyui_note}；SDGen 失败：{sdgen_note}"
 
     async def _build_photo_scene_prompt(
         self, user: dict[str, Any], name: str, reason: str
@@ -4034,8 +4251,38 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             return "其他", "保持统一审美风格,自然生活感,避免默认写实照片风格"
         return "真实", "真实摄影风格,像手机随手拍到的生活照片,光线自然,细节可信"
 
+    def _photo_persona_reference_image_path(self) -> str:
+        raw = _single_line(getattr(self, "photo_persona_reference_image_path", ""), 260)
+        if not raw:
+            return ""
+        raw = raw.strip().strip('"').strip("'")
+        candidates = [Path(raw).expanduser()]
+        if not candidates[0].is_absolute():
+            candidates.append(Path(self.data_dir) / raw)
+        for candidate in candidates:
+            try:
+                path = candidate.resolve()
+            except Exception:
+                path = candidate
+            if not path.exists() or not path.is_file():
+                continue
+            if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+                continue
+            return str(path)
+        return ""
+
+    def _photo_persona_reference_image_for_kind(self, workflow_kind: str) -> str:
+        if str(workflow_kind or "").strip().lower() not in {"selfie", "portrait", "自拍", "人像"}:
+            return ""
+        return self._photo_persona_reference_image_path()
+
     async def _run_comfyui_photo_workflow(
-        self, workflow_name: str, prompt_text: str, session_key: str
+        self,
+        workflow_name: str,
+        prompt_text: str,
+        session_key: str,
+        reference_image_path: str = "",
+        image_size: str = "",
     ) -> tuple[str, str]:
         module = self._get_comfyui_module()
         if module is None:
@@ -4046,22 +4293,46 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         try:
             server_ip, client_id = module._get_server_config(config)
             workflow_dir = module._get_workflow_dir()
-            workflow_file = module.find_workflow_file(
-                workflow_name,
-                1,
-                0,
-                0,
-                workflow_dir,
-            )
+            reference_image_path = _single_line(reference_image_path, 260)
+            use_reference_image = bool(reference_image_path and os.path.exists(reference_image_path))
+            workflow_file = ""
             text_count = 1
+            image_count = 0
+            if use_reference_image:
+                workflow_file = module.find_workflow_file(
+                    workflow_name,
+                    1,
+                    1,
+                    0,
+                    workflow_dir,
+                )
+                image_count = 1 if workflow_file else 0
+                if not workflow_file:
+                    workflow_file, text_count, image_count = self._find_photo_workflow_with_text_count(
+                        module,
+                        workflow_dir,
+                        workflow_name,
+                        image_count=1,
+                    )
             if not workflow_file:
-                workflow_file, text_count = self._find_photo_workflow_with_text_count(
+                workflow_file = module.find_workflow_file(
+                    workflow_name,
+                    1,
+                    0,
+                    0,
+                    workflow_dir,
+                )
+                image_count = 0
+            if not workflow_file:
+                workflow_file, text_count, image_count = self._find_photo_workflow_with_text_count(
                     module,
                     workflow_dir,
                     workflow_name,
+                    image_count=0,
                 )
             if not workflow_file:
-                return "", f"未找到匹配工作流 {workflow_name}（需要 images=0, videos=0）"
+                need = "images=1 或 images=0" if use_reference_image else "images=0"
+                return "", f"未找到匹配工作流 {workflow_name}（需要 texts>=1、{need}、videos=0）"
             debug = bool(
                 getattr(config, "debug_mode", False)
                 if not isinstance(config, dict)
@@ -4069,8 +4340,14 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             )
             workflow = module.ComfyUIWorkflow(server_ip, client_id)
             workflow.load_workflow_api(workflow_file)
+            input_images = [reference_image_path] if image_count > 0 and use_reference_image else []
+            reference_note = ""
+            if input_images:
+                reference_note = "；已使用本地人设参考图"
+            elif use_reference_image:
+                reference_note = "；自拍工作流未接收图片输入,已回退纯文生图"
             prompt_id = await workflow.submit_only(
-                [],
+                input_images,
                 [prompt_text] * max(1, text_count),
                 [],
                 debug=debug,
@@ -4086,7 +4363,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                         temp_path,
                         session_key or "private_companion",
                     )
-                    return persistent_path or temp_path, "ok"
+                    return persistent_path or temp_path, "ok" + reference_note
                 if url and file_type != "image":
                     return "", f"工作流输出不是图片：{file_type}"
                 await asyncio.sleep(2)
@@ -4167,19 +4444,44 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             logger.warning(f"[PrivateCompanion] SDGen 生图失败: {e}", exc_info=True)
             return "", str(e)
 
-    def _external_image_endpoint(self) -> str:
+    def _external_image_endpoint(self, endpoint_type: str = "generations") -> str:
         base = str(self.external_image_api_base_url or "").strip().rstrip("/")
         if not base:
             return ""
-        if base.endswith("/images/generations"):
+        endpoint_type = str(endpoint_type or "generations").strip().lower()
+        target = "edits" if endpoint_type == "edits" else "generations"
+        if base.endswith(f"/images/{target}"):
             return base
-        return f"{base}/images/generations"
+        if base.endswith("/images/generations") or base.endswith("/images/edits"):
+            return re.sub(r"/images/(?:generations|edits)$", f"/images/{target}", base)
+        return f"{base}/images/{target}"
 
-    def _sanitize_external_image_size(self) -> str:
-        raw = str(self.external_image_api_size or "1024x1024").strip().lower()
+    def _sanitize_external_image_size(self, override: str = "") -> str:
+        raw = str(override or self.external_image_api_size or "1024x1024").strip().lower()
         if re.fullmatch(r"\d{2,5}x\d{2,5}", raw):
             return raw
         return "1024x1024"
+
+    def _external_image_model_misconfiguration_note(self) -> str:
+        model = _single_line(getattr(self, "external_image_api_model", ""), 120)
+        if not model:
+            return "未配置在线图片模型"
+        lowered = model.lower()
+        image_tokens = ("image", "img", "dall", "flux", "sd", "stable-diffusion", "midjourney", "mj", "kolors", "wanx")
+        text_model_prefixes = ("gpt-", "claude", "gemini", "deepseek", "qwen", "glm", "moonshot", "kimi", "yi-", "doubao")
+        if lowered.startswith(text_model_prefixes) and not any(token in lowered for token in image_tokens):
+            return f"在线图片模型填成了文本/聊天模型：{model}。请改成该平台的图片模型名，例如支持 /images/generations 或 /images/edits 的模型。"
+        return ""
+
+    def _external_image_api_error_note(self, status: int, text: str, *, reference: bool = False) -> str:
+        raw = _single_line(text, 260)
+        lowered = raw.lower()
+        if "requires an image model" in lowered or "image model" in lowered and "got" in lowered:
+            return self._external_image_model_misconfiguration_note() or (
+                f"在线图片模型不支持 images 接口。当前模型：{_single_line(getattr(self, 'external_image_api_model', ''), 80) or '-'}，请改成图片模型。"
+            )
+        prefix = "参考图接口" if reference else ""
+        return f"{prefix}HTTP {status}: {_single_line(text, 180)}"
 
     async def _save_external_generated_image(
         self,
@@ -4230,6 +4532,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         prompt_text: str,
         *,
         session_key: str,
+        reference_image_path: str = "",
     ) -> tuple[str, str]:
         endpoint = self._external_image_endpoint()
         if not endpoint:
@@ -4238,13 +4541,30 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             return "", "未配置在线图片 API Key"
         if not self.external_image_api_model:
             return "", "未配置在线图片模型"
+        model_note = self._external_image_model_misconfiguration_note()
+        if model_note:
+            return "", model_note
+        reference_image_path = _single_line(reference_image_path, 260)
+        if reference_image_path and os.path.exists(reference_image_path):
+            image_path, note = await self._run_external_photo_edit_generation(
+                prompt_text,
+                session_key=session_key,
+                reference_image_path=reference_image_path,
+                image_size=image_size,
+            )
+            if image_path:
+                return image_path, note
+            logger.info(
+                "[PrivateCompanion] 在线图片 API 参考图生图失败,回退纯文生图: %s",
+                _single_line(note, 180),
+            )
         try:
             import aiohttp
 
             payload = {
                 "model": self.external_image_api_model,
                 "prompt": prompt_text,
-                "size": self._sanitize_external_image_size(),
+                "size": self._sanitize_external_image_size(image_size),
             }
             headers = {
                 "Authorization": f"Bearer {self.external_image_api_key}",
@@ -4255,7 +4575,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 async with session.post(endpoint, headers=headers, json=payload) as response:
                     text = await response.text()
                     if response.status >= 400:
-                        return "", f"HTTP {response.status}: {_single_line(text, 180)}"
+                        return "", self._external_image_api_error_note(response.status, text)
             data = self._extract_json_payload(text) if text else {}
             if not isinstance(data, dict):
                 return "", "在线图片 API 返回格式无效"
@@ -4285,22 +4605,100 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             logger.warning(f"[PrivateCompanion] 在线图片 API 生图失败: {e}", exc_info=True)
             return "", str(e)
 
+    async def _run_external_photo_edit_generation(
+        self,
+        prompt_text: str,
+        *,
+        session_key: str,
+        reference_image_path: str,
+        image_size: str = "",
+    ) -> tuple[str, str]:
+        endpoint = self._external_image_endpoint("edits")
+        if not endpoint:
+            return "", "未配置在线图片 API 地址"
+        path = Path(str(reference_image_path or ""))
+        if not path.exists() or not path.is_file():
+            return "", "参考图路径不可用"
+        suffix = path.suffix.lower()
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+            return "", "参考图格式不支持"
+        try:
+            import aiohttp
+
+            image_bytes = await asyncio.to_thread(path.read_bytes)
+            form = aiohttp.FormData()
+            form.add_field("model", self.external_image_api_model)
+            form.add_field("prompt", prompt_text)
+            form.add_field("size", self._sanitize_external_image_size(image_size))
+            content_type = "image/png"
+            if suffix in {".jpg", ".jpeg"}:
+                content_type = "image/jpeg"
+            elif suffix == ".webp":
+                content_type = "image/webp"
+            form.add_field(
+                "image",
+                image_bytes,
+                filename=f"persona_reference{suffix}",
+                content_type=content_type,
+            )
+            headers = {"Authorization": f"Bearer {self.external_image_api_key}"}
+            timeout = aiohttp.ClientTimeout(total=float(self.external_image_api_timeout_seconds))
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(endpoint, headers=headers, data=form) as response:
+                    text = await response.text()
+                    if response.status >= 400:
+                        return "", self._external_image_api_error_note(response.status, text, reference=True)
+            data = self._extract_json_payload(text) if text else {}
+            if not isinstance(data, dict):
+                return "", "参考图接口返回格式无效"
+            first = None
+            items = data.get("data")
+            if isinstance(items, list) and items:
+                first = items[0]
+            if not isinstance(first, dict):
+                return "", "参考图接口未返回图片数据"
+            b64 = str(first.get("b64_json") or "").strip()
+            if b64:
+                generated_bytes = base64.b64decode(b64)
+                saved = await self._save_external_generated_image(
+                    generated_bytes,
+                    session_key=session_key,
+                    ext=".png",
+                )
+                return saved, "ok；已使用本地人设参考图" if saved else "保存在线参考图生图失败"
+            image_url = str(first.get("url") or "").strip()
+            if image_url:
+                saved, note = await self._download_external_image_url(
+                    image_url,
+                    session_key=session_key,
+                )
+                return saved, ("ok；已使用本地人设参考图" if saved else note)
+            return "", "参考图接口未返回 url 或 b64_json"
+        except Exception as e:
+            logger.warning(f"[PrivateCompanion] 在线图片 API 参考图生图失败: {e}", exc_info=True)
+            return "", str(e)
+
     def _find_photo_workflow_with_text_count(
-        self, module: Any, workflow_dir: Any, workflow_name: str
-    ) -> tuple[str, int]:
+        self,
+        module: Any,
+        workflow_dir: Any,
+        workflow_name: str,
+        image_count: int = 0,
+    ) -> tuple[str, int, int]:
         if not hasattr(module, "list_workflows_in_dir"):
-            return "", 0
+            return "", 0, 0
         try:
             workflows = module.list_workflows_in_dir(workflow_dir)
         except Exception:
-            return "", 0
+            return "", 0, 0
         candidates = []
+        expected_images = max(0, int(image_count or 0))
         for item in workflows or []:
             if not isinstance(item, dict):
                 continue
             if item.get("name") != workflow_name:
                 continue
-            if _safe_int(item.get("images"), 0) != 0:
+            if _safe_int(item.get("images"), 0) != expected_images:
                 continue
             if _safe_int(item.get("videos"), 0) != 0:
                 continue
@@ -4312,9 +4710,9 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             if os.path.exists(path):
                 candidates.append((text_count, path))
         if not candidates:
-            return "", 0
+            return "", 0, 0
         candidates.sort(key=lambda value: value[0])
-        return candidates[0][1], candidates[0][0]
+        return candidates[0][1], candidates[0][0], expected_images
 
     def _get_comfyui_module(self) -> Any:
         for module_name in (

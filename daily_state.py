@@ -309,6 +309,15 @@ class DailyStateMixin:
             self.data["daily_plan"] = plan
             self._refresh_daily_state_location_from_plan(plan=plan)
             self._save_data_sync()
+        outfit_generator = getattr(self, "_ensure_daily_outfit_photo", None)
+        if callable(outfit_generator):
+            try:
+                await outfit_generator()
+            except Exception as exc:
+                logger.warning(
+                    "[PrivateCompanion] 今日日程已保存,但每日穿搭照片生成失败: %s",
+                    _single_line(exc, 180),
+                )
         await self._ensure_daily_news_reading(force=force)
         return plan
 
@@ -8622,22 +8631,6 @@ class DailyStateMixin:
                             "photo_text 后端不可用,已降级为普通主动消息",
                         )
                         self._save_data_sync()
-            if (
-                planned_action_for_send == "message"
-                and normalize_legacy_tag_text(user.get("planned_proactive_reason")) in {"activity_share", "diary_share", "background_schedule", "noon_greeting", "evening_greeting"}
-                and self._photo_text_available(user)
-                and self._strong_photo_share_intent(
-                    planned_motive_for_send,
-                    user.get("planned_proactive_topic"),
-                    self._format_plan_item_for_prompt(self._get_current_plan_item(self.data.get("daily_plan", {}))),
-                )
-            ):
-                planned_action_for_send = "photo_text"
-                async with self._data_lock:
-                    current_for_upgrade = self._get_user(user_id)
-                    current_for_upgrade["planned_proactive_action"] = "photo_text"
-                    self._mark_planned_candidate_status(current_for_upgrade, "accepted", "检测到明确可拍画面,发送前升级为发图")
-                    self._save_data_sync()
             load_defer_note = self._photo_text_load_defer_note(planned_action_for_send, force_refresh=True)
             if load_defer_note:
                 async with self._data_lock:

@@ -1134,12 +1134,18 @@ const configLabels = {
   photo_generation_backend: "主动生图后端",
   COMFYUI_TEXT2IMG_WORKFLOW_NAME: "文生图工作流",
   COMFYUI_SELFIE_WORKFLOW_NAME: "自拍工作流",
+  photo_persona_reference_image_path: "人设参考图路径",
+  enable_daily_outfit_photo: "每日穿搭照片",
+  daily_outfit_photo_prompt: "每日穿搭提示词",
+  enable_natural_language_photo_generation: "自然语言生图/改图",
+  natural_language_photo_generation_max_daily: "自然语言生图上限",
   comfyui_photo_wait_seconds: "本地生图等待秒数",
   enable_local_photo_load_guard: "电脑高负荷保护",
   local_photo_cpu_busy_percent: "CPU 忙碌阈值",
   local_photo_memory_busy_percent: "内存忙碌阈值",
   local_photo_defer_minutes: "忙时延后分钟数",
   EXTERNAL_IMAGE_API_BASE_URL: "在线图片 API 地址",
+  EXTERNAL_IMAGE_API_KEY: "在线图片 API Key",
   EXTERNAL_IMAGE_API_MODEL: "在线图片模型",
   external_image_api_size: "在线生图尺寸",
   external_image_api_timeout_seconds: "在线生图超时秒数",
@@ -1407,16 +1413,22 @@ const configDescriptions = {
   qzone_comment_inbox_max_replies_per_tick: "每次后台检查最多公开回复多少条新评论，建议保持 1，避免刷屏。",
   photo_action_max_daily: "每个私聊对象每天最多生成几张主动图片。真实生成成功就消耗额度，避免失败重试时反复生图。",
   proactive_photo_text_probability: "在主动生图可用、额度未用完，且本轮主动有生活画面或视觉切口时，把普通文字主动升级成带图的概率，按百分比填写。",
-  photo_generation_backend: "auto 优先本地 ComfyUI；电脑高负荷且在线图片 API 可用时会绕开本地。comfyui 只用本地，external 只用在线。",
+  photo_generation_backend: "auto 会在在线图片 API 配置完整时优先尝试在线 API，失败后回退本地 ComfyUI/SDGen；未配置在线 API 时使用本地后端。comfyui/sdgen/external 可指定单一后端。",
   COMFYUI_TEXT2IMG_WORKFLOW_NAME: "用于普通随手拍、风景、桌面小物等 photo_text 的 ComfyUI 工作流名。",
-  COMFYUI_SELFIE_WORKFLOW_NAME: "用于自拍或人像类 photo_text 的 ComfyUI 工作流名。",
+  COMFYUI_SELFIE_WORKFLOW_NAME: "用于自拍或人像类 photo_text 的 ComfyUI 工作流名。若配置了人设参考图，会优先寻找 images=1 的自拍工作流。",
+  photo_persona_reference_image_path: "本地 png/jpg/jpeg/webp 文件路径，仅在自拍/人像类主动生图时使用。ComfyUI 会把它作为图片输入传给支持 images=1 的自拍工作流；在线图片 API 会优先尝试 OpenAI 兼容 /images/edits 参考图接口，不支持时回退纯文生图；SDGen 仍按提示词生成。",
+  enable_daily_outfit_photo: "开启后，每天日程生成并保存后额外调用一次自拍/人像生图能力，根据当天日程、天气和状态生成角色当天穿搭照片，并替换拓展页左上角 Logo。失败会记录当天结果，不会因为刷新页面反复请求。",
+  daily_outfit_photo_prompt: "可选。给每日穿搭补充偏好，例如校服、便服、季节感、配色或固定饰品；留空则优先根据当天日程里的上课、出门、居家、雨天、换衣和饰品线索自动组织。",
+  enable_natural_language_photo_generation: "默认关闭，避免和独立生图插件抢触发。开启后，私聊里明确说“帮我画/生成图片”会直接调用生图；随消息带图或引用图片并说“改成/加上/去掉”等会尝试改图。该入口只对主人私聊开放。",
+  natural_language_photo_generation_max_daily: "独立于主动生图额度和每日穿搭。成功生成或已实际请求后端但失败的情况会计入，避免接口异常时被反复请求。0 表示关闭自然语言生图/改图。",
   comfyui_photo_wait_seconds: "本地 ComfyUI 工作流最多等待多久。超时后不会假装已经拍照。",
-  enable_local_photo_load_guard: "开启后，本地 ComfyUI 生图前读取 CPU/内存负载；负载偏高时延后本次主动计划，或在 auto 模式下改走在线图片 API。",
-  local_photo_cpu_busy_percent: "CPU 使用率达到该百分比时，暂缓本地 ComfyUI 生图。需要 psutil 可用；不可用时会放行。",
-  local_photo_memory_busy_percent: "内存使用率达到该百分比时，暂缓本地 ComfyUI 生图。",
-  local_photo_defer_minutes: "只有本地 ComfyUI 可用且电脑忙时，保留原主动计划并延后这么久再重试。",
-  EXTERNAL_IMAGE_API_BASE_URL: "OpenAI 兼容在线生图接口地址。API Key 仍在 AstrBot 原配置页维护，不在拓展页回显。",
-  EXTERNAL_IMAGE_API_MODEL: "在线图片模型名。填写后配合 API 地址和 Key 可作为 external 或 auto 的备选后端。",
+  enable_local_photo_load_guard: "开启后，本地 ComfyUI/SDGen 生图前读取 CPU/内存负载；负载偏高时延后本次主动计划，或在 auto 模式下改走在线图片 API。",
+  local_photo_cpu_busy_percent: "CPU 使用率达到该百分比时，暂缓本地 ComfyUI/SDGen 生图。需要 psutil 可用；不可用时会放行。",
+  local_photo_memory_busy_percent: "内存使用率达到该百分比时，暂缓本地 ComfyUI/SDGen 生图。",
+  local_photo_defer_minutes: "只有本地 ComfyUI/SDGen 可用且电脑忙时，保留原主动计划并延后这么久再重试。",
+  EXTERNAL_IMAGE_API_BASE_URL: "OpenAI 兼容在线生图接口地址。可填完整 /images/generations 地址，或 API 根地址。",
+  EXTERNAL_IMAGE_API_KEY: "在线图片 API 的鉴权 Key。保存后会写入插件配置；请只在可信本机环境填写。",
+  EXTERNAL_IMAGE_API_MODEL: "必须填写该平台的图片模型名，不能填写 gpt-5.5、deepseek、claude、qwen 等聊天/文本模型。填写后配合 API 地址和 Key 可作为 external 或 auto 的生图后端。",
   external_image_api_size: "在线生图尺寸，例如 1024x1024、768x1344。",
   external_image_api_timeout_seconds: "等待在线图片 API 返回结果的最长时间。",
   photo_generation_style: "影响主动生图提示词的整体风格倾向，可填 真实、二次元 或 其他。",
@@ -1616,7 +1628,7 @@ const featureSettingGroups = {
   enable_qzone_life_publish: ["qzone_life_publish_min_interval_hours", "qzone_life_publish_probability"],
   enable_qzone_generated_image_publish: ["qzone_generated_image_probability"],
   enable_qzone_comment_inbox: ["qzone_comment_inbox_interval_minutes", "qzone_comment_inbox_recent_posts", "qzone_comment_inbox_max_replies_per_tick"],
-  enable_photo_text_action: ["photo_action_max_daily", "proactive_photo_text_probability", "photo_generation_backend", "COMFYUI_TEXT2IMG_WORKFLOW_NAME", "COMFYUI_SELFIE_WORKFLOW_NAME", "comfyui_photo_wait_seconds", "enable_local_photo_load_guard", "local_photo_cpu_busy_percent", "local_photo_memory_busy_percent", "local_photo_defer_minutes", "EXTERNAL_IMAGE_API_BASE_URL", "EXTERNAL_IMAGE_API_MODEL", "external_image_api_size", "external_image_api_timeout_seconds", "photo_generation_style", "photo_generation_style_custom_prompt"],
+  enable_photo_text_action: ["photo_action_max_daily", "proactive_photo_text_probability", "photo_generation_backend", "COMFYUI_TEXT2IMG_WORKFLOW_NAME", "COMFYUI_SELFIE_WORKFLOW_NAME", "photo_persona_reference_image_path", "enable_daily_outfit_photo", "daily_outfit_photo_prompt", "enable_natural_language_photo_generation", "natural_language_photo_generation_max_daily", "comfyui_photo_wait_seconds", "enable_local_photo_load_guard", "local_photo_cpu_busy_percent", "local_photo_memory_busy_percent", "local_photo_defer_minutes", "EXTERNAL_IMAGE_API_BASE_URL", "EXTERNAL_IMAGE_API_KEY", "EXTERNAL_IMAGE_API_MODEL", "external_image_api_size", "external_image_api_timeout_seconds", "photo_generation_style", "photo_generation_style_custom_prompt"],
   enable_private_reading_integration: ["enable_private_reading_boredom_read", "enable_private_reading_ask_recommendation", "private_reading_min_interval_hours", "private_reading_max_photo_count", "private_reading_ask_probability", "private_reading_default_keywords", "private_reading_blocked_tags", "enable_private_reading_preference_influence", "private_reading_preference_min_ratings", "private_reading_preference_max_terms"],
   enable_private_reading_boredom_read: ["private_reading_min_interval_hours", "private_reading_max_photo_count", "private_reading_share_probability", "private_reading_default_keywords", "private_reading_blocked_tags", "enable_private_reading_preference_influence", "private_reading_preference_min_ratings", "private_reading_preference_max_terms"],
   enable_private_reading_ask_recommendation: ["private_reading_ask_probability"],
@@ -1911,13 +1923,23 @@ const featureSettingSections = {
     },
     {
       title: "后端选择",
-      note: "本地 ComfyUI 和在线图片 API 的优先关系。",
+      note: "本地 ComfyUI、SDGen 和在线图片 API 的优先关系。",
       keys: ["photo_generation_backend"],
     },
     {
       title: "本地 ComfyUI",
       note: "用于主动图片生成的工作流和等待时间。",
-      keys: ["COMFYUI_TEXT2IMG_WORKFLOW_NAME", "COMFYUI_SELFIE_WORKFLOW_NAME", "comfyui_photo_wait_seconds"],
+      keys: ["COMFYUI_TEXT2IMG_WORKFLOW_NAME", "COMFYUI_SELFIE_WORKFLOW_NAME", "photo_persona_reference_image_path", "comfyui_photo_wait_seconds"],
+    },
+    {
+      title: "每日穿搭",
+      note: "日程生成后额外生成一张角色当天穿搭照，用作拓展页左上角图像。",
+      keys: ["enable_daily_outfit_photo", "daily_outfit_photo_prompt"],
+    },
+    {
+      title: "自然语言生图/改图",
+      note: "私聊明确请求时直接调用生图后端；默认关闭，避免和独立生图插件抢触发。",
+      keys: ["enable_natural_language_photo_generation", "natural_language_photo_generation_max_daily"],
     },
     {
       title: "电脑负载保护",
@@ -1927,7 +1949,7 @@ const featureSettingSections = {
     {
       title: "在线图片 API",
       note: "作为 external 后端，或 auto 模式下本地忙时的备选后端。",
-      keys: ["EXTERNAL_IMAGE_API_BASE_URL", "EXTERNAL_IMAGE_API_MODEL", "external_image_api_size", "external_image_api_timeout_seconds"],
+      keys: ["EXTERNAL_IMAGE_API_BASE_URL", "EXTERNAL_IMAGE_API_KEY", "EXTERNAL_IMAGE_API_MODEL", "external_image_api_size", "external_image_api_timeout_seconds"],
     },
     {
       title: "画面风格",
@@ -1983,6 +2005,7 @@ const featureSettingTypes = {
   proactive_prompt_template: { type: "textarea" },
   proactive_persona_judge_send_threshold: { type: "number", min: 0, max: 100, step: 1 },
   proactive_persona_judge_cache_minutes: { type: "number", min: 5, max: 720, step: 5 },
+  natural_language_photo_generation_max_daily: { type: "number", min: 0, max: 10, step: 1 },
   quote_target_strategy: { type: "select", options: [["current", "引用当前触发消息"], ["quoted", "引用 Bot 被回复的旧消息"], ["auto", "自动：回复 Bot 旧消息时引用旧消息"]] },
   quote_skip_short_reply_chars: { type: "number", min: 0, max: 120, step: 1 },
   rest_backlog_max_messages: { type: "number", min: 1, max: 12, step: 1 },
@@ -1996,7 +2019,8 @@ const featureSettingTypes = {
   tts_group_trigger_probability: { type: "number", min: -1, max: 100, step: 1 },
   SMART_MESSAGE_DEBOUNCE_PROVIDER_ID: { type: "provider" },
   segmented_proactive_chat_scope: { type: "select", options: [["all", "全部"], ["private", "仅私聊"], ["group", "仅群聊"]] },
-  photo_generation_backend: { type: "select", options: [["auto", "auto"], ["comfyui", "ComfyUI"], ["external", "在线图片 API"]] },
+  photo_generation_backend: { type: "select", options: [["auto", "auto"], ["comfyui", "ComfyUI"], ["sdgen", "SDGen"], ["external", "在线图片 API"]] },
+  EXTERNAL_IMAGE_API_KEY: { type: "password" },
   photo_generation_style: { type: "select", options: [["真实", "真实"], ["二次元", "二次元"], ["其他", "其他"]] },
   segmented_proactive_scope: { type: "select", options: [["proactive_only", "仅插件主动"], ["all_llm", "全部 LLM 纯文本回复"]] },
   segmented_proactive_split_mode: { type: "select", options: [["regex", "正则"], ["words", "分段词列表"]] },
@@ -2021,6 +2045,7 @@ const featureSettingTypes = {
   recall_forbidden_words: { type: "textarea" },
   roleplay_user_profile_prompt: { type: "textarea" },
   private_image_self_recognition_hint: { type: "textarea" },
+  daily_outfit_photo_prompt: { type: "textarea" },
   photo_generation_style_custom_prompt: { type: "textarea" },
   segmented_proactive_regex: { type: "textarea" },
   segmented_proactive_split_words: { type: "textarea" },
@@ -2058,11 +2083,16 @@ function isFractionalPercentSetting(key) {
   return probabilitySettingKeys.has(key);
 }
 
+function isPercentInputSetting(key) {
+  return isFractionalPercentSetting(key) || percentSettingKeys.has(key);
+}
+
 function displaySettingValue(key, value) {
-  if (isFractionalPercentSetting(key)) {
+  if (isPercentInputSetting(key)) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return value ?? "";
-    const percent = numeric * 100;
+    if (numeric < 0) return String(numeric);
+    const percent = numeric <= 1 ? numeric * 100 : numeric;
     return Number.isInteger(percent) ? String(percent) : String(Number(percent.toFixed(2)));
   }
   return value ?? "";
@@ -2096,6 +2126,7 @@ const percentSettingKeys = new Set([
   "main_user_voice_probability",
   "main_user_mention_voice_probability",
   "proactive_photo_text_probability",
+  "proactive_share_probability",
   "local_photo_cpu_busy_percent",
   "local_photo_memory_busy_percent",
 ]);
@@ -2243,6 +2274,45 @@ async function hydrateBookshelfImages(root = document) {
       img.dataset.loading = "0";
     }
   }));
+}
+
+async function hydrateDailyOutfitLogo() {
+  const plate = document.querySelector(".folio-plate");
+  const img = $("#dailyOutfitLogo");
+  if (!plate || !img) return;
+  const outfit = state.overview?.daily_outfit || {};
+  const endpoint = String(outfit.image_data_url || "");
+  if (!outfit.available || !endpoint) {
+    plate.classList.remove("has-daily-outfit");
+    img.removeAttribute("src");
+    img.dataset.source = "";
+    img.dataset.loading = "0";
+    plate.title = "";
+    return;
+  }
+  if (img.dataset.source === endpoint && plate.classList.contains("has-daily-outfit")) return;
+  if (img.dataset.loading === "1" && img.dataset.source === endpoint) return;
+  img.dataset.source = endpoint;
+  img.dataset.loading = "1";
+  try {
+    const result = await fetchJson(endpoint);
+    if (img.dataset.source !== endpoint) return;
+    if (!result?.data_url) throw new Error("每日穿搭图片为空");
+    img.src = result.data_url;
+    img.alt = `今日穿搭照片${outfit.date ? ` · ${outfit.date}` : ""}`;
+    plate.classList.add("has-daily-outfit");
+    plate.title = [
+      outfit.date ? `每日穿搭：${outfit.date}` : "每日穿搭",
+      outfit.backend ? `后端：${outfit.backend}` : "",
+      outfit.generated_at ? `生成：${outfit.generated_at}` : "",
+    ].filter(Boolean).join(" · ");
+  } catch (error) {
+    plate.classList.remove("has-daily-outfit");
+    img.removeAttribute("src");
+    img.dataset.source = "";
+  } finally {
+    img.dataset.loading = "0";
+  }
 }
 
 async function fetchJson(path, options = {}) {
@@ -2638,6 +2708,7 @@ async function loadAll() {
 }
 
 function renderAll() {
+  hydrateDailyOutfitLogo();
   renderStats();
   renderDashboard();
   renderUsers();
@@ -3291,10 +3362,18 @@ function troubleshootingEventMarkup(item) {
 function troubleshootingChainTestMarkup(results) {
   const tests = [
     {
-      type: "image_generation",
-      title: "图片生成",
-      text: "实际调用图片生成后端并检查返回文件",
-      button: "测试图片生成",
+      type: "image_generation_text2img",
+      workflowKind: "text2img",
+      title: "文生图",
+      text: "实际调用普通文生图链路并检查返回文件",
+      button: "测试文生图",
+    },
+    {
+      type: "image_generation_selfie",
+      workflowKind: "selfie",
+      title: "自拍参考图",
+      text: "实际调用自拍/人像链路；有参考图时会测试参考图输入",
+      button: "测试自拍",
     },
     {
       type: "tts_generation",
@@ -3316,13 +3395,19 @@ function troubleshootingChainTestMarkup(results) {
     },
   ];
   return tests.map((test) => {
-    const result = results?.[test.type] || (test.type === "model_diagnostics" ? results?.skill_similarity : {}) || {};
+    const result = results?.[test.type]
+      || (test.type === "image_generation_text2img" ? results?.image_generation : null)
+      || (test.type === "model_diagnostics" ? results?.skill_similarity : null)
+      || {};
     const ok = Boolean(result.ok);
     const pending = Boolean(result.pending);
     const hasResult = Boolean(result.ran_at || result.ran_at_text || result.error || result.detail);
     const status = hasResult ? (pending ? "info" : ok ? "ok" : "error") : "info";
     const meta = [
       result.backend || result.provider || "",
+      result.image_model ? `模型 ${result.image_model}` : "",
+      result.workflow_kind ? `类型 ${result.workflow_kind}` : "",
+      result.used_reference ? "已带参考图" : "",
       result.elapsed_ms ? `${result.elapsed_ms}ms` : "",
       result.file_size ? `${formatBytes(result.file_size)}` : "",
       result.ran_at_text || "",
@@ -3340,7 +3425,7 @@ function troubleshootingChainTestMarkup(results) {
           ${previewMarkup}
           ${stepsMarkup}
         </div>
-        <button type="button" data-troubleshooting-test="${escapeHtml(test.type)}">${escapeHtml(test.button)}</button>
+        <button type="button" data-troubleshooting-test="${escapeHtml(test.type)}" ${test.workflowKind ? `data-troubleshooting-workflow-kind="${escapeHtml(test.workflowKind)}"` : ""}>${escapeHtml(test.button)}</button>
       </section>
     `;
   }).join("");
@@ -10260,6 +10345,11 @@ function featureSettingVisibleForCurrentMode(featureKey, settingKey, settings = 
     }
     return true;
   }
+  if (featureKey === "enable_photo_text_action") {
+    if (settingKey === "daily_outfit_photo_prompt") return boolSetting("enable_daily_outfit_photo");
+    if (settingKey === "natural_language_photo_generation_max_daily") return boolSetting("enable_natural_language_photo_generation");
+    return true;
+  }
   if (featureKey === "enable_emotion_simulation") {
     if (settingKey === "emotion_judgement_mode") return boolSetting("enable_llm_emotion_judgement");
     if (settingKey === "EMOTION_JUDGEMENT_PROVIDER_ID") return boolSetting("enable_llm_emotion_judgement") && String(valueSetting("emotion_judgement_mode", "suspicious")) !== "off";
@@ -10371,14 +10461,16 @@ function featureSettingInput(key, value) {
   if (spec.type === "textarea") {
     return `<textarea data-feature-param="${safeKey}" rows="3"${disabledAttr}>${escapeHtml(Array.isArray(value) ? value.join("\n") : value ?? "")}</textarea>`;
   }
+  const password = spec.type === "password";
   const numeric = spec.type === "number" || typeof value === "number";
-  const step = isFractionalPercentSetting(key) ? "1" : (spec.step ?? (percentSettingKeys.has(key) ? "1" : key === "skill_growth_rate" ? "0.01" : "any"));
-  const min = isFractionalPercentSetting(key) ? "0" : (spec.min ?? (percentSettingKeys.has(key) ? "0" : ""));
-  const max = isFractionalPercentSetting(key) ? "100" : (spec.max ?? (percentSettingKeys.has(key) ? "100" : ""));
+  const percentInput = isPercentInputSetting(key);
+  const step = percentInput ? (spec.step ?? "1") : (spec.step ?? (key === "skill_growth_rate" ? "0.01" : "any"));
+  const min = percentInput ? (spec.min ?? "0") : (spec.min ?? "");
+  const max = percentInput ? (spec.max ?? "100") : (spec.max ?? "");
   const displayValue = displaySettingValue(key, value);
   return `
     <input
-      type="${numeric ? "number" : "text"}"
+      type="${password ? "password" : numeric ? "number" : "text"}"
       data-feature-param="${safeKey}"
       value="${escapeHtml(displayValue)}"
       ${numeric ? `step="${step}"` : ""}
@@ -10463,7 +10555,7 @@ function featureDependencyLines(key) {
   if (["enable_qzone_life_publish", "enable_qzone_comment_inbox"].includes(key)) dependencies.push(["依赖", "QQ 空间动态层"]);
   if (key === "enable_qzone_generated_image_publish") dependencies.push(["依赖", "QQ 空间动态层 + 主动拍照/生图"]);
   if (key === "enable_qzone_emotional_vent_publish") dependencies.push(["依赖", "情绪模拟 + QQ 空间动态层"]);
-  if (key === "enable_photo_text_action") dependencies.push(["依赖", "ComfyUI 或在线图片 API"]);
+  if (key === "enable_photo_text_action") dependencies.push(["依赖", "ComfyUI、SDGen 或在线图片 API"]);
   if (key === "enable_tts_enhancement") dependencies.push(["依赖", "当前会话 TTS provider"]);
   if (key === "enable_yesterday_screen_diary_context") dependencies.push(["依赖", "screen_companion 昨日观察日记"]);
   if (key.startsWith("enable_private_reading_")) dependencies.push(["依赖", "素材能力可用"]);
@@ -11044,7 +11136,7 @@ function featureImpactLines(key) {
 
 function configLabel(name) {
   const label = configLabels[name] || featureLabel(name) || name.replace(/^enable_/, "").replaceAll("_", " ");
-  if ((isFractionalPercentSetting(name) || percentSettingKeys.has(name)) && !/[（(]%[）)]/.test(label)) {
+  if (isPercentInputSetting(name) && !/[（(]%[）)]/.test(label)) {
     return `${label}（%）`;
   }
   return label;
@@ -12238,9 +12330,10 @@ document.addEventListener("click", async (event) => {
   const troubleshootingTest = element?.closest("[data-troubleshooting-test]");
   if (troubleshootingTest) {
     const testType = troubleshootingTest.dataset.troubleshootingTest || "";
+    const workflowKind = troubleshootingTest.dataset.troubleshootingWorkflowKind || "";
     setActionBusy(troubleshootingTest, true);
     try {
-      const result = await postJson("/troubleshooting/test", { type: testType });
+      const result = await postJson("/troubleshooting/test", { type: testType, workflow_kind: workflowKind });
       state.troubleshooting = state.troubleshooting || {};
       state.troubleshooting.chain_tests = {
         ...(state.troubleshooting.chain_tests || {}),

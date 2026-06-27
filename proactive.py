@@ -415,7 +415,7 @@ class ProactiveMixin:
                 f"- 当前用户角色：{label}。\n"
                 "- 对方不是主人/恋人/专属陪伴目标。主动联系应像普通朋友：少量、具体、不过度亲密，不使用主人专属称呼、占有欲、撒娇索取或暧昧承诺。\n"
                 "- 动机应以礼貌关心、共同话题、必要转告、轻分享为主；不要因为想贴近、想被哄、想确认对方在不在而频繁打扰。\n"
-                "- 不给朋友使用窥屏或单独生图能力；如果出现图片分享,只能是复用已有普通图片,不要声称为朋友专门拍照、生成或观察。"
+                "- 不给朋友使用窥屏或主动生图能力；不要把主人或其他私聊对象的图片、生活碎片复用给朋友。"
                 "- 不对朋友发起本子/夹层阅读推荐、私密阅读分享、屏幕观察、群聊私下转述、私下创作分享或其他涉及隐私来源的主动。"
             )
         if note:
@@ -433,7 +433,7 @@ class ProactiveMixin:
 
     def _friend_sensitive_proactive_action(self, action: Any) -> bool:
         parts = {part.strip() for part in str(action or "").split("+") if part.strip()}
-        return bool(parts & {"screen_peek", "jm_cosmos_read"})
+        return bool(parts & {"screen_peek", "photo_text", "jm_cosmos_read"})
 
     def _friend_can_receive_proactive_reason(self, user: dict[str, Any] | None, reason: Any, action: Any = "") -> bool:
         if not isinstance(user, dict) or self._private_user_role(user) != "friend":
@@ -1242,6 +1242,15 @@ class ProactiveMixin:
                 planned_event=event,
             )
             topic = _single_line(event.get("topic"), 60) or self._choose_proactive_topic(reason, user)
+            if self._action_has_photo_text(action) and self._private_user_role(user) != "friend":
+                photo_patch = self._photo_text_plan_field_patch(
+                    reason=reason,
+                    topic=topic,
+                    motive=motive,
+                    planned_event=event,
+                )
+                topic = _single_line(photo_patch.get("topic"), 60) or topic
+                motive = _single_line(photo_patch.get("motive"), 140) or motive
             if self._private_user_role(user) == "friend":
                 friend_safe = self._sanitize_friend_proactive_plan_fields(
                     user,
@@ -1311,6 +1320,14 @@ class ProactiveMixin:
         motive = _single_line(emotion_adjustment.get("motive"), 140) or motive
         topic = _single_line(emotion_adjustment.get("topic"), 60) or topic
         scheduled = _safe_float(emotion_adjustment.get("scheduled"), scheduled)
+        if self._action_has_photo_text(action) and self._private_user_role(user) != "friend":
+            photo_patch = self._photo_text_plan_field_patch(
+                reason=reason,
+                topic=topic,
+                motive=motive,
+            )
+            topic = _single_line(photo_patch.get("topic"), 60) or topic
+            motive = _single_line(photo_patch.get("motive"), 140) or motive
         if self._private_user_role(user) == "friend":
             friend_safe = self._sanitize_friend_proactive_plan_fields(
                 user,

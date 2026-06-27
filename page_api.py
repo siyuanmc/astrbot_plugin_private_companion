@@ -100,6 +100,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             ("/image_cache/preview", self.get_image_cache_preview, ["GET"], "Private Companion Page image cache preview"),
             ("/image_cache/update", self.update_image_cache_item, ["POST"], "Private Companion Page update image cache item"),
             ("/image_cache/delete", self.delete_image_cache_item, ["POST"], "Private Companion Page delete image cache item"),
+            ("/daily_outfit/image", self.get_daily_outfit_image, ["GET"], "Private Companion Page daily outfit image"),
+            ("/daily_outfit/image_data", self.get_daily_outfit_image_data, ["GET"], "Private Companion Page daily outfit image data"),
             ("/bookshelf/unlock", self.unlock_bookshelf, ["POST"], "Private Companion Page unlock bookshelf"),
             ("/bookshelf/image", self.get_bookshelf_image, ["GET"], "Private Companion Page bookshelf image"),
             ("/bookshelf/image_data", self.get_bookshelf_image_data, ["GET"], "Private Companion Page bookshelf image data"),
@@ -193,11 +195,75 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     "life_observation": self._life_observation_summary(data),
                     "daily_state": self._daily_state_summary(data.get("daily_state")),
                     "daily_timeline": self._daily_timeline_summary(data),
+                    "daily_outfit": self._daily_outfit_summary(data),
                 }
             )
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 获取总览失败: {exc}", exc_info=True)
             return self._error(str(exc))
+
+    def _daily_outfit_summary(self, data: dict[str, Any]) -> dict[str, Any]:
+        item = data.get("daily_outfit_photo") if isinstance(data.get("daily_outfit_photo"), dict) else {}
+        path = self._single_line(item.get("path"), 300)
+        exists = False
+        if path:
+            try:
+                exists = Path(path).exists() and Path(path).is_file()
+            except Exception:
+                exists = False
+        date_key = self._single_line(item.get("date"), 20)
+        image_query = f"?date={quote(date_key)}&ts={self._single_line(item.get('generated_at'), 40)}" if exists else ""
+        return {
+            "enabled": bool(getattr(self.plugin, "enable_daily_outfit_photo", False)),
+            "date": date_key,
+            "available": bool(exists),
+            "path": path if exists else "",
+            "image_url": f"/daily_outfit/image{image_query}" if exists else "",
+            "image_data_url": f"/daily_outfit/image_data{image_query}" if exists else "",
+            "backend": self._single_line(item.get("backend"), 80),
+            "error": self._single_line(item.get("error"), 220),
+            "generated_at": self.plugin._format_timestamp_elapsed(item.get("generated_at", 0)) if item else "",
+        }
+
+    def _daily_outfit_image_path(self) -> Path | None:
+        data = getattr(self.plugin, "data", {}) if isinstance(getattr(self.plugin, "data", {}), dict) else {}
+        item = data.get("daily_outfit_photo") if isinstance(data.get("daily_outfit_photo"), dict) else {}
+        path_text = self._single_line(item.get("path"), 500)
+        if not path_text:
+            return None
+        try:
+            path = Path(path_text).resolve()
+        except Exception:
+            return None
+        if not path.exists() or not path.is_file():
+            return None
+        return path
+
+    async def get_daily_outfit_image(self):
+        path = self._daily_outfit_image_path()
+        if path is None:
+            return self._error("今日穿搭图片不存在")
+        response = await send_file(str(path))
+        response.headers["Cache-Control"] = "private, max-age=3600"
+        return response
+
+    async def get_daily_outfit_image_data(self) -> dict[str, Any]:
+        path = self._daily_outfit_image_path()
+        if path is None:
+            return self._error("今日穿搭图片不存在")
+        try:
+            mime = mimetypes.guess_type(str(path))[0] or "image/png"
+            raw = await asyncio.to_thread(path.read_bytes)
+            return self._ok(
+                {
+                    "mime": mime,
+                    "size": len(raw),
+                    "data_url": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}",
+                }
+            )
+        except Exception as exc:
+            logger.warning("[PrivateCompanionPage] 读取每日穿搭图片失败: %s", self._single_line(exc, 160))
+            return self._error("读取每日穿搭图片失败")
 
     def _cache_summary(self, data: dict[str, Any]) -> dict[str, Any]:
         image_cache = data.get("private_image_vision_cache") if isinstance(data.get("private_image_vision_cache"), dict) else {}
@@ -680,8 +746,13 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         test_type = self._single_line(payload.get("type"), 40)
         start = time.time()
         try:
-            if test_type == "image_generation":
-                result = await self._run_image_generation_chain_test(payload)
+            if test_type in {"image_generation", "image_generation_text2img", "image_generation_selfie"}:
+                image_payload = dict(payload)
+                if test_type == "image_generation_text2img":
+                    image_payload["workflow_kind"] = "text2img"
+                elif test_type == "image_generation_selfie":
+                    image_payload["workflow_kind"] = "selfie"
+                result = await self._run_image_generation_chain_test(image_payload)
             elif test_type == "tts_generation":
                 result = await self._run_tts_generation_chain_test(payload)
             elif test_type == "proactive_message":
@@ -706,6 +777,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         return self._ok(result)
 
     async def _run_image_generation_chain_test(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._sync_photo_generation_runtime_config()
         generator = getattr(self.plugin, "_generate_photo_image", None)
         if not callable(generator):
             return {
@@ -713,13 +785,42 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 "title": "图片生成链路测试",
                 "error": "插件缺少图片生成入口 _generate_photo_image",
             }
-        prompt_text = self._single_line(payload.get("prompt"), 600) or (
-            "排障测试图，一枚小小的绿色对勾贴纸放在白色桌面上，旁边有柔和台灯光，"
-            "画面干净清晰，真实摄影风格，不包含人物、不包含文字水印"
-        )
-        workflow_kind = self._single_line(payload.get("workflow_kind"), 20) or "text2img"
+        reference_getter = getattr(self.plugin, "_photo_persona_reference_image_path", None)
+        reference_image_path = ""
+        if callable(reference_getter):
+            try:
+                reference_image_path = self._single_line(reference_getter(), 260)
+            except Exception:
+                reference_image_path = ""
+        workflow_kind = self._single_line(payload.get("workflow_kind"), 20)
+        if not workflow_kind:
+            workflow_kind = "selfie" if reference_image_path else "text2img"
+        prompt_text = self._single_line(payload.get("prompt"), 600)
+        if not prompt_text and workflow_kind in {"selfie", "portrait", "自拍", "人像"}:
+            prompt_text = (
+                "排障测试自拍图，保持参考图中的人物身份和外观一致，手机随手自拍构图，"
+                "自然室内光，画面干净清晰，真实摄影风格，不包含文字水印"
+            )
+        if not prompt_text:
+            role_appearance = self._troubleshooting_role_appearance_prompt()
+            if role_appearance:
+                prompt_text = (
+                    f"画面主体是这个角色：{role_appearance}。"
+                    "角色面向镜头，手举一个简洁的小牌子，牌子上只有一个绿色对钩符号，"
+                    "室内日常背景，画面干净清晰，构图自然，真实摄影或精致插画质感；"
+                    "不要出现其他文字、水印、额外人物或变形手。"
+                )
+            else:
+                prompt_text = (
+                    "排障测试图，一枚小小的绿色对勾贴纸放在白色桌面上，旁边有柔和台灯光，"
+                    "画面干净清晰，真实摄影风格，不包含人物、不包含文字水印"
+                )
         started = time.time()
-        timeout = max(45, self._int(getattr(self.plugin, "comfyui_photo_wait_seconds", 90)) + 30)
+        timeout = max(
+            45,
+            self._int(getattr(self.plugin, "comfyui_photo_wait_seconds", 90)) + 30,
+            self._int(getattr(self.plugin, "external_image_api_timeout_seconds", 180)) + 30,
+        )
         backend_name, image_path, note = await asyncio.wait_for(
             generator(
                 workflow_kind=workflow_kind,
@@ -746,9 +847,77 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "file_size": file_size,
             "detail": self._single_line(note, 220) or ("已生成图片" if image_path else "未返回图片路径"),
             "prompt": self._single_line(prompt_text, 220),
+            "workflow_kind": self._single_line(workflow_kind, 20),
+            "reference_image": self._single_line(reference_image_path, 260),
+            "used_reference": bool(reference_image_path and workflow_kind in {"selfie", "portrait", "自拍", "人像"}),
+            "image_model": self._single_line(getattr(self.plugin, "external_image_api_model", ""), 80),
             "elapsed_ms": elapsed_ms,
             "error": "" if image_path and exists else (self._single_line(note, 220) or "图片生成未返回有效文件"),
         }
+
+    def _troubleshooting_role_appearance_prompt(self) -> str:
+        persona = str(getattr(self.plugin, "schedule_persona_prompt", "") or self._config_get("schedule_persona_prompt") or "")
+        recognition = str(
+            getattr(self.plugin, "private_image_self_recognition_hint", "")
+            or self._config_get("private_image_self_recognition_hint")
+            or ""
+        )
+        if not persona and not recognition:
+            return ""
+        label_prefix = {
+            "姓名": "角色名",
+            "种族": "种族",
+            "性别": "性别",
+            "识别点": "主要识别点",
+            "外貌": "外貌",
+            "主要识别点": "主要识别点",
+            "发型发色": "发型发色",
+            "发色": "发色",
+            "发型": "发型",
+            "瞳色": "瞳色",
+            "眼睛": "眼睛",
+            "服饰风格": "服饰风格",
+            "服装": "服装",
+            "衣着": "衣着",
+        }
+        visual_labels = {
+            "识别点",
+            "外貌",
+            "主要识别点",
+            "发型发色",
+            "发色",
+            "发型",
+            "瞳色",
+            "眼睛",
+            "服饰风格",
+            "服装",
+            "衣着",
+        }
+        parts: list[str] = []
+        has_visual = bool(recognition)
+        for line in str(persona or "").replace("\r", "\n").split("\n"):
+            text = line.strip()
+            if not text or ("：" not in text and ":" not in text):
+                continue
+            label, value = text.split("：", 1) if "：" in text else text.split(":", 1)
+            label = label.strip()
+            value = self._single_line(value, 140)
+            if label in label_prefix and value:
+                if label in visual_labels:
+                    has_visual = True
+                parts.append(f"{label_prefix[label]}：{value}")
+        if recognition:
+            parts.append(f"补充识别线索{self._single_line(recognition, 180)}")
+        if not has_visual:
+            return ""
+        seen: set[str] = set()
+        unique = []
+        for item in parts:
+            if item in seen:
+                continue
+            seen.add(item)
+            unique.append(item)
+        return self._single_line("，".join(unique), 420)
 
     async def _run_tts_generation_chain_test(self, payload: dict[str, Any]) -> dict[str, Any]:
         context = getattr(self.plugin, "context", None)
@@ -1810,6 +1979,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "pending": bool(result.get("pending")),
             "title": self._single_line(result.get("title"), 60),
             "backend": self._single_line(result.get("backend"), 80),
+            "image_model": self._single_line(result.get("image_model"), 80),
+            "workflow_kind": self._single_line(result.get("workflow_kind"), 20),
+            "reference_image": self._single_line(result.get("reference_image"), 260),
+            "used_reference": bool(result.get("used_reference")),
             "provider": self._single_line(result.get("provider"), 100),
             "umo": self._single_line(result.get("umo"), 180),
             "path": self._single_line(result.get("path"), 260),
@@ -1861,6 +2034,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
     def _troubleshooting_test_title(test_type: str) -> str:
         return {
             "image_generation": "图片生成链路测试",
+            "image_generation_text2img": "文生图链路测试",
+            "image_generation_selfie": "自拍参考图链路测试",
             "tts_generation": "TTS 生成链路测试",
             "proactive_message": "主动消息链路测试",
             "model_diagnostics": "模型数据排障",
@@ -5751,12 +5926,18 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "photo_generation_backend",
             "COMFYUI_TEXT2IMG_WORKFLOW_NAME",
             "COMFYUI_SELFIE_WORKFLOW_NAME",
+            "photo_persona_reference_image_path",
+            "enable_daily_outfit_photo",
+            "daily_outfit_photo_prompt",
+            "enable_natural_language_photo_generation",
+            "natural_language_photo_generation_max_daily",
             "comfyui_photo_wait_seconds",
             "enable_local_photo_load_guard",
             "local_photo_cpu_busy_percent",
             "local_photo_memory_busy_percent",
             "local_photo_defer_minutes",
             "EXTERNAL_IMAGE_API_BASE_URL",
+            "EXTERNAL_IMAGE_API_KEY",
             "EXTERNAL_IMAGE_API_MODEL",
             "external_image_api_size",
             "external_image_api_timeout_seconds",
@@ -6121,6 +6302,17 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 else:
                     add("info", "本地生图负载保护未采样", str(load_state.get("reason") or "无法读取系统负载"))
 
+        if features.get("enable_photo_text_action") and getattr(self.plugin, "_external_photo_available", lambda: False)():
+            model_checker = getattr(self.plugin, "_external_image_model_misconfiguration_note", None)
+            model_note = model_checker() if callable(model_checker) else ""
+            if model_note:
+                add(
+                    "error",
+                    "在线图片模型配置错误",
+                    model_note,
+                    "把 EXTERNAL_IMAGE_API_MODEL 改成该平台的图片模型名，不要填聊天模型",
+                )
+
         llm_perception_available = bool(getattr(self.plugin, "_llmperception_available", lambda: False)())
         if llm_perception_available:
             if features.get("enable_environment_perception"):
@@ -6430,6 +6622,11 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "WEB_EXPLORATION_PROVIDER_ID": "web_exploration_provider_id",
             "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID": "smart_message_debounce_provider_id",
             "REST_WAKEUP_PROVIDER_ID": "rest_wakeup_provider_id",
+            "COMFYUI_TEXT2IMG_WORKFLOW_NAME": "comfyui_text2img_workflow_name",
+            "COMFYUI_SELFIE_WORKFLOW_NAME": "comfyui_selfie_workflow_name",
+            "EXTERNAL_IMAGE_API_BASE_URL": "external_image_api_base_url",
+            "EXTERNAL_IMAGE_API_KEY": "external_image_api_key",
+            "EXTERNAL_IMAGE_API_MODEL": "external_image_api_model",
         }
         if key in attr_map:
             setattr(self.plugin, attr_map[key], str(value or "").strip())
@@ -6545,6 +6742,40 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             return
         if key in self._allowed_setting_keys():
             setattr(self.plugin, key, value)
+
+    def _sync_photo_generation_runtime_config(self) -> None:
+        mapping = {
+            "photo_generation_backend": "photo_generation_backend",
+            "COMFYUI_TEXT2IMG_WORKFLOW_NAME": "comfyui_text2img_workflow_name",
+            "COMFYUI_SELFIE_WORKFLOW_NAME": "comfyui_selfie_workflow_name",
+            "photo_persona_reference_image_path": "photo_persona_reference_image_path",
+            "daily_outfit_photo_prompt": "daily_outfit_photo_prompt",
+            "EXTERNAL_IMAGE_API_BASE_URL": "external_image_api_base_url",
+            "EXTERNAL_IMAGE_API_KEY": "external_image_api_key",
+            "EXTERNAL_IMAGE_API_MODEL": "external_image_api_model",
+            "external_image_api_size": "external_image_api_size",
+        }
+        for key, attr in mapping.items():
+            value = self._config_get(key)
+            if value not in ("", None):
+                text = str(value).strip()
+                if key == "photo_generation_backend":
+                    text = text.lower()
+                    if text not in {"auto", "comfyui", "sdgen", "external"}:
+                        text = "auto"
+                setattr(self.plugin, attr, text)
+        timeout = self._config_get("external_image_api_timeout_seconds")
+        if timeout not in ("", None):
+            try:
+                self.plugin.external_image_api_timeout_seconds = max(20, min(600, int(float(timeout))))
+            except Exception:
+                pass
+        wait_seconds = self._config_get("comfyui_photo_wait_seconds")
+        if wait_seconds not in ("", None):
+            try:
+                self.plugin.comfyui_photo_wait_seconds = max(5, min(600, int(float(wait_seconds))))
+            except Exception:
+                pass
 
     @staticmethod
     def _normalize_bool_value(value: Any) -> bool:
@@ -6893,12 +7124,18 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "photo_generation_backend",
             "COMFYUI_TEXT2IMG_WORKFLOW_NAME",
             "COMFYUI_SELFIE_WORKFLOW_NAME",
+            "photo_persona_reference_image_path",
+            "enable_daily_outfit_photo",
+            "daily_outfit_photo_prompt",
+            "enable_natural_language_photo_generation",
+            "natural_language_photo_generation_max_daily",
             "comfyui_photo_wait_seconds",
             "enable_local_photo_load_guard",
             "local_photo_cpu_busy_percent",
             "local_photo_memory_busy_percent",
             "local_photo_defer_minutes",
             "EXTERNAL_IMAGE_API_BASE_URL",
+            "EXTERNAL_IMAGE_API_KEY",
             "EXTERNAL_IMAGE_API_MODEL",
             "external_image_api_size",
             "external_image_api_timeout_seconds",
@@ -7375,6 +7612,11 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 return max(0, min(5, int(value)))
             except (TypeError, ValueError):
                 return 1
+        if key == "natural_language_photo_generation_max_daily":
+            try:
+                return max(0, min(10, int(value)))
+            except (TypeError, ValueError):
+                return 2
         if key in self.PERCENT_PROBABILITY_KEYS:
             try:
                 raw = float(value)
