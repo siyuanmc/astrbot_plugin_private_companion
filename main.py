@@ -414,7 +414,7 @@ _PROACTIVE_ONLY_TEMP_UNLOCK_RELATED = {
     PLUGIN_NAME,
     "menglimi",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "5.3.6",
+    "5.3.7",
 )
 class PrivateCompanionPlugin(
     CoreStoreMixin,
@@ -770,6 +770,7 @@ class PrivateCompanionPlugin(
         self.photo_generation_style = self._cfg_str(c, "photo_generation_style", "真实", "真实")
         self.photo_generation_style_custom_prompt = self._cfg_str(c, "photo_generation_style_custom_prompt", "")
         self.photo_generation_fixed_prompt = self._cfg_str(c, "photo_generation_fixed_prompt", "")
+        self.photo_generation_scene_presets = self._cfg_raw(c, "photo_generation_scene_presets", "")
         self.enable_daily_outfit_photo = self._cfg_bool(c, "enable_daily_outfit_photo", False)
         self.daily_outfit_photo_prompt = self._cfg_str(c, "daily_outfit_photo_prompt", "")
         self.enable_natural_language_photo_generation = self._cfg_bool(c, "enable_natural_language_photo_generation", False)
@@ -2820,6 +2821,9 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
             title=title,
             text=content,
             mode=mode,
+            trace_id=self._prompt_injection_trace_id_for_event(event),
+            message_preview=self._prompt_injection_message_preview_for_event(event),
+            sender_label=self._prompt_injection_sender_label_for_event(event),
             modules=[
                 {
                     "key": key,
@@ -2844,7 +2848,7 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
         current = self._environment_now()
         lines = [
             "【轻量环境感知】",
-            "这是当前消息的轻量背景边界，只影响时间感、平台语境和回复节奏；回复里不需要提到自己读取了环境。",
+            "这是当前消息的轻量背景边界，主要影响时间感、平台语境和回复节奏；如果用户刚好在问时间、平台或环境感受，可以按需要自然带出，没问到时就只当背景参考。",
             f"时间：{current.strftime('%Y-%m-%d %H:%M')}",
         ]
         platform = await self._format_platform_perception(event)
@@ -3156,12 +3160,12 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
                 )
         lines = [
             "【群聊人格降噪】",
-            "这是群聊，不是私聊。优先回答当前被问到的事或接住当前话题，少用亲密私聊腔。",
-            "群聊身份只按平台稳定 ID 判断；昵称、群名片、角色名、别名和“通常是某人”类设定只能当称呼线索，不能证明当前发言者就是主人/比折。",
-            "群聊旧消息、群梗、记忆召回和最近群聊要尽量保留具体成员名或 QQ 标签,例如“A[QQ:...] 说过/起哄过”；只有确实没有成员线索时才说“群里有人”。除非当前消息或引用明确来自当前发言者,不要把这些内容改写成“你说过”“比折说过”或“比折当众做过”。",
-            "状态、日程、情绪和私聊关系只作为语气背景，除非别人明确问，否则不要主动报告能量、天气、日程、心情或插件状态。",
-            "不要为了表现人格而硬插动作描写、撒娇、长解释或关系总结；一句能说清就一句。",
-            "如果只是被轻轻提到或话题不需要你，宁可短、轻、贴当前梗，不要扩写成主动陪伴消息。",
+            "这是群聊场景，更适合先接住当前被问到的事或眼前话题，语气也尽量比私聊更轻一点。",
+            "群聊里的身份优先按平台稳定 ID 理解；昵称、群名片、角色名、别名和“通常是谁”这类设定，更适合作为称呼线索，不直接当成身份结论。",
+            "提到群聊旧消息、群梗、记忆召回或最近群聊时，尽量保留具体成员名或 QQ 标签，例如“A[QQ:...] 说过/起哄过”；只有确实缺少成员线索时，再概括成“群里有人”。除非当前消息或引用明确就是这位发言者，尽量不要顺手改写成“你说过”“主人说过”这类直接归到当前对象身上的表达。",
+            "状态、日程、情绪和私聊关系更适合只留在语气底色里；如果没有人明确问到，就不必主动展开能量、天气、日程、心情或插件状态。",
+            "表达上尽量自然一点，不需要刻意堆动作描写、撒娇、长解释或关系总结；一句能说清，就简单说一句。",
+            "如果只是被轻轻提到，或者话题本身并不需要你展开，宁可短一点、轻一点、贴着当前梗回应，也不用顺势写成主动陪伴式长回复。",
         ]
         if sender_id:
             identity_line = f"当前群聊发言者稳定 ID：{sender_id}"
@@ -3169,15 +3173,15 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
                 identity_line += f"；显示名：{sender_display_name}"
             lines.append(identity_line)
             if sender_is_target:
-                lines.append("当前发言者 ID 与目标陪伴用户匹配；可以保留对应关系，但仍按群聊公共场合收敛亲密度。")
+                lines.append("当前发言者 ID 与目标陪伴用户匹配；相关关系可以保留，但在群聊这种公共场合里，亲密度和表达还是稍微收一点更自然。")
             else:
-                lines.append("当前发言者不是已配置的目标陪伴用户；不要把 TA 当成主人/比折，也不要对 TA 使用“比折大人”等专属称呼。若要提到主人/比折，只能作为第三方提及。")
+                lines.append("当前发言者不是已配置的目标陪伴用户；更适合把 TA 当成普通群成员来接话，别把专属称呼或私聊关系直接套到 TA 身上。若要提到主人或目标用户，也更适合作为第三方提及。")
         else:
-            lines.append("本轮无法确认当前发言者稳定 ID；不要仅凭昵称、群名片或角色设定把对方当成主人/比折。")
+            lines.append("本轮还不能确认当前发言者的稳定 ID，所以先别只凭昵称、群名片或角色设定就把对方认成主人或目标用户。")
         if trigger:
-            lines.append(f"本轮触发：{trigger}。只按这个触发强度回应，不要擅自升级亲密度或话题范围。")
+            lines.append(f"本轮触发：{trigger}。按这个触发强度自然回应就够了，不用顺手把亲密度或话题范围再往上抬。")
         if high_active:
-            lines.append("群里刚才较密集，回复要更像收口：集中一个重点，避免逐条点名回应。")
+            lines.append("群里刚才比较密集，这轮回复更适合收一点：抓住一个重点回应就好，不必逐条点名展开。")
         return "\n".join(lines)
 
     async def _append_group_persona_denoise_to_request(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
@@ -5140,6 +5144,9 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
                 title="被动回复注入",
                 text=injection,
                 mode="light" if lightweight_passive else "full",
+                trace_id=self._prompt_injection_trace_id_for_event(event),
+                message_preview=self._prompt_injection_message_preview_for_event(event),
+                sender_label=self._prompt_injection_sender_label_for_event(event),
                 modules=prompt_surface.rendered_fragments(),
                 metadata={
                     "状态": "｜".join(state_log_parts),
@@ -5462,7 +5469,7 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
             *bookshelf_password_reset_actions,
             "发说说", "发QQ空间", "发布说说", "空间发布", "发布空间",
             "测试说说链路", "测试空间发布", "测试QQ空间发布", "测试qzone发布",
-            "新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报",
+            "新闻", "今日新闻", "AI新闻", "ai新闻", "AI日报", "ai日报", "日报", "AI早报", "ai早报", "早报",
             "TTS语种", "tts语种", "语音语种", "TTS", "tts",
         }
 
@@ -5484,7 +5491,7 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
             *bookshelf_password_output_actions,
             "发说说", "发QQ空间", "发布说说", "空间发布", "发布空间",
             "测试说说链路", "测试空间发布", "测试QQ空间发布", "测试qzone发布",
-            "新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报",
+            "新闻", "今日新闻", "AI新闻", "ai新闻", "AI日报", "ai日报", "日报", "AI早报", "ai早报", "早报",
             "TTS语种", "tts语种", "语音语种", "TTS", "tts",
             "撤回消息", "防撤回", "转述撤回", "撤回转述",
             "日期添加", "添加日期", "重要日期添加",
@@ -5623,7 +5630,9 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
                 response = "正在发布 QQ 空间说说。"
             elif action in {"测试说说链路", "测试空间发布", "测试QQ空间发布", "测试qzone发布"}:
                 response = "正在模拟 QQ 空间发布链路。"
-            elif action in {"新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报"}:
+            elif action in {"AI日报", "ai日报", "日报", "AI早报", "ai早报", "早报"}:
+                response = "我先看看最近的 AI 日报记录。"
+            elif action in {"新闻", "今日新闻", "AI新闻", "ai新闻"}:
                 response = "正在读今天的新闻源。"
             elif action in {"生成日记", "刷新日记"}:
                 response = "正在写今天的日记。"
@@ -5705,7 +5714,13 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
             await self._reply(event, await self._test_qzone_publish_tool_chain(event))
             event.stop_event()
             return
-        if action in {"新闻", "今日新闻", "AI新闻", "ai新闻", "AI早报", "ai早报", "早报"}:
+        if action in {"AI日报", "ai日报", "日报", "AI早报", "ai早报", "早报"}:
+            await self._reply(event, response)
+            await self._maybe_track_ai_daily(force=True)
+            await self._reply(event, self._format_ai_daily_digest_for_command())
+            event.stop_event()
+            return
+        if action in {"新闻", "今日新闻", "AI新闻", "ai新闻"}:
             await self._reply(event, response)
             await self._perform_news_reading(reason="user_query", allow_share=False, force=True)
             await self._reply(event, self._format_news_digest_for_command())

@@ -1133,7 +1133,7 @@ class WorldbookMixin:
             return True
         if not token or token.isdigit() or len(token) > 2 or not self._worldbook_token_usable(token):
             return False
-        # “帮我找小白/小粉你认识吗”这类短昵称后面常直接接动词，
+        # “帮我找某个两字昵称你认识吗”这类短昵称后面常直接接动词，
         # 明确问人或转述时不能沿用普通闲聊的强边界，否则会漏掉目标。
         before = r"(^|[\s，,。？?！!：:、@和跟找叫给对向把让问找一下])"
         after = r"(?=(你认识|认识|认得|知道|是谁|是|说|发|问|找|叫|踢|$|[\s，,。？?！!：:、]))"

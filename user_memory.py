@@ -528,7 +528,7 @@ class UserMemoryMixin:
             return ""
         if re.search(r"<[^>]{1,120}>|@[A-Za-z0-9_\-\u4e00-\u9fff]{1,32}|QQ|群聊|群友|私聊", text, re.IGNORECASE):
             return ""
-        if re.search(r"(你是|我是|他是|她是|叫我|叫你|名字|主人|朋友|同学|老师|室友|父母|妈妈|爸爸|哥哥|姐姐|弟弟|妹妹|比折|珝环)", text):
+        if re.search(r"(你是|我是|他是|她是|叫我|叫你|名字|主人|朋友|同学|老师|室友|父母|妈妈|爸爸|哥哥|姐姐|弟弟|妹妹)", text):
             return ""
         return text
 
@@ -2472,7 +2472,7 @@ target 只能是 bot/self/other/ambiguous/none。
                     _single_line(fallback, 160),
                 )
                 return fallback
-        flags = self._response_review_flags(response_text, user)
+        flags = self._response_review_flags(response_text, user, inbound_text=inbound_text)
         if not flags:
             return response_text
         if "repeats_last_bot_message" in flags:
@@ -2525,6 +2525,7 @@ target 只能是 bot/self/other/ambiguous/none。
 - 只输出改写后的正文
 - 不要标题、列表、JSON、括号动作、系统/AI/提示词字眼
 - 普通闲聊尽量 1 到 3 句；求助类可以保留必要步骤,但更口语
+- 如果用户只是短句闲聊、报天气、说一句状态或轻轻接话,改成 1 句或 2 句短回复；不要扩展成关心清单、建议清单或连续状态复述
 - 如果用户情绪低,先接住情绪,少讲道理
 - 如果是边界/不想被打扰,短一点,退一步
 - 如果回复已经在说晚安、睡觉、做梦、告别,不要再突然追加天气、日程、生活观察或另一个新话题
@@ -2549,19 +2550,70 @@ target 只能是 bot/self/other/ambiguous/none。
         if not cleaned:
             return response_text
         if len(cleaned) > max(len(response_text) + 80, self.response_review_max_chars + 160):
-            return response_text
+            fallback = self._fallback_overlong_casual_reply(inbound_text, response_text)
+            return fallback or response_text
         if re.search(r"(提示词|系统|JSON|改写后|以下是)", cleaned, re.IGNORECASE):
             return response_text
         if last_message and self._text_repeats_recent_message(cleaned, last_message):
             fallback = self._fallback_non_repeating_reply(inbound_text)
             return fallback or response_text
+        if (
+            any(flag in effective_flags for flag in ("casual_overexplained", "weather_overexplained"))
+            and len(cleaned) > self._casual_reply_review_limit(inbound_text)
+        ):
+            fallback = self._fallback_overlong_casual_reply(inbound_text, cleaned)
+            return fallback or cleaned
         return cleaned
 
     def _response_review_severe_flags(self, flags: list[str]) -> list[str]:
-        severe = {"meta_or_assistant", "leaks_internal", "repeats_last_bot_message"}
+        severe = {
+            "meta_or_assistant",
+            "leaks_internal",
+            "repeats_last_bot_message",
+            "casual_overexplained",
+            "weather_overexplained",
+        }
         if self._expression_style_review_enabled():
             severe.update({"unnatural_punctuation", "expression_overfit", "copied_user_expression_sample"})
         return [flag for flag in flags if flag in severe]
+
+    def _casual_reply_review_limit(self, inbound_text: str) -> int:
+        inbound_compact = self._compact_repeat_text(inbound_text)
+        if len(inbound_compact) <= 12:
+            return min(140, max(90, self.response_review_max_chars // 2))
+        if len(inbound_compact) <= 28:
+            return min(180, max(120, int(self.response_review_max_chars * 0.65)))
+        return self.response_review_max_chars
+
+    def _is_short_casual_inbound_for_review(self, inbound_text: str, user: dict[str, Any]) -> bool:
+        inbound = str(inbound_text or "").strip()
+        if not inbound:
+            return False
+        if len(self._compact_repeat_text(inbound)) > 32:
+            return False
+        intent_profile = user.get("intent_profile") if isinstance(user.get("intent_profile"), dict) else {}
+        if str(intent_profile.get("intent") or "") in {"help", "task", "code", "search"}:
+            return False
+        if re.search(r"(怎么|如何|为什么|啥原因|帮我|检查|分析|整理|写|生成|修|改|步骤|教程|配置|报错)", inbound):
+            return False
+        return True
+
+    def _fallback_overlong_casual_reply(self, inbound_text: str, response_text: str) -> str:
+        inbound = str(inbound_text or "").strip()
+        if re.search(r"(有伞|带伞|拿伞|伞在|带了)", inbound):
+            return "那就好，路上别被雨淋到。"
+        if re.search(r"(下雨|要雨|雨|变天|天气|降温|冷|热|风大)", inbound):
+            return "嗯，像是要变天了，出门记得带伞。"
+        if re.search(r"(困|睡|晚安|累|歇)", inbound):
+            return "嗯，先歇会儿吧。"
+        cleaned = _strip_internal_message_blocks(str(response_text or "")).strip()
+        parts = [part.strip() for part in re.split(r"(?<=[。！？!?…])\s*|\n+", cleaned) if part.strip()]
+        for part in parts:
+            if len(part) <= 90 and not re.search(r"(首先|其次|最后|建议你|你可以.*也可以|总结一下|以下是)", part):
+                return part
+        if parts:
+            return _single_line(parts[0], 70)
+        return ""
 
     def _simulation_active(self, user: dict[str, Any]) -> bool:
         raw = user.get("simulation_mode")
@@ -3208,7 +3260,7 @@ open_loops 只写之后仍需要回头处理、确认、兑现的事；普通“
                 lines.append(f"- {self._format_timestamp_elapsed(item.get('ts'))}回复过：{text}")
         return "\n".join(lines)
 
-    def _response_review_flags(self, text: str, user: dict[str, Any]) -> list[str]:
+    def _response_review_flags(self, text: str, user: dict[str, Any], *, inbound_text: str = "") -> list[str]:
         cleaned = str(text or "").strip()
         flags: list[str] = []
         if not cleaned:
@@ -3220,6 +3272,17 @@ open_loops 只写之后仍需要回头处理、确认、兑现的事；普通“
         length_limit = self.response_review_max_chars * (2 if is_help else 1)
         if len(cleaned) > length_limit:
             flags.append("too_long")
+        if not is_help and self._is_short_casual_inbound_for_review(inbound_text, user):
+            casual_limit = self._casual_reply_review_limit(inbound_text)
+            sentence_count = len(re.findall(r"[。！？!?…]+", cleaned))
+            paragraph_count = len([part for part in re.split(r"\n+", cleaned) if part.strip()])
+            advice_count = len(re.findall(r"(记得|别忘|注意|小心|可以|要不要|最好|建议|带伞|喝点|早点|路上)", cleaned))
+            if len(cleaned) > casual_limit or sentence_count >= 4 or paragraph_count >= 2:
+                flags.append("casual_overexplained")
+            inbound_weather = re.search(r"(雨|下雨|变天|天气|降温|冷|热|风)", inbound_text)
+            reply_weather = re.search(r"(雨|天气|伞|降温|冷|热|风|外面|出门)", cleaned)
+            if inbound_weather and reply_weather and (len(cleaned) > min(casual_limit, 130) or advice_count >= 2):
+                flags.append("weather_overexplained")
         if re.search(r"^(好的|当然|没问题|我理解|总结一下|以下是|首先|其次|最后)[，,：:]", cleaned):
             flags.append("assistant_tone")
         if re.search(r"(作为.*助手|AI|模型|系统|提示词|插件|后台|根据.*信息|我会从.*角度)", cleaned, re.IGNORECASE):

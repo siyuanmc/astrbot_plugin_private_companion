@@ -680,7 +680,49 @@ class IntegrationStatusMixin:
                 "plugin_vision_fallback": "备选识图模型兜底",
             }.get(vision_source, vision_source or "视觉转述模型")
             lines.append(f"视觉转述模型={source_label} / {self._provider_model_label(vision_id)}")
+        photo_generation = self._format_photo_generation_perception()
+        if photo_generation:
+            lines.append(f"生图能力={photo_generation}")
         return "；".join(lines)
+
+    def _format_photo_generation_perception(self) -> str:
+        if not (
+            bool(getattr(self, "enable_photo_text_action", False))
+            or bool(getattr(self, "enable_natural_language_photo_generation", False))
+        ):
+            return ""
+        preferred = _single_line(getattr(self, "photo_generation_backend", ""), 30) or "auto"
+        external_model = _single_line(getattr(self, "external_image_api_model", ""), 80)
+        comfyui_workflow = _single_line(getattr(self, "comfyui_text2img_workflow_name", ""), 60)
+        selfie_workflow = _single_line(getattr(self, "comfyui_selfie_workflow_name", ""), 60)
+        comfyui_available = bool(getattr(self, "_comfyui_photo_available", lambda: False)())
+        sdgen_available = bool(getattr(self, "_sdgen_photo_available", lambda: False)())
+        external_available = bool(getattr(self, "_external_photo_available", lambda: False)())
+
+        def comfyui_label() -> str:
+            labels = []
+            if comfyui_workflow:
+                labels.append(f"文生图:{comfyui_workflow}")
+            if selfie_workflow and selfie_workflow != comfyui_workflow:
+                labels.append(f"自拍:{selfie_workflow}")
+            suffix = f" / {', '.join(labels)}" if labels else ""
+            return f"ComfyUI{suffix}"
+
+        if preferred == "external":
+            return f"在线图片 API / {external_model or '未填模型'}"
+        if preferred == "comfyui":
+            return comfyui_label()
+        if preferred == "sdgen":
+            return "SDGen"
+        if external_available:
+            return f"auto -> 在线图片 API / {external_model or '图片模型'}"
+        if comfyui_available:
+            return f"auto -> {comfyui_label()}"
+        if sdgen_available:
+            return "auto -> SDGen"
+        if external_model:
+            return f"auto（候选：在线图片 API / {external_model}）"
+        return "auto（当前无可用生图后端）"
 
     async def _format_environment_perception(self, event: AstrMessageEvent) -> str:
         checker = getattr(self, "_feature_enabled_or_temp_unlocked", None)
@@ -692,7 +734,7 @@ class IntegrationStatusMixin:
         current = self._environment_now()
         lines = [
             "【环境感知】",
-            "这是当前消息的背景边界，只影响语境判断、节奏和措辞；回复里不需要提到自己读取了时间、平台或环境。",
+            "这是当前消息的背景边界，主要影响语境判断、节奏和措辞；如果用户明确问到时间、节日、平台或环境线索，可以按需要自然回答，没问到时就把它当作背景参考。",
         ]
         holiday = self._format_holiday_perception(current)
         if holiday:
@@ -732,7 +774,7 @@ class IntegrationStatusMixin:
                 label = f"{sender_name}[QQ:{sender_id}]" if sender_name and sender_name != sender_id else f"QQ:{sender_id}"
                 lines.append(
                     "群聊身份边界：本轮当前发言者是"
-                    f"{label}；环境感知只提供当前消息背景，不能把上一位说话人的主人/比折身份继承给当前发言者；"
+                    f"{label}；环境感知只提供当前消息背景，不能把上一位说话人的专属关系身份继承给当前发言者；"
                     "该 ID 只供内部判断，不要在回复正文里复述。"
                 )
         model = self._format_model_perception(event)

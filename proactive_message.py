@@ -385,6 +385,45 @@ class ProactiveMessageMixin:
         ]
         return "\n".join(part for part in parts if part)
 
+    def _user_asks_ai_daily_context(self, inbound_text: str) -> bool:
+        text = str(inbound_text or "").strip()
+        if not text:
+            return False
+        if any(
+            token in text
+            for token in (
+                "AI日报", "ai日报", "AI 日报", "ai 日报",
+                "AI早报", "ai早报", "AI 早报", "ai 早报",
+                "大模型日报", "大模型早报", "人工智能日报", "人工智能早报",
+            )
+        ):
+            return True
+        lowered = text.lower()
+        if any(token in lowered for token in ("ai daily", "daily ai", "llm daily", "ai digest")):
+            return True
+        return bool(("日报" in text or "早报" in text) and re.search(r"(ai|llm|大模型|人工智能|模型)", text, flags=re.IGNORECASE))
+
+    def _ai_daily_query_requires_freshness(self, inbound_text: str) -> bool:
+        text = str(inbound_text or "").strip()
+        if not text:
+            return False
+        return bool(re.search(r"(今天|今日|今早|刚刚|刚才|最新|现在)", text, flags=re.IGNORECASE))
+
+    def _select_ai_daily_digest_item(self, ai_state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        digest = ai_state.get("last_digest") if isinstance(ai_state.get("last_digest"), dict) else {}
+        selected_item: dict[str, Any] = {}
+        digest_items = digest.get("items") if isinstance(digest.get("items"), list) else []
+        selected_key = _single_line(digest.get("selected_key"), 80)
+        for candidate in digest_items:
+            if not isinstance(candidate, dict):
+                continue
+            if selected_key and _single_line(candidate.get("key"), 80) == selected_key:
+                selected_item = candidate
+                break
+        if not selected_item and digest_items and isinstance(digest_items[0], dict):
+            selected_item = digest_items[0]
+        return digest, selected_item
+
     def _user_asks_news_context(self, inbound_text: str) -> bool:
         text = str(inbound_text or "").strip()
         if not text:
@@ -459,9 +498,69 @@ class ProactiveMessageMixin:
             + "\n".join(rows[:12])
         )
 
+    def _format_recent_ai_daily_context_for_reply(self, inbound_text: str = "") -> str:
+        if not self.enable_news_integration:
+            return ""
+        if not self._user_asks_ai_daily_context(inbound_text):
+            return ""
+        state = self.data.get("news_integration") if isinstance(self.data.get("news_integration"), dict) else {}
+        ai_state = state.get("ai_daily") if isinstance(state.get("ai_daily"), dict) else {}
+        digest, selected_item = self._select_ai_daily_digest_item(ai_state)
+        record_date = _single_line(ai_state.get("last_success_date"), 20) or _single_line(ai_state.get("date"), 20)
+        source_name = _single_line(ai_state.get("last_source_name"), 40)
+        source_author = _single_line(ai_state.get("last_source_author"), 60)
+        source_schedule = _single_line(ai_state.get("last_source_schedule"), 10)
+        video_title = _single_line(ai_state.get("last_video_title"), 120)
+        video_link = _single_line(ai_state.get("last_video_link"), 360)
+        text_link = _single_line(ai_state.get("last_text_link"), 360)
+        headline = _single_line(digest.get("headline") or digest.get("topic"), 120)
+        impression = _single_line(digest.get("impression"), 220)
+        read_basis = _single_line(ai_state.get("last_read_basis"), 40)
+        text_readable_raw = ai_state.get("last_text_readable")
+        text_readable = bool(text_readable_raw) if isinstance(text_readable_raw, bool) else bool(selected_item.get("article_readable") and selected_item.get("article_text"))
+        subtitle_status = _single_line(ai_state.get("last_video_subtitle_status") or selected_item.get("video_subtitle_status"), 40)
+        if not any((record_date, source_name, video_title, headline, impression, video_link, text_link)):
+            return (
+                "【新闻阅读上下文】\n"
+                "用户正在询问 AI 日报/早报,但当前没有可用的 AI 日报记录。请直接说明最近还没读到可确认的 AI 日报,不要编造。"
+            )
+        today = _today_key()
+        rows: list[str] = []
+        if record_date:
+            if record_date != today and self._ai_daily_query_requires_freshness(inbound_text):
+                rows.append(f"时间说明：今天是 {today}；最近一次可用 AI 日报记录日期是 {record_date}，不是今天。")
+            else:
+                rows.append(f"记录日期：{record_date}")
+        if source_name or source_author or source_schedule:
+            rows.append("来源：" + "｜".join(part for part in (source_name, source_author, source_schedule) if part))
+        if video_title:
+            rows.append(f"视频标题：{video_title}")
+        if headline:
+            rows.append(f"摘要重点：{headline}")
+        if impression:
+            rows.append(f"阅读印象：{impression}")
+        if read_basis:
+            rows.append(f"整理依据：{read_basis}")
+        if text_link:
+            rows.append(f"文字版链接：{text_link}")
+        elif video_link:
+            rows.append(f"视频链接：{video_link}")
+        rows.append(f"正文可读：{'是' if text_readable else '否'}")
+        if subtitle_status:
+            rows.append(f"字幕状态：{subtitle_status}")
+        return (
+            "【新闻阅读上下文】\n"
+            "用户正在询问 AI 日报/早报。下面是最近一次真实读到的 AI 日报记录；如果日期不是今天，请明确说出具体日期，不要说成今天刚读到。"
+            "回答只能基于这些内容，不要编造额外新闻。\n"
+            + "\n".join(rows[:10])
+        )
+
     def _format_recent_news_context_for_reply(self, inbound_text: str = "") -> str:
         if not self.enable_news_integration:
             return ""
+        ai_daily_context = self._format_recent_ai_daily_context_for_reply(inbound_text)
+        if ai_daily_context:
+            return ai_daily_context
         if not self._user_asks_news_context(inbound_text):
             return ""
         state = self.data.get("news_integration") if isinstance(self.data.get("news_integration"), dict) else {}
@@ -545,6 +644,49 @@ class ProactiveMessageMixin:
                     lines.append(f"- {title}" + (f"（{source}）" if source else ""))
         return "\n".join(lines)
 
+    def _format_ai_daily_digest_for_command(self) -> str:
+        state = self.data.get("news_integration") if isinstance(self.data.get("news_integration"), dict) else {}
+        if not self.enable_news_integration:
+            return "新闻阅读功能没有开启。"
+        if not self.enable_ai_daily_watch:
+            return "AI 日报/早报追踪没有开启。"
+        ai_state = state.get("ai_daily") if isinstance(state.get("ai_daily"), dict) else {}
+        digest, selected_item = self._select_ai_daily_digest_item(ai_state)
+        record_date = _single_line(ai_state.get("last_success_date"), 20) or _single_line(ai_state.get("date"), 20)
+        source_name = _single_line(ai_state.get("last_source_name"), 40)
+        source_author = _single_line(ai_state.get("last_source_author"), 60)
+        source_schedule = _single_line(ai_state.get("last_source_schedule"), 10)
+        video_title = _single_line(ai_state.get("last_video_title"), 120)
+        video_link = _single_line(ai_state.get("last_video_link"), 420)
+        text_link = _single_line(ai_state.get("last_text_link"), 420)
+        headline = _single_line(digest.get("headline") or digest.get("topic"), 120)
+        impression = _single_line(digest.get("impression"), 260)
+        read_basis = _single_line(ai_state.get("last_read_basis"), 40) or ("完整文字版正文" if bool(selected_item.get("article_readable") and selected_item.get("article_text")) else "视频标题/简介")
+        if not any((record_date, source_name, video_title, headline, impression, video_link, text_link)):
+            status = _single_line(ai_state.get("status"), 60) or "未知"
+            return f"最近还没有可用的 AI 日报记录。\n状态：{status}"
+        today = _today_key()
+        lines = ["最近的 AI 日报/早报："]
+        if record_date:
+            lines.append(f"- 日期：{record_date}")
+            if record_date != today:
+                lines.append(f"- 说明：今天是 {today}，最近一次成功记录不是今天。")
+        if source_name or source_author or source_schedule:
+            lines.append("- 来源：" + "｜".join(part for part in (source_name, source_author, source_schedule) if part))
+        if video_title:
+            lines.append(f"- 视频：{video_title}")
+        if headline:
+            lines.append(f"- 重点：{headline}")
+        if impression:
+            lines.append(f"- 印象：{impression}")
+        if read_basis:
+            lines.append(f"- 整理依据：{read_basis}")
+        if text_link:
+            lines.append(f"- 文字版：{text_link}")
+        elif video_link:
+            lines.append(f"- 视频链接：{video_link}")
+        return "\n".join(lines)
+
     def _format_ai_daily_status_for_command(self) -> str:
         state = self.data.get("news_integration") if isinstance(self.data.get("news_integration"), dict) else {}
         ai_state = state.get("ai_daily") if isinstance(state.get("ai_daily"), dict) else {}
@@ -591,18 +733,7 @@ class ProactiveMessageMixin:
         video_link = _single_line(ai_state.get("last_video_link"), 420)
         text_link = _single_line(ai_state.get("last_text_link"), 420)
         candidate_count = _safe_int(ai_state.get("last_candidate_count"), 0, 0)
-        digest = ai_state.get("last_digest") if isinstance(ai_state.get("last_digest"), dict) else {}
-        selected_item: dict[str, Any] = {}
-        digest_items = digest.get("items") if isinstance(digest.get("items"), list) else []
-        selected_key = _single_line(digest.get("selected_key"), 80)
-        for candidate in digest_items:
-            if not isinstance(candidate, dict):
-                continue
-            if selected_key and _single_line(candidate.get("key"), 80) == selected_key:
-                selected_item = candidate
-                break
-        if not selected_item and digest_items and isinstance(digest_items[0], dict):
-            selected_item = digest_items[0]
+        digest, selected_item = self._select_ai_daily_digest_item(ai_state)
         if date:
             lines.append(f"- 状态日期：{date}")
         if checked:
@@ -1757,12 +1888,30 @@ class ProactiveMessageMixin:
         )
         recorder = getattr(self, "_record_prompt_injection_snapshot", None)
         if callable(recorder):
+            trace_id = f"pro-{uuid.uuid4().hex[:16]}"
+            message_preview = _single_line(
+                " / ".join(
+                    part
+                    for part in (
+                        name,
+                        _single_line(user.get("planned_proactive_topic"), 60),
+                        motive,
+                        reason,
+                        action,
+                    )
+                    if _single_line(part, 60)
+                ),
+                220,
+            )
             await recorder(
                 kind="proactive",
                 session=umo,
                 title="主动消息提示词",
                 text=prompt,
                 mode=reason,
+                trace_id=trace_id,
+                message_preview=message_preview,
+                sender_label=_single_line(f"{name}/{user.get('user_id')}", 80),
                 metadata={
                     "用户": _single_line(user.get("user_id"), 80),
                     "称呼": name,
@@ -4292,6 +4441,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         reference_image_path: str = "",
         image_size: str = "",
         elapsed_ms: int = 0,
+        presets: list[str] | None = None,
     ) -> None:
         try:
             item = {
@@ -4308,6 +4458,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 "reference_path": _single_line(reference_image_path, 260),
                 "image_size": _single_line(image_size, 40),
                 "elapsed_ms": int(max(0, elapsed_ms or 0)),
+                "presets": [_single_line(name, 40) for name in (presets or []) if _single_line(name, 40)][:6],
             }
             raw = self.data.setdefault("recent_photo_generations", [])
             if not isinstance(raw, list):
@@ -4328,6 +4479,115 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             return _single_line(prompt, 1800)
         return _single_line(f"{prompt}\n\n【固定生图提示词】\n{fixed}".strip(), 1800)
 
+    def _builtin_photo_generation_scene_presets(self) -> dict[str, str]:
+        return {
+            "角色自拍": (
+                "角色本人出镜的自然自拍；必须露脸,脸、头发、表情和肩颈完整清晰；"
+                "像手机随手拍,构图有生活感,避免裁头、遮脸、背影、只拍身体或手臂占据前景。"
+            ),
+            "COS自拍": (
+                "角色穿着用户要求的 cosplay / 主题服装自拍；保留角色自身脸部、发色、瞳色和主要识别点；"
+                "服装主题明确但不过度暴露,画面像线下活动或房间试装自拍。"
+            ),
+            "镜前穿搭": (
+                "镜前或半身穿搭照片；衣服、外套、饰品和配色要清楚,角色脸部完整可见；"
+                "主体在方形安全区内,不要只拍衣服局部。"
+            ),
+            "头像特写": (
+                "适合头像的脸部特写；头发、眼睛和表情清晰,背景简洁,脸部居中且四周留白；"
+                "不要加文字、水印或复杂道具。"
+            ),
+            "房间日常": (
+                "室内生活碎片照片；桌面、小物、书本、杯子、窗边或床边等具体物件自然入镜；"
+                "不要堆太多主体,只保留一个清楚的生活切口。"
+            ),
+            "可拍画面": (
+                "像随手拍给熟人的一张具体画面；主体明确,光线自然,不写成空泛风景或天气播报；"
+                "画面里不要出现隐私屏幕、真实个人信息、无关文字和水印。"
+            ),
+            "表情包场景": (
+                "聊天可用的单张表情包或贴纸感画面；情绪明确、构图简洁、角色可爱夸张但仍可识别；"
+                "如需文字,只使用用户明确要求的短中文。"
+            ),
+        }
+
+    def _parse_photo_generation_scene_presets(self, raw: Any) -> dict[str, str]:
+        presets: dict[str, str] = {}
+        if isinstance(raw, dict):
+            iterable = raw.items()
+            for key, value in iterable:
+                name = _single_line(key, 40)
+                prompt = _single_line(value, 900)
+                if name and prompt:
+                    presets[name] = prompt
+            return presets
+        items: list[Any] = []
+        if isinstance(raw, list):
+            items = raw
+        elif isinstance(raw, str):
+            text = raw.replace("\r\n", "\n").replace("\r", "\n")
+            items = [line for line in text.split("\n") if str(line or "").strip()]
+        for item in items:
+            if isinstance(item, dict):
+                name = _single_line(item.get("name") or item.get("key") or item.get("title"), 40)
+                prompt = _single_line(item.get("prompt") or item.get("value") or item.get("content"), 900)
+            else:
+                text = str(item or "").strip()
+                if ":" in text:
+                    name, prompt = text.split(":", 1)
+                elif "：" in text:
+                    name, prompt = text.split("：", 1)
+                else:
+                    continue
+                name = _single_line(name, 40)
+                prompt = _single_line(prompt, 900)
+            if name and prompt:
+                presets[name] = prompt
+        return presets
+
+    def _photo_generation_scene_presets(self) -> dict[str, str]:
+        presets = self._builtin_photo_generation_scene_presets()
+        presets.update(self._parse_photo_generation_scene_presets(getattr(self, "photo_generation_scene_presets", "")))
+        return presets
+
+    def _photo_generation_preset_names_for_prompt(self, workflow_kind: str, prompt_text: str) -> list[str]:
+        kind = str(workflow_kind or "").strip().lower()
+        text = _single_line(prompt_text, 1200).lower()
+        names: list[str] = []
+        if kind in {"selfie", "portrait", "自拍", "人像"}:
+            if re.search(r"\bcos\b|cosplay|角色扮演|扮成|神灯|制服|女仆|巫女|魔法少女", text, flags=re.I):
+                names.append("COS自拍")
+            elif any(token in text for token in ("穿搭", "衣服", "外套", "校服", "裙", "镜前")):
+                names.append("镜前穿搭")
+            elif any(token in text for token in ("头像", "特写", "大头")):
+                names.append("头像特写")
+            else:
+                names.append("角色自拍")
+        else:
+            if any(token in text for token in ("表情包", "贴纸", "sticker", "meme")):
+                names.append("表情包场景")
+            elif any(token in text for token in ("房间", "桌", "书", "杯", "床", "窗边", "室内")):
+                names.append("房间日常")
+            else:
+                names.append("可拍画面")
+        return list(dict.fromkeys(names))[:3]
+
+    def _apply_photo_generation_scene_presets(self, prompt_text: str, workflow_kind: str) -> tuple[str, list[str]]:
+        prompt = str(prompt_text or "").strip()
+        presets = self._photo_generation_scene_presets()
+        names = [name for name in self._photo_generation_preset_names_for_prompt(workflow_kind, prompt) if name in presets]
+        if not names:
+            return _single_line(prompt, 1800), []
+        blocks = []
+        for name in names:
+            content = _single_line(presets.get(name), 900)
+            if content and content not in prompt:
+                blocks.append(f"{name}: {content}")
+        if not blocks:
+            return _single_line(prompt, 1800), names
+        merged = f"{prompt}\n\n【生图场景预设】\n" + "\n".join(blocks)
+        return _single_line(merged, 1800), names
+
     async def _generate_photo_image(
         self,
         *,
@@ -4339,6 +4599,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
     ) -> tuple[str, str, str]:
         started = time.time()
         trace_id = self._photo_generation_trace_id(session_key, workflow_kind)
+        prompt_text, preset_names = self._apply_photo_generation_scene_presets(prompt_text, workflow_kind)
         prompt_text = self._apply_photo_generation_fixed_prompt(prompt_text)
         reference_image_path = _single_line(reference_image_path, 260)
         if not reference_image_path:
@@ -4349,10 +4610,11 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         except (OSError, ValueError):
             reference_exists = False
         logger.info(
-            "[PrivateCompanion] 生图开始: trace=%s session=%s kind=%s prompt_chars=%s prompt=%s reference=%s reference_exists=%s image_size=%s %s",
+            "[PrivateCompanion] 生图开始: trace=%s session=%s kind=%s presets=%s prompt_chars=%s prompt=%s reference=%s reference_exists=%s image_size=%s %s",
             trace_id,
             _single_line(session_key, 80),
             _single_line(workflow_kind, 30),
+            ",".join(preset_names) or "-",
             len(str(prompt_text or "")),
             _single_line(prompt_text, 180),
             bool(reference_image_path),
@@ -4376,6 +4638,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 reference_image_path=reference_image_path,
                 image_size=image_size,
                 elapsed_ms=elapsed_ms,
+                presets=preset_names,
             )
             logger.info(
                 "[PrivateCompanion] 生图结束: trace=%s ok=%s backend=%s elapsed=%sms note=%s %s",
@@ -6339,7 +6602,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             opener_text = opener_match.group(1)
             if len(opener_text) <= 4 and not re.search(r"(窗外|外面|雨声|风声|天气|今天|现在|刚刚|刚才)", opener_text):
                 cleaned = cleaned[opener_match.end():].strip()
-        if re.search(r"(你|主人|比折|珝环).{0,12}(吗|呢|呀|要不要|有没有)", cleaned):
+        if re.search(r"(你|主人).{0,12}(吗|呢|呀|要不要|有没有)", cleaned):
             return ""
         if re.search(r"(窗外|外面|雨声|风声|雨|下雨|小雨|大雨|风|云|天色|阳光|太阳|月亮|路灯|杯沿|书页|桌边)", cleaned):
             return "scene"

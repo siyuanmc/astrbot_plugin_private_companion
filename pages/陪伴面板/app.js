@@ -10,6 +10,7 @@ const state = {
   troubleshooting: null,
   availableProviders: [],
   tokenStats: null,
+  tokenStatsPartial: false,
   bookshelfUnlocked: null,
   bookshelfAccessToken: "",
   selectedBook: null,
@@ -484,7 +485,7 @@ const providerGroupByKey = providerGroups.reduce((acc, group) => {
 }, {});
 
 const featureMeta = {
-  enable_proactive_only_mode: ["主动消息专用模式", "只保留主动私聊调度、生成和发送；普通私聊/群聊不再进入本插件被动增强。"],
+  enable_proactive_only_mode: ["关闭被动能力", "只保留主动私聊调度、生成和发送；普通私聊/群聊不再进入本插件被动增强，降低误接管和误识别风险。"],
   enable_mai_style_integration: ["私聊互动策略", "把相处分寸、偏好和本轮接话方式注入回复。"],
   enable_companion_memory: ["长期画像", "沉淀用户偏好、边界、关系线索和可复用事实。"],
   enable_expression_learning: ["表达节奏学习", "统计用户句长、标点、句尾和短句节奏，只影响回复口感。"],
@@ -519,7 +520,7 @@ const featureMeta = {
   enable_environment_perception: ["环境感知", "注入当前时间、日期语境、平台、群聊/私聊和消息媒介信息。"],
   enable_holiday_perception: ["节假日感知", "识别工作日、周末、节假日和调休，影响生活节奏判断。"],
   enable_platform_perception: ["平台感知", "识别 QQ/平台、私聊/群聊、群号群名以及图片语音视频消息。"],
-  enable_model_perception: ["模型感知", "识别当前会话 LLM 和视觉转述模型配置。"],
+  enable_model_perception: ["模型感知", "识别当前会话 LLM、视觉转述模型和生图后端/图片模型配置。"],
   enable_worldview_perception: ["世界观适配感知", "把插件能力和生活语境转换成当前人设世界观说法，默认关闭，避免和 AstrBot 人设重复。"],
   enable_lunar_perception: ["农历感知", "可用时注入农历日期，辅助节日、生活氛围和日记语境。"],
   enable_solar_term_perception: ["节气感知", "注入当天或临近节气，让日程和表达更贴合时令。"],
@@ -889,7 +890,7 @@ const configLabels = {
   proactive_review_hard_risk_threshold: "硬拦截风险阈值",
   proactive_review_low_score_threshold: "低价值分数阈值",
   proactive_review_pressure_threshold: "打扰压力阈值",
-  response_review_max_chars: "被动 full 模式长度阈值",
+  response_review_max_chars: "被动回复长度阈值",
   tts_frequency_control_mode: "TTS频率控制模式",
   tts_constraint_mode: "TTS约束强度",
   tts_session_min_interval_seconds: "TTS会话最小间隔秒数",
@@ -931,7 +932,7 @@ const configLabels = {
   recall_forbidden_words: "撤回违禁词表",
   recall_forbidden_scope: "违禁词撤回范围",
   recall_forbidden_word_case_sensitive: "违禁词大小写敏感",
-  enable_proactive_only_mode: "主动消息专用模式",
+  enable_proactive_only_mode: "关闭被动能力",
   text_message_debounce_seconds: "文本补话等待秒数",
   image_message_debounce_seconds: "图片补话等待秒数",
   forward_message_debounce_seconds: "转发补话等待秒数",
@@ -1161,6 +1162,7 @@ const configLabels = {
   photo_generation_style: "主动生图风格",
   photo_generation_style_custom_prompt: "自定义风格说明",
   photo_generation_fixed_prompt: "固定附加提示词",
+  photo_generation_scene_presets: "生图场景预设",
   private_reading_min_interval_hours: "阅读最小间隔",
   private_reading_max_photo_count: "页数上限",
   private_reading_share_probability: "主动提起概率",
@@ -1183,7 +1185,7 @@ const configLabels = {
 };
 
 const configDescriptions = {
-  enable_proactive_only_mode: "开启后，本插件只保留主动私聊的日程、主动生成和发送链路；普通私聊、群聊消息不会再被本插件做状态/TTS/图片/转发/群聊上下文注入，也不会触发被动回复增强。用户回复主动消息时仍会被轻量记为已回应。它会让普通被动回复的 prompt 更稳定，显著提高缓存命中率。",
+  enable_proactive_only_mode: "开启后，本插件只保留主动私聊的日程、主动生成和发送链路；普通私聊、群聊消息不会再被本插件做状态/TTS/图片/转发/群聊上下文注入，也不会触发被动回复增强。用户回复主动消息时仍会被轻量记为已回应。适合只想使用主动陪伴、或担心被动链路误接管/误识别的场景。",
   enable_llm_proactive_message: "开启后，主动调度只负责挑选动机和时机，真正文本会调用 AstrBot 人格生成；关闭时回退为本地模板，更省但更机械。",
   proactive_prompt_template: "自定义主动消息生成提示词。留空使用内置模板；适合把角色口吻、世界观约束和“不要像回复空气”这类要求固定下来。",
   enable_llm_proactive_persona_judge: "主动计划到点后，先让模型判断这个念头是否符合角色、世界观、关系温度和当下打扰边界；可放行、改写、延后或丢弃。",
@@ -1219,7 +1221,7 @@ const configDescriptions = {
   holiday_country: "节假日识别地区。目前主要用于 CN，未安装依赖时会自动退化为周末/工作日。",
   enable_holiday_perception: "开启后会把节假日、调休和工作日判断注入环境感知。",
   enable_platform_perception: "开启后会识别平台、私聊/群聊和消息媒介类型。",
-  enable_model_perception: "开启后会把当前会话 LLM 和视觉转述模型作为环境信息注入；只供 Bot 判断能力边界，不要求主动报告模型名。",
+  enable_model_perception: "开启后会把当前会话 LLM、视觉转述模型，以及可用的生图后端/在线图片模型作为环境信息注入；只供 Bot 判断能力边界，不要求主动报告模型名。",
   enable_worldview_perception: "开启后才会把世界观适配片段注入被动回复。若 AstrBot 人设已经写了世界观，建议关闭以避免重复。",
   enable_lunar_perception: "开启后在依赖可用时注入农历日期。",
   enable_solar_term_perception: "开启后注入当天或近三天节气提示。",
@@ -1446,6 +1448,7 @@ const configDescriptions = {
   photo_generation_style: "影响主动生图提示词的整体风格倾向，可填 真实、二次元 或 其他。",
   photo_generation_style_custom_prompt: "当风格为“其他”时，把这里作为额外风格要求注入生图提示词。",
   photo_generation_fixed_prompt: "所有生图提交后端前都会追加这段固定提示词，包括主动随手拍、每日穿搭、自然语言文生图和引用/携带图片改图。适合放固定画质、角色细节、安全区或负面约束；留空不追加。",
+  photo_generation_scene_presets: "格式参考通用生图插件，一行一个：预设名:提示词。内置已有角色自拍、COS自拍、镜前穿搭、头像特写、房间日常、可拍画面、表情包场景；自定义同名会覆盖内置。",
   private_reading_min_interval_hours: "两次私下阅读之间的最小间隔。",
   private_reading_max_photo_count: "只阅读页数不超过该值的素材，避免视觉理解成本过高。",
   private_reading_share_probability: "读完后主动提起阅读体验的概率，按百分比填写。",
@@ -1481,7 +1484,7 @@ const configDescriptions = {
   proactive_review_hard_risk_threshold: "本地语义风险达到该值时会硬拦截主动候选。值越高越少拦截，按百分比填写。",
   proactive_review_low_score_threshold: "标准/严格强度下，候选价值分低于该值且压力较高时会延后。值越低越少延后，按百分比填写。",
   proactive_review_pressure_threshold: "标准/严格强度下，打扰压力达到该值且候选分偏低时会延后。值越高越少延后，按百分比填写。",
-  response_review_max_chars: "仅 full 模式使用。普通被动回复超过该长度才可能进入模型改写，避免短回复也被额外拖慢。",
+  response_review_max_chars: "用于判断普通被动回复是否偏长。默认模式会处理短闲聊被扩写成建议清单、天气小作文的情况；full 模式会更积极复核普通偏长回复。",
   emotional_gate_hurt_threshold: "用户消息让 Bot 伤心、短期变安静的触发阈值；应低于生气触发阈值。",
   emotional_gate_refuse_threshold: "累计刺痛感让 Bot 生气、短暂回避的触发阈值；应高于伤心触发阈值。",
   emotional_gate_recovery_per_hour: "情绪余波每小时自然缓和多少分。",
@@ -1641,7 +1644,7 @@ const featureSettingGroups = {
   enable_qzone_life_publish: ["qzone_life_publish_min_interval_hours", "qzone_life_publish_probability"],
   enable_qzone_generated_image_publish: ["qzone_generated_image_probability"],
   enable_qzone_comment_inbox: ["qzone_comment_inbox_interval_minutes", "qzone_comment_inbox_recent_posts", "qzone_comment_inbox_max_replies_per_tick"],
-  enable_photo_text_action: ["photo_action_max_daily", "proactive_photo_text_probability", "photo_generation_backend", "COMFYUI_TEXT2IMG_WORKFLOW_NAME", "COMFYUI_SELFIE_WORKFLOW_NAME", "photo_persona_reference_image_path", "enable_daily_outfit_photo", "daily_outfit_photo_prompt", "enable_natural_language_photo_generation", "natural_language_photo_generation_max_daily", "comfyui_photo_wait_seconds", "enable_local_photo_load_guard", "local_photo_cpu_busy_percent", "local_photo_memory_busy_percent", "local_photo_defer_minutes", "EXTERNAL_IMAGE_API_BASE_URL", "EXTERNAL_IMAGE_API_KEY", "EXTERNAL_IMAGE_API_MODEL", "external_image_api_size", "external_image_api_timeout_seconds", "photo_generation_style", "photo_generation_style_custom_prompt", "photo_generation_fixed_prompt"],
+  enable_photo_text_action: ["photo_action_max_daily", "proactive_photo_text_probability", "photo_generation_backend", "COMFYUI_TEXT2IMG_WORKFLOW_NAME", "COMFYUI_SELFIE_WORKFLOW_NAME", "photo_persona_reference_image_path", "enable_daily_outfit_photo", "daily_outfit_photo_prompt", "enable_natural_language_photo_generation", "natural_language_photo_generation_max_daily", "comfyui_photo_wait_seconds", "enable_local_photo_load_guard", "local_photo_cpu_busy_percent", "local_photo_memory_busy_percent", "local_photo_defer_minutes", "EXTERNAL_IMAGE_API_BASE_URL", "EXTERNAL_IMAGE_API_KEY", "EXTERNAL_IMAGE_API_MODEL", "external_image_api_size", "external_image_api_timeout_seconds", "photo_generation_style", "photo_generation_style_custom_prompt", "photo_generation_fixed_prompt", "photo_generation_scene_presets"],
   enable_private_reading_integration: ["enable_private_reading_boredom_read", "enable_private_reading_ask_recommendation", "private_reading_min_interval_hours", "private_reading_max_photo_count", "private_reading_ask_probability", "private_reading_default_keywords", "private_reading_blocked_tags", "enable_private_reading_preference_influence", "private_reading_preference_min_ratings", "private_reading_preference_max_terms"],
   enable_private_reading_boredom_read: ["private_reading_min_interval_hours", "private_reading_max_photo_count", "private_reading_share_probability", "private_reading_default_keywords", "private_reading_blocked_tags", "enable_private_reading_preference_influence", "private_reading_preference_min_ratings", "private_reading_preference_max_terms"],
   enable_private_reading_ask_recommendation: ["private_reading_ask_probability"],
@@ -1656,8 +1659,8 @@ const featureSettingGroups = {
 const featureSettingSections = {
   enable_proactive_only_mode: [
     {
-      title: "主动生成",
-      note: "调度层只决定念头和时机，文本层负责把它写成符合人格的自然开口。",
+      title: "保留主动链路",
+      note: "关闭被动能力后，仍保留主动念头、调度和主动文本生成。",
       keys: ["enable_llm_proactive_message", "proactive_prompt_template"],
     },
     {
@@ -1967,7 +1970,7 @@ const featureSettingSections = {
     {
       title: "画面风格",
       note: "只影响提示词组织，不改变后端配置。",
-      keys: ["photo_generation_style", "photo_generation_style_custom_prompt", "photo_generation_fixed_prompt"],
+      keys: ["photo_generation_style", "photo_generation_style_custom_prompt", "photo_generation_fixed_prompt", "photo_generation_scene_presets"],
     },
   ],
   enable_tts_enhancement: [
@@ -2062,6 +2065,7 @@ const featureSettingTypes = {
   daily_outfit_photo_prompt: { type: "textarea" },
   photo_generation_style_custom_prompt: { type: "textarea" },
   photo_generation_fixed_prompt: { type: "textarea" },
+  photo_generation_scene_presets: { type: "textarea" },
   segmented_proactive_regex: { type: "textarea" },
   segmented_proactive_split_words: { type: "textarea" },
   segmented_proactive_content_cleanup_rule: { type: "textarea" },
@@ -2702,6 +2706,7 @@ async function loadAll() {
       fetchJson("/groups?limit=300"),
     ]);
     state.overview = overview;
+    hydrateTokenStatsFromOverview(overview);
     state.users = users.items || [];
     state.groups = groups.items || [];
     state.featureDraft = featureDraftFromOverview(overview);
@@ -2713,6 +2718,14 @@ async function loadAll() {
   } catch (error) {
     $("#subtitle").textContent = `加载失败：${error.message}`;
   }
+}
+
+function hydrateTokenStatsFromOverview(overview) {
+  const tokenStats = overview?.token_stats;
+  if (!tokenStats || typeof tokenStats !== "object") return;
+  state.tokenStats = tokenStats;
+  state.tokenStatsPartial = true;
+  state.lazyLoaded.tokenStats = false;
 }
 
 function renderAll() {
@@ -2764,9 +2777,10 @@ async function loadDashboardDiagnostics(force = false) {
 }
 
 async function loadTokenStats(force = false) {
-  if (state.lazyLoaded.tokenStats && !force) return state.tokenStats;
+  if (state.lazyLoaded.tokenStats && !force && !state.tokenStatsPartial) return state.tokenStats;
   const tokenStats = await fetchJson("/token/stats");
   state.tokenStats = tokenStats || null;
+  state.tokenStatsPartial = false;
   state.lazyLoaded.tokenStats = true;
   renderStats();
   if (state.activeTab === "tokens") renderTokens();
@@ -2935,9 +2949,9 @@ function renderDashboardPulse() {
     [
       "tokens",
       "Token",
-      state.lazyLoaded.tokenStats
+      state.tokenStats
         ? `${formatCompactNumber(state.tokenStats?.totals?.total_tokens || 0)} · ${formatCompactNumber(state.tokenStats?.totals?.calls || 0)} 次`
-        : "点开后加载",
+        : "后台加载中",
     ],
     [
       "troubleshooting",
@@ -3711,45 +3725,89 @@ function debounceDecisionLabel(decision) {
   }[decision] || decision || "记录";
 }
 
-function troubleshootingPromptInjectionMarkup(data) {
-  const groups = [
-    ["tts", "TTS 规则注入", "基础规则 / 频率控制 / 主用户倾向 / 用户语音请求；最近 8 条"],
-    ["request", "请求附加规则", "工具 / 环境 / 群聊边界等直接追加到本轮请求的规则"],
-    ["passive", "被动回复注入", "状态 / 身份 / 环境等聚合片段"],
-    ["proactive", "主动消息注入", "主动主链提示词"],
-  ];
-  return groups.map(([key, title, note]) => {
-    const items = Array.isArray(data?.[key]) ? data[key] : [];
-    return `
-      <section class="troubleshooting-injection-group">
-        <header>
-          <div>
-            <b>${escapeHtml(title)}</b>
-            <span>${escapeHtml(note)} · 最近 ${escapeHtml(items.length || 0)} 条</span>
-          </div>
-        </header>
-        ${items.length ? items.map((item) => troubleshootingPromptInjectionItemMarkup(item)).join("") : `<div class="empty small">暂无${escapeHtml(title)}记录</div>`}
-      </section>
-    `;
-  }).join("");
+function promptInjectionKindLabel(kind) {
+  return {
+    request: "请求附加",
+    passive: "被动回复",
+    proactive: "主动消息",
+    tts: "TTS 规则",
+  }[kind] || kind || "注入记录";
 }
 
-function troubleshootingPromptInjectionItemMarkup(item) {
+function troubleshootingPromptInjectionMarkup(data) {
+  const messages = Array.isArray(data?.messages) ? data.messages.slice(0, 10) : [];
+  const total = Number(data?.message_total || messages.length || 0);
+  return `
+    <section class="troubleshooting-injection-group">
+      <header>
+        <div>
+          <b>最近回复的 10 次消息</b>
+          <span>按消息聚合展示注入链路；点开某条消息即可查看这次回复的完整注入模块。当前 ${escapeHtml(Math.min(total || messages.length, 10))} 条</span>
+        </div>
+      </header>
+      ${messages.length ? messages.map((item) => troubleshootingPromptInjectionMessageMarkup(item)).join("") : `<div class="empty small">暂无可查看的注入记录</div>`}
+    </section>
+  `;
+}
+
+function troubleshootingPromptInjectionMessageMarkup(message) {
+  const items = Array.isArray(message?.items) ? message.items : [];
+  const kinds = Array.isArray(message?.kinds) ? message.kinds.map((kind) => promptInjectionKindLabel(kind)).filter(Boolean) : [];
+  const meta = [
+    message?.time || "",
+    message?.sender_label || "",
+    items.length ? `${items.length} 段注入` : "",
+    Number(message?.module_count || 0) ? `${Number(message.module_count)} 个模块` : "",
+    kinds.length ? kinds.join(" / ") : "",
+  ].filter(Boolean).join(" · ");
+  const messagePreview = message?.message_preview || (items[0]?.metadata?.["触发消息"]) || items[0]?.preview || "未记录触发消息";
+  const metaRows = [
+    ["发送者", message?.sender_label || ""],
+    ["会话", message?.session || ""],
+    ["跟踪", message?.trace_id || ""],
+    ["首次记录", message?.first_time || ""],
+    ["最后更新", message?.time || ""],
+  ].filter(([, value]) => value);
+  return `
+    <details class="troubleshooting-injection-item troubleshooting-injection-message">
+      <summary>
+        <span>
+          <b>${escapeHtml(messagePreview)}</b>
+          <small>${escapeHtml(message?.session || "")}</small>
+        </span>
+        <em>${escapeHtml(meta)}</em>
+      </summary>
+      ${metaRows.length ? `
+        <dl>
+          ${metaRows.map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}
+        </dl>
+      ` : ""}
+      ${items.map((item) => troubleshootingPromptInjectionItemMarkup(item, { nested: true })).join("")}
+    </details>
+  `;
+}
+
+function troubleshootingPromptInjectionItemMarkup(item, options = {}) {
+  const nested = Boolean(options?.nested);
   const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
   const metaRows = Object.entries(metadata).filter(([key, value]) => key && value);
   const modules = Array.isArray(item?.modules) ? item.modules : [];
   const meta = [
+    nested ? "" : promptInjectionKindLabel(item.kind || ""),
     item.time || "",
     item.mode ? `mode=${item.mode}` : "",
     item.chars ? `${item.chars} chars` : "",
     modules.length ? `${modules.length} 个模块` : "",
     item.truncated ? "已截断" : "",
   ].filter(Boolean).join(" · ");
+  const title = nested
+    ? `${promptInjectionKindLabel(item.kind || "")} · ${item.title || "注入内容"}`
+    : (item.title || "注入内容");
   return `
     <details class="troubleshooting-injection-item">
       <summary>
         <span>
-          <b>${escapeHtml(item.title || "注入内容")}</b>
+          <b>${escapeHtml(title)}</b>
           <small>${escapeHtml(item.session || "")}</small>
         </span>
         <em>${escapeHtml(meta)}</em>
@@ -10163,7 +10221,7 @@ function renderFeatureSwitches() {
     <section class="feature-summary-card ${riskyEnabled ? "warn" : ""}">
       <span>${escapeHtml(proactiveOnlyModeEnabled() ? "模式锁定" : "高主动子项")}</span>
       <b>${escapeHtml(proactiveOnlyModeEnabled() ? proactiveLocked : riskyEnabled)}</b>
-      <small>${escapeHtml(proactiveOnlyModeEnabled() ? "被主动消息专用模式覆盖" : "含详情页子开关")}</small>
+      <small>${escapeHtml(proactiveOnlyModeEnabled() ? "被动能力已关闭" : "含详情页子开关")}</small>
     </section>
   `;
 
@@ -10236,23 +10294,9 @@ function renderProactiveOnlyModeCard() {
   const frameworkLockMode = String(settings.framework_session_lock_mode || "auto");
   root.innerHTML = `
     <div class="proactive-mode-stack">
-      <section class="proactive-mode-card ${checked ? "on" : "off"}">
-        <label class="feature-toggle-hit proactive-mode-toggle" aria-label="${escapeHtml(featureLabel(key))}">
-          <input type="checkbox" data-proactive-only-mode-toggle ${checked ? "checked" : ""}>
-          <span class="feature-toggle-visual"></span>
-        </label>
-        <div class="proactive-mode-main">
-          <div class="proactive-mode-kicker">运行模式 · 缓存友好</div>
-          <h3>${escapeHtml(featureLabel(key))}</h3>
-          <p>只保留主动私聊调度、生成和发送；普通私聊/群聊不再进入本插件被动增强、TTS、图片/转发、群聊观察或工具链。</p>
-          <p>由于被动回复不再混入大量动态提示词，主模型 prompt 更稳定，能显著提高缓存命中率；下方被覆盖的被动功能会自动锁定但保留原配置。</p>
-          <small class="proactive-mode-code">${escapeHtml(key)}</small>
-        </div>
-        <button type="button" class="proactive-mode-detail proactive-mode-button soft" data-feature-open="${escapeHtml(key)}">查看说明</button>
-      </section>
       <form class="proactive-mode-injection-card" data-proactive-injection-form>
         <div class="proactive-mode-copy">
-          <div class="proactive-mode-kicker">注入策略 · 缓存前缀</div>
+          <div class="proactive-mode-kicker">被动注入</div>
           <h3>${escapeHtml(configLabel("passive_injection_position"))}</h3>
           <p>${escapeHtml(configDescriptions.passive_injection_position || "")}</p>
           <small class="proactive-mode-code">${escapeHtml("passive_injection_position")}</small>
@@ -10267,13 +10311,26 @@ function renderProactiveOnlyModeCard() {
           </select>
           <div class="proactive-mode-actions">
             <button type="submit" class="proactive-mode-button primary">保存位置</button>
-            <button type="button" class="proactive-mode-button soft" data-proactive-injection-reset>恢复默认</button>
           </div>
         </div>
       </form>
-      <form class="proactive-mode-injection-card" data-framework-lock-form>
+      <div class="proactive-mode-settings-row">
+        <section class="proactive-mode-card ${checked ? "on" : "off"}">
+          <label class="feature-toggle-hit proactive-mode-toggle" aria-label="${escapeHtml(featureLabel(key))}">
+            <input type="checkbox" data-proactive-only-mode-toggle ${checked ? "checked" : ""}>
+            <span class="feature-toggle-visual"></span>
+          </label>
+          <div class="proactive-mode-main">
+            <div class="proactive-mode-kicker">兼容与隔离</div>
+            <h3>${escapeHtml(featureLabel(key))}</h3>
+            <p>只保留主动私聊调度、生成和发送；普通私聊/群聊不再进入本插件被动链路，用于避免误接管、误识别和动态上下文串入主链。</p>
+            <small class="proactive-mode-code">${escapeHtml(key)}</small>
+          </div>
+          <button type="button" class="proactive-mode-detail proactive-mode-button soft" data-feature-open="${escapeHtml(key)}">查看说明</button>
+        </section>
+        <form class="proactive-mode-injection-card" data-framework-lock-form>
         <div class="proactive-mode-copy">
-          <div class="proactive-mode-kicker">兼容模式 · 旧版 AstrBot</div>
+          <div class="proactive-mode-kicker">兼容与隔离</div>
           <h3>${escapeHtml(configLabel("framework_session_lock_mode"))}</h3>
           <p>${escapeHtml(configDescriptions.framework_session_lock_mode || "")}</p>
           <small class="proactive-mode-code">${escapeHtml("framework_session_lock_mode")}</small>
@@ -10291,6 +10348,7 @@ function renderProactiveOnlyModeCard() {
           </div>
         </div>
       </form>
+      </div>
     </div>
   `;
   root.querySelector("[data-proactive-only-mode-toggle]")?.addEventListener("change", (event) => {
@@ -10309,16 +10367,6 @@ function renderProactiveOnlyModeCard() {
       () => postJson("/settings/update", { settings: { passive_injection_position: value } }),
       "已保存动态提示词注入位置",
       form.querySelector("button[type='submit']"),
-    );
-  });
-  root.querySelector("[data-proactive-injection-reset]")?.addEventListener("click", async (event) => {
-    const button = event.currentTarget;
-    const select = root.querySelector('[name="passive_injection_position"]');
-    if (select) select.value = "prompt";
-    await runAction(
-      () => postJson("/settings/update", { settings: { passive_injection_position: "prompt" } }),
-      "已恢复默认注入位置",
-      button,
     );
   });
   root.querySelector("[data-framework-lock-form]")?.addEventListener("submit", async (event) => {
@@ -10340,10 +10388,10 @@ function featureSwitchItem(key) {
   const displayOn = checked || tempUnlocked;
   const related = proactiveOnlyRelatedUnlocks(key);
   const stateText = locked ? (tempUnlocked ? "临时放行" : "已锁定") : checked ? "开启" : "关闭";
-  const lockNote = tempUnlocked ? "已临时放行，关闭主动专用模式后清空" : "主动专用模式覆盖，原配置保留";
+  const lockNote = tempUnlocked ? "已临时放行，恢复被动能力后清空" : "被动能力关闭，原配置保留";
   const relatedText = related.length ? `建议同步：${related.map((item) => item.label || item.key).join("、")}` : "";
   return `
-    <section class="feature-switch-item ${displayOn ? "on" : "off"} ${locked ? "locked" : ""}" title="${escapeHtml(locked ? "主动消息专用模式开启时，此功能在普通被动链路中被锁定覆盖，原配置会保留。" : featureDescription(key))}">
+    <section class="feature-switch-item ${displayOn ? "on" : "off"} ${locked ? "locked" : ""}" title="${escapeHtml(locked ? "此模式开启时，本功能在普通被动链路中被锁定覆盖，原配置会保留。" : featureDescription(key))}">
       <label class="feature-toggle-hit" aria-label="${escapeHtml(featureLabel(key))}">
         <input type="checkbox" data-feature-key="${escapeHtml(key)}" ${displayOn ? "checked" : ""} ${locked ? "disabled" : ""}>
         <span class="feature-toggle-visual"></span>
@@ -10365,7 +10413,7 @@ function featureSwitchItem(key) {
 }
 
 function featureGroupForKey(key) {
-  if (key === "enable_proactive_only_mode") return "运行模式";
+  if (key === "enable_proactive_only_mode") return "兼容与隔离";
   const parentKey = topLevelFeatureKey(key);
   const group = featureGroups.find((item) => item.keys.includes(parentKey));
   return group ? group.title : "其他";
@@ -10710,8 +10758,8 @@ function collectFeatureDetailPayload(featureKey, root = document) {
 
 function featureDependencyLines(key) {
   const dependencies = [];
-  if (featureLockedByProactiveOnlyMode(key)) dependencies.push(["运行模式覆盖", "主动消息专用模式已开启；此功能在普通被动链路中被锁定，原配置保留，关闭该模式后恢复生效。"]);
-  if (key === "enable_proactive_only_mode") dependencies.push(["注意", "开启后被动增强与群聊观察会被总模式跳过"]);
+  if (featureLockedByProactiveOnlyMode(key)) dependencies.push(["被动能力关闭", "普通被动链路中此功能被锁定，原配置保留；恢复被动能力后生效。"]);
+  if (key === "enable_proactive_only_mode") dependencies.push(["注意", "开启后被动增强与群聊观察会被跳过"]);
   if (key !== "enable_group_companion" && key.startsWith("enable_group_")) dependencies.push(["依赖", "群聊总开关"]);
   if (key === "enable_group_conversation_followup") dependencies.push(["依赖", "群聊场景感知"]);
   if (["enable_companion_memory", "enable_expression_learning", "enable_intent_emotion_analysis", "enable_response_self_review", "enable_passive_topic_suppression", "enable_relationship_state_machine", "enable_emotion_simulation", "enable_dialogue_episode_memory", "enable_open_loop_tracking", "enable_food_menu_recommendation"].includes(key)) {
@@ -10735,9 +10783,9 @@ function featureDependencyLines(key) {
 
 const featureDetailGuides = {
   enable_proactive_only_mode: {
-    summary: "把插件收束成“只负责主动来找用户”的模式，适合不想让它参与普通私聊/群聊被动回复的人。",
+    summary: "关闭本插件的普通被动增强，只保留主动来找用户的链路，适合避免误接管、误识别或与其它被动回复插件互相影响。",
     trigger: "普通私聊、群聊事件和非主动框架 LLM 请求到达时生效。",
-    enabled: "插件仍会跑日程、状态、主动意愿和私聊主动发送；普通聊天不会注入本插件状态、TTS、图片/转发摘要或群聊上下文，也不会使用插件工具。普通被动 prompt 更稳定，缓存命中率更高；用户回复主动消息仍会被轻量记录为已回应。",
+    enabled: "插件仍会跑日程、状态、主动意愿和私聊主动发送；普通聊天不会注入本插件状态、TTS、图片/转发摘要或群聊上下文，也不会使用插件工具。用户回复主动消息仍会被轻量记录为已回应。",
     disabled: "按各功能开关正常参与私聊被动增强、群聊观察、图片/转发处理和提示词注入。",
   },
   enable_mai_style_integration: {
@@ -10917,7 +10965,7 @@ const featureDetailGuides = {
   enable_environment_perception: {
     summary: "提供当前时间、日期、平台、聊天类型和消息媒介，让日程与回复不脱离现实语境。",
     trigger: "日程生成、状态刷新和回复前。",
-    enabled: "Bot 会知道现在大概是什么时间、在哪个平台、面对私聊还是群聊。主动消息专用模式下，普通被动回复里的环境感知注入会被锁定；后台状态和主动链路仍可使用。",
+    enabled: "Bot 会知道现在大概是什么时间、在哪个平台、面对私聊还是群聊。关闭被动能力时，普通被动回复里的环境感知注入会被锁定；后台状态和主动链路仍可使用。",
     disabled: "只使用较基础的上下文，时间与场景贴合度下降。",
   },
   enable_holiday_perception: {
@@ -10933,9 +10981,9 @@ const featureDetailGuides = {
     disabled: "媒介信息减少，复杂消息的场景判断会变弱。",
   },
   enable_model_perception: {
-    summary: "识别当前对话 LLM，以及图片转述使用的视觉模型。",
+    summary: "识别当前对话 LLM、图片转述视觉模型，以及可用的生图后端/图片模型。",
     trigger: "环境感知注入时。",
-    enabled: "Bot 能知道当前文本模型和视觉转述模型的大致来源，遇到不同配置时更容易判断自己的能力边界。",
+    enabled: "Bot 能知道当前文本模型、视觉转述模型，以及生图后端或在线图片模型的大致来源，遇到不同配置时更容易判断自己的能力边界。",
     disabled: "Bot 不再获得模型环境信息，只按普通对话上下文回复。",
   },
   enable_worldview_perception: {
@@ -11383,7 +11431,7 @@ function featureDetailPage(key) {
       </nav>
       <div class="feature-state-strip ${displayEnabled ? "on" : "off"}">
         <b>${escapeHtml(locked ? (tempUnlocked ? "临时放行" : "已锁定") : enabled ? "开启" : "关闭")}</b>
-        ${locked ? `<span>${escapeHtml(tempUnlocked ? "主动消息专用模式仍开启，但此功能已被临时放行；关闭主动专用模式后放行项会清空。" : "主动消息专用模式正在覆盖这个功能；保存的原始开关值不会被修改。")}</span>` : ""}
+        ${locked ? `<span>${escapeHtml(tempUnlocked ? "被动能力仍关闭，但此功能已被临时放行；恢复被动能力后放行项会清空。" : "当前正在关闭被动能力；保存的原始开关值不会被修改。")}</span>` : ""}
       </div>
       <header class="feature-detail-head">
         <div>
@@ -11400,7 +11448,7 @@ function featureDetailPage(key) {
       ${locked ? `
         <section class="feature-detail-card feature-temp-unlock-panel">
           <h3>主动专用临时放行</h3>
-          <p>${escapeHtml(tempUnlocked ? "此功能已在主动消息专用模式下临时放行。关闭主动消息专用模式后，放行项会自动清空。" : "此功能当前被主动消息专用模式覆盖。你可以二次确认后临时放行，不会改写原配置。")}</p>
+          <p>${escapeHtml(tempUnlocked ? "此功能已在被动能力关闭时临时放行。恢复被动能力后，放行项会自动清空。" : "此功能当前被关闭被动能力模式覆盖。你可以二次确认后临时放行，不会改写原配置。")}</p>
           ${relatedUnlocks.length ? `<p>建议同步：${escapeHtml(relatedUnlocks.map((item) => item.label || item.key).join("、"))}</p>` : ""}
           <div class="feature-temp-unlock-actions">
             <button type="button" data-proactive-temp-unlock="${escapeHtml(key)}" data-action="${tempUnlocked ? "clear" : "unlock"}">${escapeHtml(tempUnlocked ? "取消临时放行" : "临时放行")}</button>

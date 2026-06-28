@@ -134,6 +134,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 if callable(refresher):
                     refresher()
                 data = self._overview_data_snapshot_locked(self.plugin.data)
+                token_stats = self._token_overview_payload(self.plugin.data.get("token_usage", {}))
             users = data.get("users") if isinstance(data.get("users"), dict) else {}
             groups = data.get("groups") if isinstance(data.get("groups"), dict) else {}
             enabled_users = sum(1 for item in users.values() if isinstance(item, dict) and item.get("enabled", True))
@@ -196,11 +197,71 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     "daily_state": self._daily_state_summary(data.get("daily_state")),
                     "daily_timeline": self._daily_timeline_summary(data),
                     "daily_outfit": self._daily_outfit_summary(data),
+                    "token_stats": token_stats,
                 }
             )
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 获取总览失败: {exc}", exc_info=True)
             return self._error(str(exc))
+
+    def _token_overview_payload(self, usage: Any) -> dict[str, Any]:
+        if not isinstance(usage, dict):
+            usage = {}
+        today_key = _today_key()
+        totals = self._token_bucket(usage.get("totals"))
+        today_bucket = usage.get("by_day", {}).get(today_key, {}) if isinstance(usage.get("by_day"), dict) else {}
+        today_total_tokens = self._int(today_bucket.get("total_tokens")) if isinstance(today_bucket, dict) else 0
+        exempt_by_day = usage.get("budget_exempt_by_day") if isinstance(usage.get("budget_exempt_by_day"), dict) else {}
+        today_exempt_bucket = exempt_by_day.get(today_key, {}) if isinstance(exempt_by_day, dict) else {}
+        today_exempt_tokens = self._int(today_exempt_bucket.get("total_tokens")) if isinstance(today_exempt_bucket, dict) else 0
+        if today_exempt_tokens <= 0:
+            by_day_task = usage.get("by_day_task") if isinstance(usage.get("by_day_task"), dict) else {}
+            today_tasks = by_day_task.get(today_key, {}) if isinstance(by_day_task, dict) else {}
+            if isinstance(today_tasks, dict):
+                is_exempt_task = getattr(self.plugin, "_is_llm_budget_exempt_task", None)
+                today_exempt_tokens = sum(
+                    self._int(bucket.get("total_tokens"))
+                    for task, bucket in today_tasks.items()
+                    if isinstance(bucket, dict)
+                    and (
+                        (callable(is_exempt_task) and is_exempt_task(task))
+                        or (not callable(is_exempt_task) and str(task) in {"proactive_framework", "voice_framework"})
+                    )
+                )
+        today_tokens = max(0, today_total_tokens - today_exempt_tokens)
+        daily_limit = self._int(getattr(self.plugin, "daily_token_limit", 0))
+        soft_limit = self._int(getattr(self.plugin, "daily_token_soft_limit", 0))
+        soft_enabled = bool(getattr(self.plugin, "enable_daily_token_soft_limit", True))
+        budget_skips = usage.get("budget_skips", {}) if isinstance(usage.get("budget_skips"), dict) else {}
+        today_skips = budget_skips.get(today_key, {}) if isinstance(budget_skips, dict) else {}
+        budget = {
+            "day": today_key,
+            "limit": daily_limit,
+            "soft_limit": soft_limit,
+            "soft_enabled": soft_enabled,
+            "soft_active": bool(soft_enabled and soft_limit > 0 and today_tokens >= soft_limit),
+            "used": today_tokens,
+            "total_used": today_total_tokens,
+            "exempt_used": today_exempt_tokens,
+            "remaining": max(0, daily_limit - today_tokens) if daily_limit > 0 else None,
+            "soft_remaining": max(0, soft_limit - today_tokens) if soft_enabled and soft_limit > 0 else None,
+            "ratio": round(today_tokens / daily_limit, 4) if daily_limit > 0 else 0,
+            "soft_ratio": round(today_tokens / soft_limit, 4) if soft_enabled and soft_limit > 0 else 0,
+            "exceeded": bool(daily_limit > 0 and today_tokens >= daily_limit),
+            "deferred_calls": (
+                self._int(today_skips.get("daily_token_soft_limit_deferred"))
+                + self._int(today_skips.get("maintenance_token_saver_deferred"))
+            )
+            if isinstance(today_skips, dict)
+            else 0,
+            "skipped_calls": self._int(today_skips.get("count")) if isinstance(today_skips, dict) else 0,
+        }
+        return {
+            "updated_at": self._single_line(usage.get("updated_at"), 24),
+            "totals": totals,
+            "budget": budget,
+            "partial": True,
+        }
 
     def _overview_data_snapshot_locked(self, raw_data: Any) -> dict[str, Any]:
         """Build a light read-only snapshot for the dashboard.
@@ -2058,6 +2119,11 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                     "reference_path": self._single_line(item.get("reference_path"), 260),
                     "image_size": self._single_line(item.get("image_size"), 40),
                     "elapsed_ms": self._int(item.get("elapsed_ms")),
+                    "presets": [
+                        self._single_line(name, 40)
+                        for name in (item.get("presets") if isinstance(item.get("presets"), list) else [])
+                        if self._single_line(name, 40)
+                    ][:6],
                 }
             )
         return items
@@ -2066,6 +2132,9 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         raw = data.get("recent_prompt_injections")
         if not isinstance(raw, dict):
             raw = {}
+        raw_events = data.get("recent_prompt_injection_events")
+        if not isinstance(raw_events, list):
+            raw_events = []
 
         def normalize_item(item: Any) -> dict[str, Any] | None:
             if not isinstance(item, dict):
@@ -2110,6 +2179,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 "chars": self._int(item.get("chars")),
                 "truncated": bool(item.get("truncated")),
                 "preview": self._single_line(item.get("preview"), 260),
+                "trace_seq": self._int(item.get("trace_seq")),
                 "content": str(item.get("content") or "")[:13000],
                 "modules": modules,
                 "metadata": {
@@ -2119,12 +2189,97 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 },
             }
 
+        def normalize_message(item: Any) -> dict[str, Any] | None:
+            if not isinstance(item, dict):
+                return None
+            raw_items = item.get("items") if isinstance(item.get("items"), list) else []
+            normalized_items = [entry for entry in (normalize_item(raw_item) for raw_item in raw_items[:32]) if entry]
+            normalized_items.sort(
+                key=lambda entry: (
+                    self._float(entry.get("ts")),
+                    self._int(entry.get("trace_seq")),
+                )
+            )
+            if not normalized_items:
+                return None
+            first_ts = self._float(item.get("first_ts")) or min(self._float(entry.get("ts")) for entry in normalized_items)
+            last_ts = self._float(item.get("last_ts")) or max(self._float(entry.get("ts")) for entry in normalized_items)
+            kinds: list[str] = []
+            for entry in normalized_items:
+                kind = self._single_line(entry.get("kind"), 20)
+                if kind and kind not in kinds:
+                    kinds.append(kind)
+            message_preview = self._single_line(item.get("message_preview"), 260)
+            if not message_preview:
+                message_preview = next(
+                    (
+                        self._single_line(
+                            entry.get("metadata", {}).get("触发消息")
+                            or entry.get("preview")
+                            or entry.get("title"),
+                            260,
+                        )
+                        for entry in normalized_items
+                        if isinstance(entry, dict)
+                    ),
+                    "",
+                )
+            return {
+                "trace_id": self._single_line(item.get("trace_id"), 80),
+                "session": self._single_line(item.get("session"), 160) or self._single_line(normalized_items[-1].get("session"), 160),
+                "sender_label": self._single_line(item.get("sender_label"), 80),
+                "message_preview": message_preview,
+                "first_ts": first_ts,
+                "first_time": self.plugin._format_timestamp_elapsed(first_ts),
+                "last_ts": last_ts,
+                "time": self.plugin._format_timestamp_elapsed(last_ts),
+                "item_count": len(normalized_items),
+                "module_count": sum(len(entry.get("modules") or []) for entry in normalized_items),
+                "kinds": kinds,
+                "items": normalized_items,
+            }
+
         result: dict[str, Any] = {}
         for kind in ("tts", "proactive", "passive", "request"):
             items = raw.get(kind) if isinstance(raw.get(kind), list) else []
             limit = 8 if kind == "tts" else 5
             normalized = [entry for entry in (normalize_item(item) for item in items[:limit]) if entry]
             result[kind] = normalized
+        messages = [entry for entry in (normalize_message(item) for item in raw_events[:10]) if entry]
+        if not messages:
+            legacy_messages: list[dict[str, Any]] = []
+            for kind in ("request", "passive", "proactive", "tts"):
+                for index, item in enumerate(result.get(kind, [])):
+                    if not isinstance(item, dict):
+                        continue
+                    ts = self._float(item.get("ts"))
+                    legacy_messages.append(
+                        {
+                            "trace_id": self._single_line(item.get("trace_id"), 80) or f"legacy-{kind}-{index}",
+                            "session": self._single_line(item.get("session"), 160),
+                            "sender_label": self._single_line(item.get("metadata", {}).get("发送者"), 80),
+                            "message_preview": self._single_line(
+                                item.get("metadata", {}).get("触发消息")
+                                or item.get("preview")
+                                or item.get("title"),
+                                260,
+                            ),
+                            "first_ts": ts,
+                            "first_time": self.plugin._format_timestamp_elapsed(ts),
+                            "last_ts": ts,
+                            "time": self.plugin._format_timestamp_elapsed(ts),
+                            "item_count": 1,
+                            "module_count": len(item.get("modules") or []),
+                            "kinds": [kind],
+                            "items": [item],
+                        }
+                    )
+            legacy_messages.sort(key=lambda entry: self._float(entry.get("last_ts")), reverse=True)
+            messages = legacy_messages[:10]
+        else:
+            messages.sort(key=lambda entry: self._float(entry.get("last_ts")), reverse=True)
+        result["messages"] = messages[:10]
+        result["message_total"] = len(result["messages"])
         result["total"] = (
             len(result.get("tts", []))
             + len(result.get("proactive", []))
@@ -2329,6 +2484,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "当前时段主动已足够,已避开扎堆",
             "朋友主动已按日内节奏延后",
             "已有更早主动候选",
+            "用户在该问候窗口内已经活跃过",
+            "潜在念头窗口已过期",
+            "多来源合并",
+            "群聊分享候选已过期",
         }
         if text in exact_normal:
             return True
@@ -2346,6 +2505,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "间隔",
             "频率",
             "调度过滤",
+            "窗口已过期",
+            "已经活跃过",
+            "多来源合并",
+            "候选已过期",
         )
         return any(token in text for token in normal_tokens)
 
@@ -2369,6 +2532,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "额度",
             "低分",
             "未达到阈值",
+            "窗口已过期",
+            "已经活跃过",
+            "多来源合并",
+            "候选已过期",
         )
         if any(token in text for token in normal_tokens):
             return False
@@ -2443,12 +2610,16 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             item for item in proactive_candidates.get("items", [])
             if "photo_text" in str(item.get("action") or "") and str(item.get("status") or "") == "blocked"
         ]
+        photo_blocked_abnormal = [
+            item for item in photo_blocked
+            if not self._proactive_candidate_block_is_normal(self._single_line(item.get("note"), 180))
+        ]
         if not photo_enabled:
             add("warn", "主动带图功能未开启", "enable_photo_text_action 关闭时不会生成主动图片。", "到功能开关打开主动拍照/生图", "config")
         elif not photo_available:
             add("warn", "主动带图后端或额度不可用", "生图后端不可用、每日生图额度用完，或当前对象不允许 photo_text。", "检查生图后端、每日生图上限和用户关系角色", "modules")
-        elif photo_blocked:
-            add("warn", "近期带图候选被拦截", self._single_line(photo_blocked[0].get("note"), 160) or "最近 photo_text 候选没有进入发送。", "到主动页筛选 photo_text", "proactive")
+        elif photo_blocked_abnormal:
+            add("warn", "近期带图候选被拦截", self._single_line(photo_blocked_abnormal[0].get("note"), 160) or "最近 photo_text 候选没有进入发送。", "到主动页筛选 photo_text", "proactive")
         else:
             add("ok", "主动带图链路可尝试", "开关和可用性检查通过；是否出现取决于主动动机、天气/日程和候选权重。", "", "proactive")
 
@@ -6106,6 +6277,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "external_image_api_timeout_seconds",
             "photo_generation_style",
             "photo_generation_style_custom_prompt",
+            "photo_generation_fixed_prompt",
+            "photo_generation_scene_presets",
             "private_image_vision_wait_seconds",
             "enable_private_image_gif_enhancement",
             "private_image_gif_max_frames",
@@ -6926,6 +7099,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "EXTERNAL_IMAGE_API_KEY": "external_image_api_key",
             "EXTERNAL_IMAGE_API_MODEL": "external_image_api_model",
             "external_image_api_size": "external_image_api_size",
+            "photo_generation_style": "photo_generation_style",
+            "photo_generation_style_custom_prompt": "photo_generation_style_custom_prompt",
+            "photo_generation_fixed_prompt": "photo_generation_fixed_prompt",
+            "photo_generation_scene_presets": "photo_generation_scene_presets",
         }
         for key, attr in mapping.items():
             value = self._config_get(key)
@@ -7314,6 +7491,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "external_image_api_timeout_seconds",
             "photo_generation_style",
             "photo_generation_style_custom_prompt",
+            "photo_generation_fixed_prompt",
+            "photo_generation_scene_presets",
             "private_image_vision_wait_seconds",
             "enable_private_image_gif_enhancement",
             "private_image_gif_max_frames",
@@ -7651,6 +7830,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             return lang if lang in {"ja", "zh", "en"} else "ja"
         if key in {"tts_extra_prompt", "main_user_mention_voice_prompt"}:
             return str(value or "").strip()[:1200]
+        if key in {"photo_generation_fixed_prompt", "photo_generation_scene_presets"}:
+            return str(value or "").strip()[:5000]
         if key == "tts_conversion_provider_id":
             return str(value or "").strip()[:160]
         if key == "tts_session_min_interval_seconds":

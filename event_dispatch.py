@@ -641,6 +641,108 @@ class EventDispatchMixin:
                 changed = True
         return changed
 
+    def _prompt_injection_trace_id_for_event(self, event: AstrMessageEvent) -> str:
+        cached = _single_line(getattr(event, "private_companion_prompt_trace_id", ""), 80)
+        if cached:
+            return cached
+        session = _single_line(getattr(event, "unified_msg_origin", ""), 160) or self._event_scope_key(event)
+        sender_id = self._event_sender_id(event)
+        message_id = self._event_message_id(event)
+        inbound_ts = self._event_inbound_activity_ts(event)
+        text = self._event_text_for_recall_cache(event, limit=280)
+        seed = "|".join(
+            part
+            for part in (
+                session,
+                sender_id,
+                message_id,
+                f"{inbound_ts:.3f}" if inbound_ts > 0 else "",
+                text,
+            )
+            if part
+        )
+        trace_id = f"evt-{hashlib.sha1(seed.encode('utf-8', errors='ignore')).hexdigest()[:16]}" if seed else f"evt-{uuid.uuid4().hex[:16]}"
+        try:
+            setattr(event, "private_companion_prompt_trace_id", trace_id)
+        except Exception:
+            pass
+        return trace_id
+
+    def _prompt_injection_message_preview_for_event(self, event: AstrMessageEvent) -> str:
+        cached = _single_line(getattr(event, "private_companion_prompt_trace_preview", ""), 220)
+        if cached:
+            return cached
+        text = self._event_text_for_recall_cache(event, limit=280)
+        if not text:
+            text = _single_line(getattr(event, "message_str", ""), 280)
+        if not text:
+            text = self._event_existing_reply_result_preview(event)
+        preview = _single_line(text, 220)
+        try:
+            setattr(event, "private_companion_prompt_trace_preview", preview)
+        except Exception:
+            pass
+        return preview
+
+    def _prompt_injection_sender_label_for_event(self, event: AstrMessageEvent) -> str:
+        sender_id = _single_line(self._event_sender_id(event), 80)
+        display_name = _single_line(self._sender_display_name(event), 40)
+        if display_name and sender_id and display_name != sender_id:
+            return f"{display_name}/{sender_id}"
+        return display_name or sender_id
+
+    def _upsert_recent_prompt_injection_event(
+        self,
+        *,
+        trace_id: str,
+        item: dict[str, Any],
+        message_preview: str = "",
+        sender_label: str = "",
+    ) -> None:
+        trace = _single_line(trace_id, 80) or f"trace-{uuid.uuid4().hex[:16]}"
+        preview = _single_line(message_preview, 220) or _single_line(item.get("preview"), 220) or _single_line(item.get("title"), 80)
+        sender = _single_line(sender_label, 80)
+        events = self.data.setdefault("recent_prompt_injection_events", [])
+        if not isinstance(events, list):
+            events = []
+            self.data["recent_prompt_injection_events"] = events
+        target: dict[str, Any] | None = None
+        for entry in events:
+            if isinstance(entry, dict) and _single_line(entry.get("trace_id"), 80) == trace:
+                target = entry
+                break
+        ts = _safe_float(item.get("ts"), _now_ts(), 0.0)
+        copied_item = deepcopy(item)
+        if target is None:
+            target = {
+                "trace_id": trace,
+                "session": _single_line(item.get("session"), 160) or "unknown",
+                "sender_label": sender,
+                "message_preview": preview,
+                "first_ts": ts,
+                "last_ts": ts,
+                "items": [],
+            }
+            events.append(target)
+        else:
+            if not _single_line(target.get("session"), 160):
+                target["session"] = _single_line(item.get("session"), 160) or "unknown"
+            if preview:
+                target["message_preview"] = preview
+            if sender:
+                target["sender_label"] = sender
+            target["first_ts"] = min(_safe_float(target.get("first_ts"), ts, 0.0), ts)
+            target["last_ts"] = max(_safe_float(target.get("last_ts"), ts, 0.0), ts)
+        event_items = target.get("items")
+        if not isinstance(event_items, list):
+            event_items = []
+            target["items"] = event_items
+        copied_item["trace_seq"] = len(event_items)
+        event_items.append(copied_item)
+        del event_items[32:]
+        events.sort(key=lambda entry: _safe_float(entry.get("last_ts"), 0.0, 0.0), reverse=True)
+        del events[10:]
+
     async def _record_prompt_injection_snapshot(
         self,
         *,
@@ -651,6 +753,9 @@ class EventDispatchMixin:
         mode: str = "",
         metadata: dict[str, Any] | None = None,
         modules: list[dict[str, Any]] | None = None,
+        trace_id: str = "",
+        message_preview: str = "",
+        sender_label: str = "",
     ) -> None:
         content = str(text or "").strip()
         kind = _single_line(kind, 20) or "unknown"
@@ -702,6 +807,12 @@ class EventDispatchMixin:
                     root["tts"] = tts_items
                 tts_items.insert(0, item)
                 del tts_items[8:]
+            self._upsert_recent_prompt_injection_event(
+                trace_id=trace_id,
+                item=item,
+                message_preview=message_preview,
+                sender_label=sender_label,
+            )
         try:
             self._schedule_data_save(delay=2.0)
         except Exception:

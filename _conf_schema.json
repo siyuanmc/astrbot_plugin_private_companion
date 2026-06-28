@@ -5,9 +5,9 @@
     "hint": "插件身份、目标对象、主模型、Token 限额和全局运行模式。",
     "items": {
       "enable_proactive_only_mode": {
-        "description": "主动消息专用模式",
+        "description": "关闭被动能力",
         "type": "bool",
-        "hint": "默认关闭。开启后只保留插件主动私聊的日程、生成和发送；普通私聊/群聊消息不再进入本插件的被动增强、图片/转发处理、防抖、群聊观察或提示词注入。用户回复主动消息时仍会轻量记录为已回应。",
+        "hint": "默认关闭。开启后只保留插件主动私聊的日程、生成和发送；普通私聊/群聊消息不再进入本插件的被动增强、图片/转发处理、防抖、群聊观察、TTS 后处理或提示词注入。用户回复主动消息时仍会轻量记录为已回应。适合只想使用主动陪伴，或担心被动链路误接管、误识别的场景。",
         "default": false
       },
       "bot_name": {
@@ -195,7 +195,7 @@
     "default": false
   },
   "enable_proactive_only_mode": {
-    "description": "Legacy flat config: 主动消息专用模式",
+    "description": "Legacy flat config: 关闭被动能力",
     "type": "bool",
     "default": false,
     "invisible": true
@@ -2453,6 +2453,12 @@
     "default": "",
     "invisible": true
   },
+  "photo_generation_scene_presets": {
+    "description": "Legacy flat config: 生图场景预设",
+    "type": "string",
+    "default": "",
+    "invisible": true
+  },
   "enable_screen_glance_action": {
     "description": "Legacy flat config: 允许主动看一眼屏幕",
     "type": "bool",
@@ -4409,9 +4415,9 @@
         }
       },
       "response_review_max_chars": {
-        "description": "被动 full 模式长度阈值",
+        "description": "被动回复长度阈值",
         "type": "int",
-        "hint": "仅在复核模式为 full 时，普通被动回复才会因偏长参与模型改写；默认模式不会因普通偏长而额外调用模型。",
+        "hint": "用于判断普通被动回复是否偏长。默认模式下，短闲聊被扩写成关心清单、建议清单或天气小作文时也会进入复核；full 模式会更积极地复核普通偏长回复。",
         "slider": {
           "min": 80,
           "max": 900,
@@ -6998,6 +7004,15 @@
         "description": "生图固定附加提示词",
         "type": "string",
         "hint": "可选。所有生图提交后端前都会追加这段固定提示词，包括主动随手拍、每日穿搭、自然语言文生图和引用/携带图片改图。适合放固定画质、角色细节、安全区或负面约束；留空不追加。",
+        "default": "",
+        "condition": {
+          "enable_photo_text_action": true
+        }
+      },
+      "photo_generation_scene_presets": {
+        "description": "生图场景预设",
+        "type": "string",
+        "hint": "可选。格式参考通用生图插件，一行一个：预设名:提示词。内置已有角色自拍、COS自拍、镜前穿搭、头像特写、房间日常、可拍画面、表情包场景；自定义同名会覆盖内置。主动拍照、每日穿搭和自然语言生图会按请求自动套用匹配预设，并写入最近生图日志。",
         "default": "",
         "condition": {
           "enable_photo_text_action": true
