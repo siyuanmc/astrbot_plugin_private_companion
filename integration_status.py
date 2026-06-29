@@ -693,6 +693,13 @@ class IntegrationStatusMixin:
             return ""
         preferred = _single_line(getattr(self, "photo_generation_backend", ""), 30) or "auto"
         external_model = _single_line(getattr(self, "external_image_api_model", ""), 80)
+        platform = "openai"
+        resolver = getattr(self, "_resolved_external_image_api_platform", None)
+        if callable(resolver):
+            try:
+                platform = str(resolver() or "openai")
+            except Exception:
+                platform = "openai"
         comfyui_workflow = _single_line(getattr(self, "comfyui_text2img_workflow_name", ""), 60)
         selfie_workflow = _single_line(getattr(self, "comfyui_selfie_workflow_name", ""), 60)
         comfyui_available = bool(getattr(self, "_comfyui_photo_available", lambda: False)())
@@ -708,20 +715,24 @@ class IntegrationStatusMixin:
             suffix = f" / {', '.join(labels)}" if labels else ""
             return f"ComfyUI{suffix}"
 
+        def external_label() -> str:
+            prefix = "阿里云百炼" if platform == "bailian" else "在线图片 API"
+            return f"{prefix} / {external_model or '未填模型'}"
+
         if preferred == "external":
-            return f"在线图片 API / {external_model or '未填模型'}"
+            return external_label()
         if preferred == "comfyui":
             return comfyui_label()
         if preferred == "sdgen":
             return "SDGen"
         if external_available:
-            return f"auto -> 在线图片 API / {external_model or '图片模型'}"
+            return f"auto -> {external_label()}"
         if comfyui_available:
             return f"auto -> {comfyui_label()}"
         if sdgen_available:
             return "auto -> SDGen"
         if external_model:
-            return f"auto（候选：在线图片 API / {external_model}）"
+            return f"auto（候选：{external_label()}）"
         return "auto（当前无可用生图后端）"
 
     async def _format_environment_perception(self, event: AstrMessageEvent) -> str:

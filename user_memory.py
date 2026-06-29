@@ -2475,20 +2475,11 @@ target 只能是 bot/self/other/ambiguous/none。
         flags = self._response_review_flags(response_text, user, inbound_text=inbound_text)
         if not flags:
             return response_text
-        if "repeats_last_bot_message" in flags:
-            fallback = self._fallback_non_repeating_reply(inbound_text)
-            if fallback:
-                logger.info(
-                    "[PrivateCompanion] 回复本地防复读生效: before=%s after=%s",
-                    _single_line(response_text, 120),
-                    _single_line(fallback, 120),
-                )
-                return fallback
-        if not self.enable_response_self_review:
-            return response_text
         review_mode = str(getattr(self, "response_review_mode", "severe_only") or "severe_only").strip().lower()
         if review_mode not in {"local_only", "severe_only", "full"}:
             review_mode = "severe_only"
+        if not self.enable_response_self_review:
+            return response_text
         if review_mode == "local_only":
             return response_text
         severe_flags = self._response_review_severe_flags(flags)
@@ -2497,7 +2488,7 @@ target 只能是 bot/self/other/ambiguous/none。
         effective_flags = severe_flags if review_mode == "severe_only" else flags
         lightweight_checker = getattr(self, "_is_lightweight_private_passive_inbound", None)
         if callable(lightweight_checker) and lightweight_checker(inbound_text):
-            critical_flags = {"too_long", "meta_or_assistant", "over_structured", "leaks_internal"}
+            critical_flags = {"too_long", "meta_or_assistant", "over_structured", "leaks_internal", "repeats_last_bot_message"}
             if not any(flag in critical_flags for flag in effective_flags):
                 return response_text
         intent = user.get("intent_profile") if isinstance(user.get("intent_profile"), dict) else {}
@@ -2534,12 +2525,20 @@ target 只能是 bot/self/other/ambiguous/none。
 - 如果问题是表达学习过头、异常断句或照抄用户样本,保留意思,改成自然中文私聊；不要为了模仿口癖而加奇怪逗号、空格、断句或复读用户原话
 """.strip()
         started = time.perf_counter()
-        rewritten = await self._llm_call(
-            prompt,
-            max_tokens=260,
-            provider_id=self._task_provider(self.response_review_provider_id, self.mai_style_provider_id),
-            task="response_review",
-        )
+        try:
+            rewritten = await self._llm_call(
+                prompt,
+                max_tokens=260,
+                provider_id=self._task_provider(self.response_review_provider_id, self.mai_style_provider_id),
+                task="response_review",
+            )
+        except Exception as exc:
+            logger.warning(
+                "[PrivateCompanion] 被动回复模型自检失败,保留原回复: flags=%s error=%s",
+                ",".join(effective_flags),
+                _single_line(exc, 160),
+            )
+            return response_text
         logger.info(
             "[PrivateCompanion] 被动回复模型自检完成: mode=%s flags=%s elapsed=%dms",
             review_mode,
@@ -2555,8 +2554,11 @@ target 只能是 bot/self/other/ambiguous/none。
         if re.search(r"(提示词|系统|JSON|改写后|以下是)", cleaned, re.IGNORECASE):
             return response_text
         if last_message and self._text_repeats_recent_message(cleaned, last_message):
-            fallback = self._fallback_non_repeating_reply(inbound_text)
-            return fallback or response_text
+            logger.info(
+                "[PrivateCompanion] 被动回复模型自检后仍复读,不启用本地兜底: before=%s",
+                _single_line(cleaned, 120),
+            )
+            return response_text
         if (
             any(flag in effective_flags for flag in ("casual_overexplained", "weather_overexplained"))
             and len(cleaned) > self._casual_reply_review_limit(inbound_text)
@@ -2599,13 +2601,6 @@ target 只能是 bot/self/other/ambiguous/none。
         return True
 
     def _fallback_overlong_casual_reply(self, inbound_text: str, response_text: str) -> str:
-        inbound = str(inbound_text or "").strip()
-        if re.search(r"(有伞|带伞|拿伞|伞在|带了)", inbound):
-            return "那就好，路上别被雨淋到。"
-        if re.search(r"(下雨|要雨|雨|变天|天气|降温|冷|热|风大)", inbound):
-            return "嗯，像是要变天了，出门记得带伞。"
-        if re.search(r"(困|睡|晚安|累|歇)", inbound):
-            return "嗯，先歇会儿吧。"
         cleaned = _strip_internal_message_blocks(str(response_text or "")).strip()
         parts = [part.strip() for part in re.split(r"(?<=[。！？!?…])\s*|\n+", cleaned) if part.strip()]
         for part in parts:
@@ -3366,18 +3361,6 @@ open_loops 只写之后仍需要回头处理、确认、兑现的事；普通“
                     if shared_chunks >= 2:
                         return True
         return False
-
-    def _fallback_non_repeating_reply(self, inbound_text: str) -> str:
-        inbound = _single_line(inbound_text, 120)
-        if not inbound:
-            return "嗯，我在。"
-        if any(token in inbound for token in ("吃", "觅食", "饭", "饿", "饱")):
-            return "还在觅啊，那你先把饭解决完，别边吃边赶。"
-        if any(token in inbound for token in ("忙", "事", "安排", "下午")):
-            return "那先按你那边的节奏来，我不催你。"
-        if len(inbound) <= 8:
-            return "嗯嗯，接到。"
-        return "懂了，那我先顺着你这边来。"
 
     def _fallback_relationship_level(
         self,

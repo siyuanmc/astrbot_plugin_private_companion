@@ -2671,13 +2671,24 @@ class PrivateImageMixin:
                     _single_line(reply, 180),
                 )
                 if not reply:
-                    reply_source = "fallback_static"
-                    reply = (
-                        f"我看到了，{_single_line(vision_text, 120)}"
-                        if vision_text
-                        else "我看到你发了图片，但这边暂时没看清内容。你补一句想让我看哪里就好。"
+                    logger.warning(
+                        "[PrivateCompanion] 私聊单图原生链路与兜底 LLM 均未生成有效回复,不启用本地静态兜底: user=%s images=%s has_vision=%s",
+                        user_id,
+                        len(images),
+                        bool(vision_text),
                     )
-                logger.warning("[PrivateCompanion] 私聊单图原生链路回复为空,已使用兜底回复: user=%s images=%s", user_id, len(images))
+                    self._record_llm_usage(
+                        provider_id="framework",
+                        task="private_image_only_framework",
+                        prompt=prompt,
+                        completion="",
+                        elapsed_ms=int((time.time() - start) * 1000),
+                        success=False,
+                        resp=llm_resp,
+                        budget_exempt=True,
+                    )
+                    return
+                logger.warning("[PrivateCompanion] 私聊单图原生链路回复为空,已使用兜底 LLM 回复: user=%s images=%s", user_id, len(images))
             self._record_llm_usage(
                 provider_id="framework",
                 task="private_image_only_framework",

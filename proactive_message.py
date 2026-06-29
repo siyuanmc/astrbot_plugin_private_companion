@@ -1196,8 +1196,8 @@ class ProactiveMessageMixin:
         current_time = self._environment_now().strftime("%Y-%m-%d %H:%M")
         prompt = self.proactive_prompt_template or self._default_proactive_prompt_template()
         worldview_adaptation = ""
-        reason_text = _REASON_TEXT.get(reason, reason)
-        action_text = _ACTION_TEXT.get(action.split("+")[0], action)
+        reason_text = _REASON_TEXT.get(reason, reason).replace("{name}", name)
+        action_text = _ACTION_TEXT.get(action.split("+")[0], action).replace("{name}", name)
         replacements = {
             "{{name}}": name,
             "{{reason}}": reason_text,
@@ -1337,8 +1337,8 @@ class ProactiveMessageMixin:
     def _fallback_unexecuted_relay_reply(self, inbound_text: str) -> str:
         inbound = _single_line(inbound_text, 160)
         if any(token in inbound for token in ("替我", "帮我", "你去", "跟他", "和他", "跟她", "和她", "说一声", "转告", "转达")):
-            return "这个不能只嘴上答应啦。你把要带的话和对象说清楚，我再走转述。"
-        return "这个我不能假装已经去说了。要转述的话，你把对象和要带的话说清楚。"
+            return "我不能假装已经说过。你把对象和要带的话再说清楚一点。"
+        return "我不能假装已经替你说过。要我带话的话，你把对象和内容说清楚。"
 
     def _proactive_time_guard_hint(self, reason: str, current_item: dict[str, Any] | None) -> str:
         activity = _single_line((current_item or {}).get("activity"), 80)
@@ -2079,6 +2079,7 @@ class ProactiveMessageMixin:
         leak_clause_patterns = (
             r"[，,、\s]*(?:刚[^，。！？\n]{0,24})?(?:就|还是)?想(?:先)?(?:跟|和)?你(?:说早安|说早|说一句|说点什么|打个招呼|聊两句|说话)[^，。！？\n]*",
             r"[，,、\s]*(?:中午|晚上|早上|这会儿|刚才|刚刚)?[^，。！？\n]{0,18}(?:就|又|还是)?想(?:顺手)?(?:来)?(?:找你|跟你打个照面|和你打个照面|往你这边冒个头)[^，。！？\n]*",
+            r"[，,、\s]*(?:刚刚|刚才|这会儿|今天|明明|还是)?[^，。！？\n]{0,24}想(?:和|给|问|提醒|确认|看看)?用户[^，。！？\n]*",
             r"[，,、\s]*(?:怕|担心)[^，。！？\n]{0,16}(?:太早|太晚|打扰|吵到|烦到)[^，。！？\n]*",
             r"[，,、\s]*(?:就)?先(?:收住|忍住|憋住)[^，。！？\n]*",
             r"[，,、\s]*(?:结果|后来)?[^，。！？\n]{0,12}(?:绕了一圈|转了一圈|想了半天)[^，。！？\n]*",
@@ -2533,6 +2534,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
 
 要求：
 - 只输出要发送的正文
+- 不要把“用户”“对方”“收信人”这类内部称呼写进正文；需要称呼时用自然的“你”或对方昵称
 - 不要写成“好呀/确实/我也觉得/刚看到/你刚刚问我/你来找我了”
 - 不要把历史消息当成当前正在发生的对话
 - 没有真实图片或工具结果时，不要说已经发图、看图、转述或执行动作
@@ -4414,7 +4416,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             return f"path={_single_line(path_text, 120)} exists=unknown size=-"
 
     def _photo_generation_backend_config_summary(self) -> str:
-        external_base = _single_line(getattr(self, "external_image_api_base_url", ""), 120)
+        external_base = _single_line(self._normalized_external_image_api_base_url(), 120)
         if external_base:
             external_base = re.sub(r"([?&](?:key|token|access_token|api_key)=)[^&]+", r"\1***", external_base, flags=re.I)
         return (
@@ -4422,6 +4424,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             f"comfyui={self._comfyui_photo_available()} "
             f"sdgen={self._sdgen_photo_available()} "
             f"external={self._external_photo_available()} "
+            f"external_platform={self._resolved_external_image_api_platform()} "
             f"external_model={_single_line(getattr(self, 'external_image_api_model', ''), 80) or '-'} "
             f"external_size={_single_line(getattr(self, 'external_image_api_size', ''), 40) or '-'} "
             f"external_base={external_base or '-'}"
@@ -5117,8 +5120,109 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             logger.warning(f"[PrivateCompanion] SDGen 生图失败: {e}", exc_info=True)
             return "", str(e)
 
+    def _resolved_external_image_api_platform(self) -> str:
+        normalizer = getattr(self, "_normalize_external_image_api_platform", None)
+        configured = getattr(self, "external_image_api_platform", "auto")
+        platform = normalizer(configured) if callable(normalizer) else str(configured or "auto").strip().lower()
+        if platform in {"openai", "bailian"}:
+            return platform
+        base = self._normalized_external_image_api_base_url(platform=platform).lower()
+        model = str(getattr(self, "external_image_api_model", "") or "").strip().lower()
+        if any(token in base for token in ("dashscope.aliyuncs.com", "/services/aigc/", "/api/v1/tasks", "model-studio")):
+            return "bailian"
+        if model.startswith(("qwen-image", "wanx", "wan-", "wan2.", "wan2x", "wan")):
+            return "bailian"
+        return "openai"
+
+    def _normalized_external_image_api_base_url(self, value: str = "", *, platform: str = "") -> str:
+        raw = str(value or getattr(self, "external_image_api_base_url", "") or "").strip()
+        if not raw:
+            return ""
+        if platform:
+            resolved_platform = str(platform).strip().lower()
+        else:
+            normalizer = getattr(self, "_normalize_external_image_api_platform", None)
+            configured = getattr(self, "external_image_api_platform", "auto")
+            resolved_platform = normalizer(configured) if callable(normalizer) else str(configured or "auto").strip().lower()
+        parsed = urlparse(raw)
+        host = (parsed.netloc or "").strip().lower()
+        path = (parsed.path or "").strip()
+
+        console_hosts = {
+            "bailian.console.aliyun.com",
+            "modelstudio.console.aliyun.com",
+            "bailian.console.alibabacloud.com",
+            "modelstudio.console.alibabacloud.com",
+        }
+        shared_host_by_region = {
+            "cn-beijing": "dashscope.aliyuncs.com",
+            "ap-southeast-1": "dashscope-intl.aliyuncs.com",
+            "us-east-1": "dashscope-us.aliyuncs.com",
+            "us-virginia": "dashscope-us.aliyuncs.com",
+        }
+
+        def _root_with_host(target_host: str) -> str:
+            if not target_host:
+                return raw.rstrip("/")
+            scheme = parsed.scheme or "https"
+            suffix = "/compatible-mode/v1" if resolved_platform == "openai" else "/api/v1"
+            return f"{scheme}://{target_host}{suffix}"
+
+        if host in console_hosts:
+            region = ""
+            parts = [part for part in path.split("/") if part]
+            if parts:
+                first = parts[0].strip().lower()
+                if re.fullmatch(r"[a-z]{2}(?:-[a-z0-9]+)+", first):
+                    region = first
+            if not region:
+                fragment = str(parsed.fragment or "")
+                region_match = re.search(r"\b(cn-beijing|ap-southeast-1|us-east-1|us-virginia)\b", raw, flags=re.I)
+                if region_match:
+                    region = region_match.group(1).lower()
+                elif fragment:
+                    fragment_match = re.search(r"\b(cn-beijing|ap-southeast-1|us-east-1|us-virginia)\b", fragment, flags=re.I)
+                    if fragment_match:
+                        region = fragment_match.group(1).lower()
+            mapped_host = shared_host_by_region.get(region, "dashscope.aliyuncs.com")
+            return _root_with_host(mapped_host)
+
+        if host in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com", "dashscope-us.aliyuncs.com"} or host.endswith(".maas.aliyuncs.com"):
+            if resolved_platform == "openai":
+                if "/images/" in path or path.endswith("/chat/completions") or "/audio/" in path:
+                    prefix_match = re.match(r"^(.*?/compatible-mode/v1)(?:/.*)?$", path, flags=re.I)
+                    prefix = prefix_match.group(1) if prefix_match else "/compatible-mode/v1"
+                    return f"{parsed.scheme or 'https'}://{host}{prefix}"
+                return f"{parsed.scheme or 'https'}://{host}/compatible-mode/v1"
+            if path.startswith("/api/v1"):
+                api_root = re.match(r"^(.*?/api/v1)(?:/.*)?$", path, flags=re.I)
+                if api_root:
+                    return f"{parsed.scheme or 'https'}://{host}{api_root.group(1)}"
+            return f"{parsed.scheme or 'https'}://{host}/api/v1"
+
+        if resolved_platform == "bailian":
+            if "/compatible-mode/v1" in raw.lower():
+                return re.sub(r"/compatible-mode/v1(?:/.*)?$", "/api/v1", raw, flags=re.I).rstrip("/")
+            task_root = re.sub(r"/tasks(?:/.*)?$", "", raw, flags=re.I)
+            if task_root != raw:
+                return task_root.rstrip("/")
+        elif resolved_platform == "openai":
+            if re.search(r"/api/v1(?:/services/aigc/.*)?$", raw, flags=re.I):
+                root = re.sub(r"/api/v1(?:/services/aigc/.*)?$", "", raw, flags=re.I).rstrip("/")
+                return f"{root}/compatible-mode/v1"
+
+        return raw.rstrip("/")
+
+    def _external_image_platform_label(self, platform: str = "") -> str:
+        resolved = str(platform or self._resolved_external_image_api_platform() or "").strip().lower()
+        if resolved == "bailian":
+            return "阿里云百炼"
+        if resolved == "openai":
+            return "OpenAI 兼容"
+        return "在线图片 API"
+
     def _external_image_endpoint(self, endpoint_type: str = "generations") -> str:
-        base = str(self.external_image_api_base_url or "").strip().rstrip("/")
+        base = self._normalized_external_image_api_base_url(platform="openai").rstrip("/")
         if not base:
             return ""
         endpoint_type = str(endpoint_type or "generations").strip().lower()
@@ -5135,13 +5239,126 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             return raw
         return "1024x1024"
 
+    def _sanitize_bailian_image_size(self, override: str = "") -> str:
+        size = self._sanitize_external_image_size(override)
+        return size.replace("x", "*")
+
+    def _bailian_api_root(self) -> str:
+        base = self._normalized_external_image_api_base_url(platform="bailian").rstrip("/")
+        if not base:
+            return ""
+        known_suffixes = (
+            "/services/aigc/multimodal-generation/generation",
+            "/services/aigc/image-generation/generation",
+            "/services/aigc/text2image/image-synthesis",
+        )
+        for suffix in known_suffixes:
+            if base.endswith(suffix):
+                return base[: -len(suffix)]
+        task_match = re.match(r"^(https?://.+?/api/v1)/tasks(?:/.*)?$", base, flags=re.I)
+        if task_match:
+            return task_match.group(1).rstrip("/")
+        api_match = re.match(r"^(https?://.+?/api/v1)(?:/.*)?$", base, flags=re.I)
+        if api_match:
+            return api_match.group(1).rstrip("/")
+        if re.match(r"^https?://[^/]+$", base, flags=re.I):
+            return f"{base}/api/v1"
+        return base if base.endswith("/api/v1") else f"{base}/api/v1"
+
+    def _bailian_multimodal_endpoint(self) -> str:
+        base = str(self.external_image_api_base_url or "").strip().rstrip("/")
+        if base.endswith("/services/aigc/multimodal-generation/generation"):
+            return base
+        root = self._bailian_api_root()
+        return f"{root}/services/aigc/multimodal-generation/generation" if root else ""
+
+    def _bailian_async_generation_endpoints(self) -> list[str]:
+        base = str(self.external_image_api_base_url or "").strip().rstrip("/")
+        root = self._bailian_api_root()
+        candidates: list[str] = []
+        for value in (
+            base if base.endswith("/services/aigc/image-generation/generation") else "",
+            base if base.endswith("/services/aigc/text2image/image-synthesis") else "",
+            f"{root}/services/aigc/image-generation/generation" if root else "",
+            f"{root}/services/aigc/text2image/image-synthesis" if root else "",
+        ):
+            cleaned = str(value or "").strip().rstrip("/")
+            if cleaned and cleaned not in candidates:
+                candidates.append(cleaned)
+        return candidates
+
+    def _bailian_task_endpoint(self, task_id: str) -> str:
+        root = self._bailian_api_root()
+        safe_task_id = quote(str(task_id or "").strip(), safe="")
+        return f"{root}/tasks/{safe_task_id}" if root and safe_task_id else ""
+
+    def _bailian_prefers_multimodal(self) -> bool:
+        model = str(getattr(self, "external_image_api_model", "") or "").strip().lower()
+        return "qwen-image" in model or "image-edit" in model
+
+    async def _reference_image_to_data_url(self, reference_image_path: str) -> str:
+        path = Path(str(reference_image_path or ""))
+        if not path.exists() or not path.is_file():
+            return ""
+        suffix = path.suffix.lower()
+        mime_type = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+        }.get(suffix)
+        if not mime_type:
+            return ""
+        image_bytes = await asyncio.to_thread(path.read_bytes)
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+
+    async def _materialize_external_image_value(
+        self,
+        image_value: Any,
+        *,
+        session_key: str,
+        success_note: str = "ok",
+    ) -> tuple[str, str]:
+        if isinstance(image_value, dict):
+            image_value = image_value.get("url") or image_value.get("image") or image_value.get("image_url") or ""
+        raw = str(image_value or "").strip()
+        if not raw:
+            return "", "图片结果为空"
+        if raw.lower().startswith("data:image") and "," in raw:
+            header, encoded = raw.split(",", 1)
+            mime_match = re.match(r"data:(image/[a-z0-9.+-]+);base64$", header.strip(), flags=re.I)
+            ext = ".png"
+            if mime_match:
+                mime_type = mime_match.group(1).lower()
+                if "jpeg" in mime_type or "jpg" in mime_type:
+                    ext = ".jpg"
+                elif "webp" in mime_type:
+                    ext = ".webp"
+            image_bytes = base64.b64decode(encoded)
+            saved = await self._save_external_generated_image(image_bytes, session_key=session_key, ext=ext)
+            return saved, success_note if saved else "保存在线图片失败"
+        if re.fullmatch(r"[A-Za-z0-9+/=\\s]+", raw) and len(raw) > 128:
+            try:
+                image_bytes = base64.b64decode(raw)
+                saved = await self._save_external_generated_image(image_bytes, session_key=session_key, ext=".png")
+                if saved:
+                    return saved, success_note
+            except Exception:
+                pass
+        saved, note = await self._download_external_image_url(raw, session_key=session_key)
+        return saved, success_note if saved else note
+
     def _external_image_model_misconfiguration_note(self) -> str:
         model = _single_line(getattr(self, "external_image_api_model", ""), 120)
         if not model:
             return "未配置在线图片模型"
         lowered = model.lower()
-        image_tokens = ("image", "img", "dall", "flux", "sd", "stable-diffusion", "midjourney", "mj", "kolors", "wanx")
+        platform = self._resolved_external_image_api_platform()
+        image_tokens = ("image", "img", "dall", "flux", "sd", "stable-diffusion", "midjourney", "mj", "kolors", "wanx", "wan")
         text_model_prefixes = ("gpt-", "claude", "gemini", "deepseek", "qwen", "glm", "moonshot", "kimi", "yi-", "doubao")
+        if platform == "bailian" and (lowered.startswith("qwen-image") or lowered.startswith("wan")):
+            return ""
         if lowered.startswith(text_model_prefixes) and not any(token in lowered for token in image_tokens):
             return f"在线图片模型填成了文本/聊天模型：{model}。请改成该平台的图片模型名，例如支持 /images/generations 或 /images/edits 的模型。"
         return ""
@@ -5155,6 +5372,18 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             )
         prefix = "参考图接口" if reference else ""
         return f"{prefix}HTTP {status}: {_single_line(text, 180)}"
+
+    def _external_image_timeout_note(self, *, reference: bool = False, download: bool = False, label: str = "") -> str:
+        timeout_seconds = _safe_int(getattr(self, "external_image_api_timeout_seconds", 180), 180, 1)
+        if label:
+            target = label
+        elif download:
+            target = "下载在线图片结果"
+        elif reference:
+            target = "在线图片 API 参考图接口"
+        else:
+            target = "在线图片 API"
+        return f"{target}超时（{timeout_seconds}秒内没有返回），可调高在线生图超时秒数或切换/回退本地生图后端"
 
     async def _save_external_generated_image(
         self,
@@ -5214,8 +5443,249 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 ext = ".webp"
             path = await self._save_external_generated_image(content, session_key=session_key, ext=ext)
             return path, "ok" if path else "保存下载图片失败"
+        except asyncio.TimeoutError:
+            note = self._external_image_timeout_note(download=True)
+            logger.info("[PrivateCompanion] 下载在线生图结果超时: url=%s note=%s", _single_line(target, 180), note)
+            return "", note
         except Exception as e:
             logger.warning(f"[PrivateCompanion] 下载在线生图结果失败: {e}", exc_info=True)
+            return "", str(e)
+
+    async def _run_bailian_multimodal_photo_generation(
+        self,
+        prompt_text: str,
+        *,
+        session_key: str,
+        reference_image_path: str = "",
+        image_size: str = "",
+    ) -> tuple[str, str]:
+        endpoint = self._bailian_multimodal_endpoint()
+        if not endpoint:
+            return "", "未配置百炼 API 地址"
+        try:
+            import aiohttp
+
+            content: list[dict[str, Any]] = [{"type": "text", "text": prompt_text}]
+            used_reference = False
+            if reference_image_path:
+                reference_value = reference_image_path
+                if not re.match(r"^https?://", reference_value, flags=re.I):
+                    reference_value = await self._reference_image_to_data_url(reference_value)
+                if reference_value:
+                    content.append({"type": "image", "image": reference_value})
+                    used_reference = True
+            payload = {
+                "model": self.external_image_api_model,
+                "input": {"messages": [{"role": "user", "content": content}]},
+                "parameters": {"size": self._sanitize_bailian_image_size(image_size)},
+            }
+            headers = {
+                "Authorization": f"Bearer {self.external_image_api_key}",
+                "Content-Type": "application/json",
+            }
+            timeout = aiohttp.ClientTimeout(total=float(self.external_image_api_timeout_seconds))
+            logger.info(
+                "[PrivateCompanion] 百炼多模态生图提交: endpoint=%s model=%s size=%s reference=%s prompt=%s",
+                _single_line(endpoint, 160),
+                _single_line(self.external_image_api_model, 80),
+                _single_line(payload["parameters"]["size"], 40),
+                used_reference,
+                _single_line(prompt_text, 180),
+            )
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(endpoint, headers=headers, json=payload) as response:
+                    text = await response.text()
+                    logger.info(
+                        "[PrivateCompanion] 百炼多模态生图响应: status=%s chars=%s preview=%s",
+                        response.status,
+                        len(text or ""),
+                        _single_line(text, 220),
+                    )
+                    if response.status >= 400:
+                        return "", f"百炼多模态生图 HTTP {response.status}: {_single_line(text, 180)}"
+            data = self._extract_json_payload(text) if text else {}
+            if not isinstance(data, dict):
+                return "", "百炼多模态生图返回格式无效"
+            output = data.get("output") if isinstance(data.get("output"), dict) else {}
+            choices = output.get("choices")
+            if not isinstance(choices, list) or not choices:
+                return "", "百炼多模态生图未返回 choices"
+            first_choice = choices[0] if isinstance(choices[0], dict) else {}
+            message = first_choice.get("message") if isinstance(first_choice.get("message"), dict) else {}
+            items = message.get("content")
+            if isinstance(items, dict):
+                items = [items]
+            if not isinstance(items, list):
+                return "", "百炼多模态生图未返回图片内容"
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                image_value = (
+                    item.get("image")
+                    or item.get("image_url")
+                    or item.get("url")
+                    or (item.get("result") if isinstance(item.get("result"), str) else "")
+                )
+                if image_value:
+                    note = "ok；已使用本地人设参考图" if used_reference else "ok"
+                    return await self._materialize_external_image_value(
+                        image_value,
+                        session_key=session_key,
+                        success_note=note,
+                    )
+            return "", "百炼多模态生图未返回图片地址"
+        except asyncio.TimeoutError:
+            note = self._external_image_timeout_note(label="百炼多模态生图接口")
+            logger.info(
+                "[PrivateCompanion] 百炼多模态生图超时: endpoint=%s model=%s timeout=%ss",
+                _single_line(endpoint, 160),
+                _single_line(self.external_image_api_model, 80),
+                _safe_int(getattr(self, "external_image_api_timeout_seconds", 180), 180, 1),
+            )
+            return "", note
+        except Exception as e:
+            logger.warning(f"[PrivateCompanion] 百炼多模态生图失败: {e}", exc_info=True)
+            return "", str(e)
+
+    async def _run_bailian_async_photo_generation(
+        self,
+        prompt_text: str,
+        *,
+        session_key: str,
+        image_size: str = "",
+    ) -> tuple[str, str]:
+        endpoints = self._bailian_async_generation_endpoints()
+        if not endpoints:
+            return "", "未配置百炼 API 地址"
+        try:
+            import aiohttp
+
+            headers = {
+                "Authorization": f"Bearer {self.external_image_api_key}",
+                "Content-Type": "application/json",
+                "X-DashScope-Async": "enable",
+            }
+            payload = {
+                "model": self.external_image_api_model,
+                "input": {"prompt": prompt_text},
+                "parameters": {"size": self._sanitize_bailian_image_size(image_size)},
+            }
+            timeout = aiohttp.ClientTimeout(total=float(self.external_image_api_timeout_seconds))
+            task_id = ""
+            submit_note = ""
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                for endpoint in endpoints:
+                    logger.info(
+                        "[PrivateCompanion] 百炼异步生图提交: endpoint=%s model=%s size=%s prompt=%s",
+                        _single_line(endpoint, 160),
+                        _single_line(self.external_image_api_model, 80),
+                        _single_line(payload["parameters"]["size"], 40),
+                        _single_line(prompt_text, 180),
+                    )
+                    async with session.post(endpoint, headers=headers, json=payload) as response:
+                        text = await response.text()
+                        logger.info(
+                            "[PrivateCompanion] 百炼异步生图响应: status=%s chars=%s preview=%s",
+                            response.status,
+                            len(text or ""),
+                            _single_line(text, 220),
+                        )
+                        if response.status >= 400:
+                            submit_note = f"百炼异步生图 HTTP {response.status}: {_single_line(text, 180)}"
+                            if response.status in {404, 405}:
+                                continue
+                            return "", submit_note
+                    data = self._extract_json_payload(text) if text else {}
+                    if not isinstance(data, dict):
+                        submit_note = "百炼异步生图返回格式无效"
+                        continue
+                    output = data.get("output") if isinstance(data.get("output"), dict) else {}
+                    task_id = str(output.get("task_id") or data.get("task_id") or "").strip()
+                    if task_id:
+                        break
+                    submit_note = _single_line(
+                        output.get("message") or data.get("message") or "百炼异步生图未返回任务 ID",
+                        180,
+                    )
+                if not task_id:
+                    return "", submit_note or "百炼异步生图未返回任务 ID"
+
+                task_endpoint = self._bailian_task_endpoint(task_id)
+                if not task_endpoint:
+                    return "", "无法生成百炼任务查询地址"
+
+                deadline = time.monotonic() + float(self.external_image_api_timeout_seconds)
+                while True:
+                    if time.monotonic() >= deadline:
+                        return "", self._external_image_timeout_note(label="百炼异步生图任务轮询")
+                    async with session.get(task_endpoint, headers={"Authorization": f"Bearer {self.external_image_api_key}"}) as response:
+                        text = await response.text()
+                        logger.info(
+                            "[PrivateCompanion] 百炼任务查询响应: status=%s task=%s chars=%s preview=%s",
+                            response.status,
+                            _single_line(task_id, 80),
+                            len(text or ""),
+                            _single_line(text, 220),
+                        )
+                        if response.status >= 400:
+                            return "", f"百炼任务查询 HTTP {response.status}: {_single_line(text, 180)}"
+                    data = self._extract_json_payload(text) if text else {}
+                    if not isinstance(data, dict):
+                        await asyncio.sleep(2)
+                        continue
+                    output = data.get("output") if isinstance(data.get("output"), dict) else {}
+                    task_status = str(output.get("task_status") or data.get("task_status") or output.get("status") or "").strip().upper()
+                    if task_status in {"SUCCEEDED", "SUCCESS"}:
+                        results = output.get("results")
+                        if isinstance(results, list):
+                            for item in results:
+                                if not isinstance(item, dict):
+                                    continue
+                                image_value = item.get("url") or item.get("image") or item.get("image_url")
+                                if image_value:
+                                    return await self._materialize_external_image_value(
+                                        image_value,
+                                        session_key=session_key,
+                                        success_note="ok",
+                                    )
+                        choices = output.get("choices")
+                        if isinstance(choices, list):
+                            for item in choices:
+                                if not isinstance(item, dict):
+                                    continue
+                                message = item.get("message") if isinstance(item.get("message"), dict) else {}
+                                content = message.get("content")
+                                if isinstance(content, dict):
+                                    content = [content]
+                                if not isinstance(content, list):
+                                    continue
+                                for part in content:
+                                    if not isinstance(part, dict):
+                                        continue
+                                    image_value = part.get("image") or part.get("image_url") or part.get("url")
+                                    if image_value:
+                                        return await self._materialize_external_image_value(
+                                            image_value,
+                                            session_key=session_key,
+                                            success_note="ok",
+                                        )
+                        return "", "百炼任务成功但未返回图片地址"
+                    if task_status in {"FAILED", "FAIL", "CANCELED", "CANCELLED"}:
+                        return "", _single_line(
+                            output.get("message") or data.get("message") or "百炼异步生图任务失败",
+                            180,
+                        )
+                    await asyncio.sleep(2)
+        except asyncio.TimeoutError:
+            note = self._external_image_timeout_note(label="百炼异步生图接口")
+            logger.info(
+                "[PrivateCompanion] 百炼异步生图超时: model=%s timeout=%ss",
+                _single_line(self.external_image_api_model, 80),
+                _safe_int(getattr(self, "external_image_api_timeout_seconds", 180), 180, 1),
+            )
+            return "", note
+        except Exception as e:
+            logger.warning(f"[PrivateCompanion] 百炼异步生图失败: {e}", exc_info=True)
             return "", str(e)
 
     async def _run_external_photo_generation(
@@ -5226,17 +5696,49 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         reference_image_path: str = "",
         image_size: str = "",
     ) -> tuple[str, str]:
+        platform = self._resolved_external_image_api_platform()
         endpoint = self._external_image_endpoint()
+        if platform == "bailian":
+            endpoint = self._bailian_multimodal_endpoint() or self._bailian_api_root()
         if not endpoint:
-            return "", "未配置在线图片 API 地址"
+            return "", f"未配置{self._external_image_platform_label(platform)} API 地址"
         if not self.external_image_api_key:
-            return "", "未配置在线图片 API Key"
+            return "", f"未配置{self._external_image_platform_label(platform)} API Key"
         if not self.external_image_api_model:
-            return "", "未配置在线图片模型"
+            return "", f"未配置{self._external_image_platform_label(platform)}图片模型"
         model_note = self._external_image_model_misconfiguration_note()
         if model_note:
             return "", model_note
         reference_image_path = _single_line(reference_image_path, 260)
+        if platform == "bailian":
+            multimodal_first = bool(reference_image_path) or self._bailian_prefers_multimodal()
+            bailian_note = ""
+            if multimodal_first:
+                image_path, note = await self._run_bailian_multimodal_photo_generation(
+                    prompt_text,
+                    session_key=session_key,
+                    reference_image_path=reference_image_path,
+                    image_size=image_size,
+                )
+                if image_path:
+                    return image_path, note
+                bailian_note = note
+                logger.info(
+                    "[PrivateCompanion] 百炼多模态生图失败,回退异步文生图: %s",
+                    _single_line(note, 180),
+                )
+                if "超时" in str(note or ""):
+                    return "", note
+            image_path, note = await self._run_bailian_async_photo_generation(
+                prompt_text,
+                session_key=session_key,
+                image_size=image_size,
+            )
+            if image_path:
+                return image_path, note
+            if bailian_note:
+                return "", f"{note}；多模态回退原因：{_single_line(bailian_note, 120)}"
+            return "", note
         if reference_image_path and os.path.exists(reference_image_path):
             logger.info(
                 "[PrivateCompanion] 在线图片 API 尝试参考图接口: endpoint=%s model=%s size=%s reference=%s prompt=%s",
@@ -5258,6 +5760,8 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 "[PrivateCompanion] 在线图片 API 参考图生图失败,回退纯文生图: %s",
                 _single_line(note, 180),
             )
+            if "超时" in str(note or ""):
+                return "", note
         try:
             import aiohttp
 
@@ -5321,6 +5825,15 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                     session_key=session_key,
                 )
             return "", "在线图片 API 未返回 url 或 b64_json"
+        except asyncio.TimeoutError:
+            note = self._external_image_timeout_note()
+            logger.info(
+                "[PrivateCompanion] 在线图片 API 生图超时: endpoint=%s model=%s timeout=%ss",
+                _single_line(endpoint, 160),
+                _single_line(self.external_image_api_model, 80),
+                _safe_int(getattr(self, "external_image_api_timeout_seconds", 180), 180, 1),
+            )
+            return "", note
         except Exception as e:
             logger.warning(f"[PrivateCompanion] 在线图片 API 生图失败: {e}", exc_info=True)
             return "", str(e)
@@ -5415,6 +5928,16 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
                 )
                 return saved, ("ok；已使用本地人设参考图" if saved else note)
             return "", "参考图接口未返回 url 或 b64_json"
+        except asyncio.TimeoutError:
+            note = self._external_image_timeout_note(reference=True)
+            logger.info(
+                "[PrivateCompanion] 在线图片 API 参考图生图超时: endpoint=%s model=%s timeout=%ss reference=%s",
+                _single_line(endpoint, 160),
+                _single_line(self.external_image_api_model, 80),
+                _safe_int(getattr(self, "external_image_api_timeout_seconds", 180), 180, 1),
+                _single_line(str(path), 160),
+            )
+            return "", note
         except Exception as e:
             logger.warning(f"[PrivateCompanion] 在线图片 API 参考图生图失败: {e}", exc_info=True)
             return "", str(e)

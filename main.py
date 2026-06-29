@@ -414,7 +414,7 @@ _PROACTIVE_ONLY_TEMP_UNLOCK_RELATED = {
     PLUGIN_NAME,
     "menglimi",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "5.3.7",
+    "5.4.0",
 )
 class PrivateCompanionPlugin(
     CoreStoreMixin,
@@ -762,6 +762,9 @@ class PrivateCompanionPlugin(
         self.local_photo_memory_busy_percent = self._cfg_int(c, "local_photo_memory_busy_percent", 88, 1, 100)
         self.local_photo_defer_minutes = self._cfg_int(c, "local_photo_defer_minutes", 30, 1, 240)
         self._local_photo_load_cache: dict[str, Any] = {}
+        self.external_image_api_platform = self._normalize_external_image_api_platform(
+            self._cfg_str(c, "external_image_api_platform", "auto", "auto")
+        )
         self.external_image_api_base_url = self._cfg_str(c, "EXTERNAL_IMAGE_API_BASE_URL", "")
         self.external_image_api_key = self._cfg_str(c, "EXTERNAL_IMAGE_API_KEY", "")
         self.external_image_api_model = self._cfg_str(c, "EXTERNAL_IMAGE_API_MODEL", "")
@@ -980,10 +983,10 @@ class PrivateCompanionPlugin(
         self.worldbook_self_registration_block_reply = self._cfg_str(
             c,
             "worldbook_self_registration_block_reply",
-            "你是小猪",
+            "这个称呼我不记。",
         )
-        if self.worldbook_self_registration_block_reply == "这个称呼我先不记。":
-            self.worldbook_self_registration_block_reply = "你是小猪"
+        if self.worldbook_self_registration_block_reply in {"这个称呼我先不记。", "你是小猪"}:
+            self.worldbook_self_registration_block_reply = "这个称呼我不记。"
             _set_into_config(c, "worldbook_self_registration_block_reply", self.worldbook_self_registration_block_reply)
         self.worldbook_auto_pending_observations = self._cfg_bool(c, "worldbook_auto_pending_observations", True)
         self.worldbook_member_inject_limit = self._cfg_int(c, "worldbook_member_inject_limit", 6, 1, 20)
@@ -2699,6 +2702,31 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
             "关闭": "off",
         }
         return aliases.get(text, text if text in {"auto", "always", "off"} else "auto")
+
+    @staticmethod
+    def _normalize_external_image_api_platform(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        aliases = {
+            "auto": "auto",
+            "自动": "auto",
+            "openai": "openai",
+            "openai-compatible": "openai",
+            "openai_compatible": "openai",
+            "openai兼容": "openai",
+            "兼容": "openai",
+            "兼容模式": "openai",
+            "external": "openai",
+            "bailian": "bailian",
+            "dashscope": "bailian",
+            "aliyun": "bailian",
+            "alibaba": "bailian",
+            "modelstudio": "bailian",
+            "model_studio": "bailian",
+            "百炼": "bailian",
+            "阿里云百炼": "bailian",
+            "通义万相": "bailian",
+        }
+        return aliases.get(text, text if text in {"auto", "openai", "bailian"} else "auto")
 
     def _detect_astrbot_version(self) -> str:
         candidates: list[Any] = []
@@ -4462,20 +4490,11 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
             if not private_user_active:
                 reason = "private_user_missing" if not isinstance(private_user, dict) else "private_user_disabled"
                 log_bookshelf_secret_skip(reason, private_user if isinstance(private_user, dict) else None)
-                self._release_framework_session_lock_for_event(event, label=reason)
                 logger.info(
-                    "[PrivateCompanion] 非目标/未启用私聊阻止默认主链接管: user=%s reason=%s",
+                    "[PrivateCompanion] 非目标/未启用私聊跳过陪伴被动增强: user=%s reason=%s",
                     _single_line(private_user_id, 40) or "unknown",
                     reason,
                 )
-                empty_result = self._build_result_from_chain([])
-                try:
-                    empty_result.stop_event()
-                except Exception:
-                    pass
-                event.set_result(empty_result)
-                event.stop_event()
-                return
         rest_allowed, rest_reason = await self._should_reply_during_rest(event, is_private_chat=is_private_chat)
         if not rest_allowed:
             log_bookshelf_secret_skip(f"rest_reply_gate:{_single_line(rest_reason, 60)}")
@@ -5889,6 +5908,22 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
                 _single_line(existing_reply_preview, 120),
             )
             return
+        canonical_user_id = self._canonical_private_user_id(user_id)
+        raw_users = self.data.get("users", {})
+        existing_user = raw_users.get(canonical_user_id) if isinstance(raw_users, dict) else None
+        is_configured_or_manual_target = self._is_target_private_user(
+            canonical_user_id,
+            existing_user if isinstance(existing_user, dict) else None,
+        )
+        existing_user_disabled = isinstance(existing_user, dict) and not bool(existing_user.get("enabled", True))
+        if not is_configured_or_manual_target or existing_user_disabled:
+            logger.info(
+                "[PrivateCompanion] 非目标/未启用私聊放行默认主链: user=%s text=%s reason=%s",
+                _single_line(canonical_user_id or user_id, 80),
+                _single_line(text, 120),
+                "disabled" if existing_user_disabled else "not_target",
+            )
+            return
         natural_photo_text = _single_line(event.message_str, 800)
         if natural_photo_text and await self._maybe_handle_natural_language_photo_request(event, user_id, natural_photo_text):
             return
@@ -6363,17 +6398,10 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
 
         if not is_target_user:
             logger.info(
-                "[PrivateCompanion] 非目标/未启用私聊已前置停止默认主链: user=%s text=%s",
+                "[PrivateCompanion] 非目标/未启用私聊放行默认主链: user=%s text=%s",
                 _single_line(user_id, 80),
                 _single_line(text, 120),
             )
-            empty_result = self._build_result_from_chain([])
-            try:
-                empty_result.stop_event()
-            except Exception:
-                pass
-            event.set_result(empty_result)
-            event.stop_event()
             return
         if is_target_user and rest_silence_early_block:
             self._stop_private_reply_after_user_rest_signal(event, user_id, rest_silence_early_text or text)
@@ -6820,7 +6848,7 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
             group_snapshot_high_intensity = dict(high_intensity_state)
         await self._dispatch_due_atrelay_tasks(event, group_id, sender_id)
         if isinstance(registration_payload, dict) and registration_payload.get("blocked_reply"):
-            await self._reply(event, str(registration_payload.get("blocked_reply") or "你是小猪"))
+            await self._reply(event, str(registration_payload.get("blocked_reply") or "这个称呼我不记。"))
             event.stop_event()
             return
         if isinstance(registration_payload, dict) and registration_payload.get("confirm_reply"):

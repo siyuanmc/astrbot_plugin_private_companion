@@ -5471,8 +5471,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         }
         if "providers" in selected:
             package["providers"] = self._migration_provider_snapshot()
-        package["checksum"] = self._migration_checksum(package)
         package["checksum_algorithm"] = "sha256"
+        package["checksum"] = self._migration_checksum(package)
         return package
 
     def _migration_settings_snapshot(self, selected: set[str]) -> dict[str, Any]:
@@ -5592,7 +5592,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
     def _extract_migration_package(self, payload: Any) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise ValueError("导入内容必须是 JSON 对象")
-        package = payload.get("package") if isinstance(payload.get("package"), dict) else payload
+        package = self._unwrap_migration_package_payload(payload)
         if not isinstance(package, dict):
             raise ValueError("没有读取到可导入的配置备份")
         if package.get("kind") != "private_companion_config_backup" or package.get("plugin") != PLUGIN_NAME:
@@ -5601,9 +5601,28 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 raise ValueError("这不是 Private Companion 的配置备份")
             return legacy
         checksum = str(package.get("checksum") or "").strip()
-        if checksum and checksum != self._migration_checksum(package):
+        if checksum and not self._migration_checksum_matches(package, checksum):
             raise ValueError("备份校验失败：文件可能被截断或手动修改过")
         return package
+
+    def _unwrap_migration_package_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        current = payload
+        for _ in range(4):
+            if not isinstance(current, dict):
+                return {}
+            if current.get("kind") == "private_companion_config_backup" or (
+                isinstance(current.get("overview"), dict)
+                and ("users" in current or "groups" in current)
+            ):
+                return current
+            for key in ("package", "data", "payload", "result"):
+                nested = current.get(key)
+                if isinstance(nested, dict):
+                    current = nested
+                    break
+            else:
+                return current
+        return current if isinstance(current, dict) else {}
 
     def _legacy_snapshot_to_migration_package(self, package: dict[str, Any]) -> dict[str, Any] | None:
         overview = package.get("overview") if isinstance(package.get("overview"), dict) else {}
@@ -5652,8 +5671,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 "最近消息、缓存、Token、运行日志和临时队列不会导入",
             ],
         }
-        converted["checksum"] = self._migration_checksum(converted)
         converted["checksum_algorithm"] = "sha256"
+        converted["checksum"] = self._migration_checksum(converted)
         return converted
 
     def _normalize_migration_package(self, package: dict[str, Any]) -> dict[str, Any]:
@@ -5709,7 +5728,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "exported_at": package.get("exported_at"),
             "included_sections": [str(item) for item in package.get("included_sections", []) if str(item).strip()],
             "checksum": str(package.get("checksum") or ""),
-            "checksum_ok": bool(package.get("checksum")) and str(package.get("checksum") or "") == self._migration_checksum(package),
+            "checksum_ok": bool(package.get("checksum")) and self._migration_checksum_matches(package, str(package.get("checksum") or "")),
             "legacy_snapshot": bool(package.get("legacy_snapshot")),
             "settings": settings,
             "features": features,
@@ -5766,8 +5785,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         stamp = time.strftime("%Y%m%d_%H%M%S")
         path = backup_dir / f"private_companion_before_import_{stamp}_{secrets.token_hex(3)}.json"
         if not package.get("checksum"):
-            package["checksum"] = self._migration_checksum(package)
             package["checksum_algorithm"] = "sha256"
+            package["checksum"] = self._migration_checksum(package)
         path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
         return str(path)
 
@@ -5811,7 +5830,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 item["exported_at"] = int(float(package.get("exported_at") or 0))
                 item["included_sections"] = [str(value) for value in package.get("included_sections", []) if str(value).strip()]
                 checksum = str(package.get("checksum") or "")
-                item["checksum_ok"] = bool(checksum) and checksum == self._migration_checksum(package)
+                item["checksum_ok"] = bool(checksum) and self._migration_checksum_matches(package, checksum)
             except Exception as exc:
                 item["error"] = self._single_line(exc, 120)
             items.append(item)
@@ -5823,6 +5842,17 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         payload.pop("checksum_algorithm", None)
         text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _migration_checksum_matches(self, package: dict[str, Any], expected: str) -> bool:
+        checksum = str(expected or "").strip().lower()
+        if not checksum:
+            return False
+        if checksum == self._migration_checksum(package):
+            return True
+        payload = deepcopy(package)
+        payload.pop("checksum", None)
+        text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return checksum == hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     def _plugin_version(self) -> str:
         for source in (self.plugin, getattr(self.plugin, "metadata", None)):
@@ -7032,7 +7062,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             return
         if key == "worldbook_self_registration_block_reply":
             reply = str(value or "").strip()
-            self.plugin.worldbook_self_registration_block_reply = "你是小猪" if reply == "这个称呼我先不记。" else reply
+            self.plugin.worldbook_self_registration_block_reply = "这个称呼我不记。" if reply in {"这个称呼我先不记。", "你是小猪"} else reply
             return
         if key in {"group_repeat_follow_probability", "group_repeat_interrupt_probability", "group_repeat_interrupt_probability_step"}:
             raw = float(value or 0)
@@ -7742,7 +7772,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             return str(value or "").strip()[:1200]
         if key == "worldbook_self_registration_block_reply":
             reply = str(value or "").strip()[:200]
-            return "你是小猪" if reply == "这个称呼我先不记。" else reply
+            return "这个称呼我不记。" if reply in {"这个称呼我先不记。", "你是小猪"} else reply
         if key == "QZONE_COOKIE":
             return str(value or "").replace("\r", ";").replace("\n", ";").strip()[:8000]
         if key in {"group_wakeup_direct_words", "group_wakeup_context_words", "group_wakeup_interest_keywords", "recall_forbidden_words"}:

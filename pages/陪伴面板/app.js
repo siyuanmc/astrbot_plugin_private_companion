@@ -485,7 +485,7 @@ const providerGroupByKey = providerGroups.reduce((acc, group) => {
 }, {});
 
 const featureMeta = {
-  enable_proactive_only_mode: ["关闭被动能力", "只保留主动私聊调度、生成和发送；普通私聊/群聊不再进入本插件被动增强，降低误接管和误识别风险。"],
+  enable_proactive_only_mode: ["仅保留主动能力", "只让本插件负责主动私聊调度、生成和发送；普通私聊/群聊放行给默认主链或其他插件。"],
   enable_mai_style_integration: ["私聊互动策略", "把相处分寸、偏好和本轮接话方式注入回复。"],
   enable_companion_memory: ["长期画像", "沉淀用户偏好、边界、关系线索和可复用事实。"],
   enable_expression_learning: ["表达节奏学习", "统计用户句长、标点、句尾和短句节奏，只影响回复口感。"],
@@ -932,7 +932,7 @@ const configLabels = {
   recall_forbidden_words: "撤回违禁词表",
   recall_forbidden_scope: "违禁词撤回范围",
   recall_forbidden_word_case_sensitive: "违禁词大小写敏感",
-  enable_proactive_only_mode: "关闭被动能力",
+  enable_proactive_only_mode: "仅保留主动能力",
   text_message_debounce_seconds: "文本补话等待秒数",
   image_message_debounce_seconds: "图片补话等待秒数",
   forward_message_debounce_seconds: "转发补话等待秒数",
@@ -1185,7 +1185,7 @@ const configLabels = {
 };
 
 const configDescriptions = {
-  enable_proactive_only_mode: "开启后，本插件只保留主动私聊的日程、主动生成和发送链路；普通私聊、群聊消息不会再被本插件做状态/TTS/图片/转发/群聊上下文注入，也不会触发被动回复增强。用户回复主动消息时仍会被轻量记为已回应。适合只想使用主动陪伴、或担心被动链路误接管/误识别的场景。",
+  enable_proactive_only_mode: "开启后，本插件只保留主动私聊的日程、主动生成和发送链路；普通私聊、群聊消息不会再被本插件做状态/TTS/图片/转发/群聊上下文注入，也不会触发本插件的被动回复增强，但不会阻止 AstrBot 默认回复或其他插件处理。用户回复主动消息时仍会被轻量记为已回应。适合只想使用主动陪伴、或担心本插件被动链路误接管/误识别的场景。",
   enable_llm_proactive_message: "开启后，主动调度只负责挑选动机和时机，真正文本会调用 AstrBot 人格生成；关闭时回退为本地模板，更省但更机械。",
   proactive_prompt_template: "自定义主动消息生成提示词。留空使用内置模板；适合把角色口吻、世界观约束和“不要像回复空气”这类要求固定下来。",
   enable_llm_proactive_persona_judge: "主动计划到点后，先让模型判断这个念头是否符合角色、世界观、关系温度和当下打扰边界；可放行、改写、延后或丢弃。",
@@ -1660,7 +1660,7 @@ const featureSettingSections = {
   enable_proactive_only_mode: [
     {
       title: "保留主动链路",
-      note: "关闭被动能力后，仍保留主动念头、调度和主动文本生成。",
+      note: "开启仅保留主动能力后，仍保留主动念头、调度和主动文本生成。",
       keys: ["enable_llm_proactive_message", "proactive_prompt_template"],
     },
     {
@@ -2197,26 +2197,42 @@ const tokenTaskLabels = {
   memory_profile: "长期画像",
   dialogue_episode: "私聊片段",
   response_review: "回复/主动复核",
+  emotion_judgement: "情绪判断",
   relationship: "关系分析",
   group_interject: "群聊插话",
   group_episode: "群聊片段",
   group_slang: "黑话释义",
+  group_question_wakeup_reply_review: "群聊答疑复核",
+  group_followup_judge: "群聊续接判断",
   worldbook_registration: "关系网自登记",
   web_exploration_query: "探索选题",
   web_exploration_digest: "探索笔记",
+  external_event_self_link: "外界信息关联",
   news_digest: "新闻整理",
   creative_project: "创作立项",
   creative_writing: "文本创作",
   photo_prompt: "生图提示",
   screen_narration: "识屏转述",
+  forward_message: "合并转发转述",
   private_reading_vision: "夹层视觉",
+  private_image_vision: "私聊图片识别",
+  private_image_only_framework: "单图回复主链",
+  private_image_only_fallback: "单图兜底回复",
   voice: "语音文本",
   proactive_framework: "主动主回复",
+  proactive_persona_judge: "主动人格判定",
   voice_framework: "框架语音",
   voice_repair: "语音格式修复",
+  smart_message_debounce: "智能收口防抖",
+  rest_wakeup_judge: "休息醒来判断",
   yesterday_summary: "昨日摘要",
   full_test_detail: "完整测试细化",
   provider_test: "模型测试",
+  qzone_comment: "空间评论",
+  qzone_comment_inbox_decision: "空间评论判断",
+  qzone_publish: "空间说说",
+  qzone_publish_test: "空间发布测试",
+  qzone_publish_sanitize: "空间文案清理",
   astrbot_private_reply: "非插件私聊主回复",
   astrbot_group_reply: "非插件群聊主回复",
   astrbot_reply: "非插件主回复",
@@ -4731,7 +4747,15 @@ function tokenTable(headers, rows, mapper, emptyText) {
 }
 
 function tokenTaskLabel(key) {
-  return tokenTaskLabels[key] || key || "其他调用";
+  const normalized = String(key || "").trim();
+  if (!normalized) return "其他调用";
+  if (tokenTaskLabels[normalized]) return tokenTaskLabels[normalized];
+  if (normalized.startsWith("qzone_") && normalized.endsWith("_photo_prompt")) return "空间配图提示";
+  if (normalized.startsWith("qzone_")) return "QQ 空间任务";
+  if (normalized.startsWith("astrbot_")) return "AstrBot 主回复";
+  if (normalized.startsWith("private_image_")) return "私聊图片处理";
+  if (normalized.startsWith("web_exploration_")) return "主动搜索";
+  return normalized;
 }
 
 function formatNumber(value) {
@@ -10323,7 +10347,7 @@ function renderProactiveOnlyModeCard() {
           <div class="proactive-mode-main">
             <div class="proactive-mode-kicker">兼容与隔离</div>
             <h3>${escapeHtml(featureLabel(key))}</h3>
-            <p>只保留主动私聊调度、生成和发送；普通私聊/群聊不再进入本插件被动链路，用于避免误接管、误识别和动态上下文串入主链。</p>
+            <p>只让本插件负责主动私聊调度、生成和发送；普通私聊/群聊放行给 AstrBot 默认主链或其他插件。</p>
             <small class="proactive-mode-code">${escapeHtml(key)}</small>
           </div>
           <button type="button" class="proactive-mode-detail proactive-mode-button soft" data-feature-open="${escapeHtml(key)}">查看说明</button>
@@ -10388,10 +10412,10 @@ function featureSwitchItem(key) {
   const displayOn = checked || tempUnlocked;
   const related = proactiveOnlyRelatedUnlocks(key);
   const stateText = locked ? (tempUnlocked ? "临时放行" : "已锁定") : checked ? "开启" : "关闭";
-  const lockNote = tempUnlocked ? "已临时放行，恢复被动能力后清空" : "被动能力关闭，原配置保留";
+  const lockNote = tempUnlocked ? "已临时放行，关闭仅保留主动能力后清空" : "仅保留主动能力中，原配置保留";
   const relatedText = related.length ? `建议同步：${related.map((item) => item.label || item.key).join("、")}` : "";
   return `
-    <section class="feature-switch-item ${displayOn ? "on" : "off"} ${locked ? "locked" : ""}" title="${escapeHtml(locked ? "此模式开启时，本功能在普通被动链路中被锁定覆盖，原配置会保留。" : featureDescription(key))}">
+    <section class="feature-switch-item ${displayOn ? "on" : "off"} ${locked ? "locked" : ""}" title="${escapeHtml(locked ? "仅保留主动能力开启时，本功能在本插件普通被动链路中被跳过，原配置会保留。" : featureDescription(key))}">
       <label class="feature-toggle-hit" aria-label="${escapeHtml(featureLabel(key))}">
         <input type="checkbox" data-feature-key="${escapeHtml(key)}" ${displayOn ? "checked" : ""} ${locked ? "disabled" : ""}>
         <span class="feature-toggle-visual"></span>
@@ -10756,10 +10780,25 @@ function collectFeatureDetailPayload(featureKey, root = document) {
   return { features, settings, providers };
 }
 
+async function saveCurrentFeatureDetail(control = null, successMessage = "已保存功能参数") {
+  const featureKey = state.selectedFeatureKey || "";
+  if (!featureKey) return true;
+  const form = Array.from(document.querySelectorAll("[data-feature-param-form]"))
+    .find((item) => item.dataset.featureParamForm === featureKey);
+  if (!form) return true;
+  const payload = collectFeatureDetailPayload(featureKey, form);
+  const result = await runAction(
+    () => postJson("/settings/update", payload),
+    successMessage,
+    control || form.querySelector(".feature-param-save"),
+  );
+  return Boolean(result);
+}
+
 function featureDependencyLines(key) {
   const dependencies = [];
-  if (featureLockedByProactiveOnlyMode(key)) dependencies.push(["被动能力关闭", "普通被动链路中此功能被锁定，原配置保留；恢复被动能力后生效。"]);
-  if (key === "enable_proactive_only_mode") dependencies.push(["注意", "开启后被动增强与群聊观察会被跳过"]);
+  if (featureLockedByProactiveOnlyMode(key)) dependencies.push(["仅保留主动能力", "普通被动链路中此功能被本插件跳过，原配置保留；关闭仅保留主动能力后生效。"]);
+  if (key === "enable_proactive_only_mode") dependencies.push(["注意", "只跳过本插件的普通被动增强，不会阻止默认回复或其他插件"]);
   if (key !== "enable_group_companion" && key.startsWith("enable_group_")) dependencies.push(["依赖", "群聊总开关"]);
   if (key === "enable_group_conversation_followup") dependencies.push(["依赖", "群聊场景感知"]);
   if (["enable_companion_memory", "enable_expression_learning", "enable_intent_emotion_analysis", "enable_response_self_review", "enable_passive_topic_suppression", "enable_relationship_state_machine", "enable_emotion_simulation", "enable_dialogue_episode_memory", "enable_open_loop_tracking", "enable_food_menu_recommendation"].includes(key)) {
@@ -10783,9 +10822,9 @@ function featureDependencyLines(key) {
 
 const featureDetailGuides = {
   enable_proactive_only_mode: {
-    summary: "关闭本插件的普通被动增强，只保留主动来找用户的链路，适合避免误接管、误识别或与其它被动回复插件互相影响。",
+    summary: "让本插件只负责主动来找用户的链路，并放行普通聊天给 AstrBot 默认主链或其他插件。",
     trigger: "普通私聊、群聊事件和非主动框架 LLM 请求到达时生效。",
-    enabled: "插件仍会跑日程、状态、主动意愿和私聊主动发送；普通聊天不会注入本插件状态、TTS、图片/转发摘要或群聊上下文，也不会使用插件工具。用户回复主动消息仍会被轻量记录为已回应。",
+    enabled: "插件仍会跑日程、状态、主动意愿和私聊主动发送；普通聊天不会注入本插件状态、TTS、图片/转发摘要或群聊上下文，也不会使用插件工具。插件不会拦截默认回复或其他插件处理。用户回复主动消息仍会被轻量记录为已回应。",
     disabled: "按各功能开关正常参与私聊被动增强、群聊观察、图片/转发处理和提示词注入。",
   },
   enable_mai_style_integration: {
@@ -10965,7 +11004,7 @@ const featureDetailGuides = {
   enable_environment_perception: {
     summary: "提供当前时间、日期、平台、聊天类型和消息媒介，让日程与回复不脱离现实语境。",
     trigger: "日程生成、状态刷新和回复前。",
-    enabled: "Bot 会知道现在大概是什么时间、在哪个平台、面对私聊还是群聊。关闭被动能力时，普通被动回复里的环境感知注入会被锁定；后台状态和主动链路仍可使用。",
+    enabled: "Bot 会知道现在大概是什么时间、在哪个平台、面对私聊还是群聊。仅保留主动能力开启时，本插件普通被动回复里的环境感知注入会被跳过；后台状态和主动链路仍可使用。",
     disabled: "只使用较基础的上下文，时间与场景贴合度下降。",
   },
   enable_holiday_perception: {
@@ -11431,7 +11470,7 @@ function featureDetailPage(key) {
       </nav>
       <div class="feature-state-strip ${displayEnabled ? "on" : "off"}">
         <b>${escapeHtml(locked ? (tempUnlocked ? "临时放行" : "已锁定") : enabled ? "开启" : "关闭")}</b>
-        ${locked ? `<span>${escapeHtml(tempUnlocked ? "被动能力仍关闭，但此功能已被临时放行；恢复被动能力后放行项会清空。" : "当前正在关闭被动能力；保存的原始开关值不会被修改。")}</span>` : ""}
+        ${locked ? `<span>${escapeHtml(tempUnlocked ? "仅保留主动能力仍开启，但此功能已被临时放行；关闭后放行项会清空。" : "当前处于仅保留主动能力模式；保存的原始开关值不会被修改。")}</span>` : ""}
       </div>
       <header class="feature-detail-head">
         <div>
@@ -11448,7 +11487,7 @@ function featureDetailPage(key) {
       ${locked ? `
         <section class="feature-detail-card feature-temp-unlock-panel">
           <h3>主动专用临时放行</h3>
-          <p>${escapeHtml(tempUnlocked ? "此功能已在被动能力关闭时临时放行。恢复被动能力后，放行项会自动清空。" : "此功能当前被关闭被动能力模式覆盖。你可以二次确认后临时放行，不会改写原配置。")}</p>
+          <p>${escapeHtml(tempUnlocked ? "此功能已在仅保留主动能力时临时放行。关闭后，放行项会自动清空。" : "此功能当前被仅保留主动能力覆盖。你可以二次确认后临时放行，不会改写原配置。")}</p>
           ${relatedUnlocks.length ? `<p>建议同步：${escapeHtml(relatedUnlocks.map((item) => item.label || item.key).join("、"))}</p>` : ""}
           <div class="feature-temp-unlock-actions">
             <button type="button" data-proactive-temp-unlock="${escapeHtml(key)}" data-action="${tempUnlocked ? "clear" : "unlock"}">${escapeHtml(tempUnlocked ? "取消临时放行" : "临时放行")}</button>
@@ -11486,7 +11525,9 @@ function featureDetailPage(key) {
 
 function bindFeatureDetailActions() {
   document.querySelectorAll("[data-feature-back]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
+      const saved = await saveCurrentFeatureDetail(button, "已保存并返回功能列表");
+      if (!saved) return;
       state.selectedFeatureKey = "";
       renderFeatureSwitches();
     });
@@ -13230,6 +13271,8 @@ $("#accessQuickGroups").addEventListener("click", async (event) => {
 $("#saveFeaturesBtn").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   if (button?.dataset?.action === "back" || (state.selectedFeatureKey && Object.prototype.hasOwnProperty.call(state.featureDraft || {}, state.selectedFeatureKey))) {
+    const saved = await saveCurrentFeatureDetail(button, "已保存并返回功能列表");
+    if (!saved) return;
     state.selectedFeatureKey = "";
     renderFeatureSwitches();
     return;

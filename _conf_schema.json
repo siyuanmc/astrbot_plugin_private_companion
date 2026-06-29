@@ -5,9 +5,9 @@
     "hint": "插件身份、目标对象、主模型、Token 限额和全局运行模式。",
     "items": {
       "enable_proactive_only_mode": {
-        "description": "关闭被动能力",
+        "description": "仅保留主动能力",
         "type": "bool",
-        "hint": "默认关闭。开启后只保留插件主动私聊的日程、生成和发送；普通私聊/群聊消息不再进入本插件的被动增强、图片/转发处理、防抖、群聊观察、TTS 后处理或提示词注入。用户回复主动消息时仍会轻量记录为已回应。适合只想使用主动陪伴，或担心被动链路误接管、误识别的场景。",
+        "hint": "默认关闭。开启后，本插件只保留主动私聊的日程、生成和发送链路；普通私聊/群聊消息不会再进入本插件的被动增强、图片/转发处理、防抖、群聊观察、TTS 后处理或提示词注入，但不会阻止 AstrBot 默认回复或其他插件处理。用户回复本插件主动消息时仍会轻量记录为已回应。适合只想使用主动陪伴，或担心本插件被动链路误接管、误识别的场景。",
         "default": false
       },
       "bot_name": {
@@ -195,7 +195,7 @@
     "default": false
   },
   "enable_proactive_only_mode": {
-    "description": "Legacy flat config: 关闭被动能力",
+    "description": "Legacy flat config: 仅保留主动能力",
     "type": "bool",
     "default": false,
     "invisible": true
@@ -1892,7 +1892,7 @@
   "worldbook_self_registration_block_reply": {
     "description": "Legacy flat config: 自登记拒绝回复",
     "type": "string",
-    "default": "你是小猪",
+    "default": "这个称呼我不记。",
     "invisible": true
   },
   "worldbook_auto_pending_observations": {
@@ -2403,6 +2403,12 @@
     "description": "Legacy flat config: 本地生图忙时延后分钟数",
     "type": "int",
     "default": 30,
+    "invisible": true
+  },
+  "external_image_api_platform": {
+    "description": "Legacy flat config: 在线生图模型平台",
+    "type": "string",
+    "default": "auto",
     "invisible": true
   },
   "EXTERNAL_IMAGE_API_BASE_URL": {
@@ -5912,8 +5918,8 @@
       "worldbook_self_registration_block_reply": {
         "description": "自登记拒绝回复",
         "type": "string",
-        "hint": "自登记命中拒绝词、称呼不合规或疑似冒领/冲突时，Bot 返回给用户的统一拒绝文案。留空时使用默认回复“你是小猪”。",
-        "default": "你是小猪",
+        "hint": "自登记命中拒绝词、称呼不合规或疑似冒领/冲突时，Bot 返回给用户的统一拒绝文案。留空时使用默认回复“这个称呼我不记。”",
+        "default": "这个称呼我不记。",
         "condition": {
           "enable_worldbook_member_recognition": true,
           "worldbook_self_registration": true
@@ -6932,10 +6938,19 @@
           "enable_local_photo_load_guard": true
         }
       },
+      "external_image_api_platform": {
+        "description": "在线生图模型平台",
+        "type": "string",
+        "hint": "可填：auto、openai、bailian。openai 适用于 OpenAI 兼容 /images/generations；bailian 适用于阿里云百炼 / DashScope 原生生图接口；auto 会按地址和模型名自动识别。",
+        "default": "auto",
+        "condition": {
+          "enable_photo_text_action": true
+        }
+      },
       "EXTERNAL_IMAGE_API_BASE_URL": {
         "description": "在线图片 API 地址",
         "type": "string",
-        "hint": "用于 OpenAI 兼容的在线生图接口。可填写完整的 /images/generations 地址，或只填 API 根地址；插件会自动补齐。",
+        "hint": "当平台为 openai 时，可填写完整的 /images/generations 地址，或只填 API 根地址；插件会自动补齐。平台为 bailian 时，可填写百炼 / DashScope 的 API 根地址（如 /api/v1），也可直接填写多模态或异步生图完整接口地址。",
         "default": "",
         "condition": {
           "enable_photo_text_action": true
@@ -6953,7 +6968,7 @@
       "EXTERNAL_IMAGE_API_MODEL": {
         "description": "在线图片模型",
         "type": "string",
-        "hint": "必须填写该平台的图片模型名，不能填写 gpt-5.5、deepseek、claude、qwen 等聊天/文本模型。插件会按 OpenAI 兼容 images/generations 请求格式提交 prompt；自拍参考图会尝试 images/edits。",
+        "hint": "必须填写该平台的图片模型名。openai 平台按 OpenAI 兼容 images/generations 请求；bailian 平台可填 qwen-image、wan 系列等百炼图片模型，并按模型能力自动走多模态同步或任务轮询。",
         "default": "",
         "condition": {
           "enable_photo_text_action": true
@@ -6962,7 +6977,7 @@
       "external_image_api_size": {
         "description": "在线生图尺寸",
         "type": "string",
-        "hint": "格式如 1024x1024、768x1344。用于在线图片 API 请求。",
+        "hint": "格式如 1024x1024、768x1344。openai 平台会原样使用；bailian 平台会自动转换为百炼常用的 1024*1024 格式。",
         "default": "1024x1024",
         "condition": {
           "enable_photo_text_action": true

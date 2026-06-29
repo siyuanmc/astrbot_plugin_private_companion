@@ -1344,8 +1344,8 @@ class QzoneMixin(QzoneMediaMixin):
                 return rewritten
         except Exception as exc:
             logger.warning("[PrivateCompanion] QQ 空间说说内部状态重写失败: %s", _single_line(exc, 120))
-        logger.warning("[PrivateCompanion] QQ 空间说说草稿含内部状态且重写失败,使用兜底文案")
-        return "夜色慢慢安静下来,窗外的风也轻了些。想把这一点点清醒和柔软留在今晚,明天再慢慢展开。"
+        logger.warning("[PrivateCompanion] QQ 空间说说草稿含内部状态且重写失败,已取消本次发布")
+        return ""
 
     async def _test_qzone_publish_tool_chain(self, event: AstrMessageEvent | None = None) -> str:
         lines = ["QQ 空间发布链路模拟："]
@@ -1723,6 +1723,13 @@ class QzoneMixin(QzoneMediaMixin):
                 task="qzone_publish",
             )
             text = await self._sanitize_qzone_life_post_text(text, prompt=prompt)
+            if not text:
+                state["last_life_publish_failed_at"] = now
+                state["last_life_publish_status"] = "cancelled:empty_or_unsafe_draft"
+                state["last_life_publish_checked_at"] = now
+                self._save_data_sync()
+                logger.warning("[PrivateCompanion] QQ 空间生活动态草稿为空或不安全,已跳过发布")
+                return
             state["last_life_publish_draft"] = _single_line(text, 300)
             state["last_life_publish_draft_at"] = now
         if reusable_text:
@@ -1852,6 +1859,13 @@ class QzoneMixin(QzoneMediaMixin):
                     task="qzone_emotional_vent",
                 )
                 text = await self._sanitize_qzone_life_post_text(text, prompt=prompt)
+                if not text:
+                    state["last_emotional_vent_failed_at"] = now
+                    state["last_emotional_vent_status"] = "cancelled:empty_or_unsafe_draft"
+                    state["last_emotional_vent_checked_at"] = now
+                    self._save_data_sync()
+                    logger.warning("[PrivateCompanion] 公开心情动态草稿为空或不安全,已跳过发布")
+                    return
                 state["last_emotional_vent_draft"] = _single_line(text, 240)
                 state["last_emotional_vent_draft_at"] = now
             if reusable_text:

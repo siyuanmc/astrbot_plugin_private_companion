@@ -817,9 +817,9 @@ class WorldbookMixin:
 
     def _worldbook_self_registration_block_reply_text(self) -> str:
         reply = _single_line(getattr(self, "worldbook_self_registration_block_reply", ""), 80)
-        if reply == "这个称呼我先不记。":
+        if reply in {"这个称呼我先不记。", "你是小猪"}:
             reply = ""
-        return reply or "你是小猪"
+        return reply or "这个称呼我不记。"
 
     def _extract_worldbook_self_intro(self, text: str) -> dict[str, Any] | None:
         cleaned = str(text or "")
@@ -880,7 +880,7 @@ class WorldbookMixin:
             intent = self._worldbook_registration_confirmation_intent(text)
             if intent == "reject":
                 pending.pop(sender_id, None)
-                return {"confirm_reply": "好，那我先不记。"}
+                return {"confirm_reply": "好，那我不记。"}
             if intent == "accept":
                 name = _single_line(pending_item.get("name"), 40) or sender_id
                 aliases = [

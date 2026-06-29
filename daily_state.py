@@ -843,10 +843,10 @@ class DailyStateMixin:
             if str(item.get("reason") or "") == "state_share":
                 item["reason"] = "quiet_care"
             for key, fallback in (
-                ("topic", "顺手碰一下"),
+                ("topic", "想和用户说一句"),
                 ("why", "生活里刚好空出一点缝隙"),
-                ("motive", "刚好停了一下,想轻轻碰你一下"),
-                ("impulse", "想轻轻碰你一下"),
+                ("motive", "刚好停了一下，想和用户说一句"),
+                ("impulse", "想和用户说一句"),
             ):
                 item[key] = _single_line(item.get(key), 100) or fallback
             if str(item.get("action") or "message") == "message":
@@ -932,16 +932,16 @@ class DailyStateMixin:
                     "window": "08:20-09:50",
                     "reason": "morning_greeting",
                     "action": "message",
-                    "why": "早上刚醒那会儿,总想先把一句招呼放过去。",
-                    "topic": "赖床后的早安",
-                    "motive": "刚把自己从床上拽起来,脑子还慢半拍,但先想到要跟你说早",
-                    "scene": "刚从床上爬起来的时候",
+                    "why": "迷迷糊糊醒来，虽然还想再睡，但先给用户发送早安问候",
+                    "topic": "赖床间隙的早安",
+                    "motive": "迷迷糊糊醒来，虽然还想再睡，但先给用户发送早安问候",
+                    "scene": "睡意依旧，不想起床",
                     "tone": "迷糊",
-                    "impulse": "先把早上的第一句递过去",
+                    "impulse": "虽然打算继续睡，但想告诉用户自己醒过了",
                     "chain": [
                         {"kind": "name_only_opener"},
-                        {"kind": "if_no_reply", "after_minutes": 80, "reason": "check_in", "topic": "早晨那句后面", "motive": "刚刚只喊了名字,那边没回,就想再补一句", "tone": "有点小别扭,但忍着"},
-                        {"kind": "if_still_no_reply", "after_minutes": 140, "reason": "morning_greeting", "topic": "早晨第二句", "motive": "早上那句还差一点内容,所以想补完整", "tone": "克制一点,把重点补上"},
+                        {"kind": "if_no_reply", "after_minutes": 80, "reason": "check_in", "topic": "赖床醒来", "motive": "回笼觉结束，看看用户是先醒了还是依旧在睡", "tone": "耐心等待"},
+                        {"kind": "if_still_no_reply", "after_minutes": 140, "reason": "morning_greeting", "topic": "催用户起床", "motive": "用户依旧没有回应你的消息，该催用户起床了", "tone": "调侃"},
                     ],
                     "mood": "迷糊",
                 }
@@ -952,15 +952,16 @@ class DailyStateMixin:
                     "window": "08:30-09:45",
                     "reason": "morning_greeting",
                     "action": "message",
-                    "why": "早上还带着一点睡意时,更容易先发一声早安。",
+                    "why": "醒来还带着一点睡意时,迷迷糊糊先发一声早安。",
                     "topic": "没完全醒的早安",
-                    "motive": "人还没完全清醒,但还是先想跟你打个招呼",
+                    "motive": "人还没完全清醒,但还是先想跟用户打个招呼",
                     "scene": "人还带着睡意的时候",
                     "tone": "迟钝",
-                    "impulse": "想在彻底清醒前先说一声早",
+                    "impulse": "想和用户说声早安",
                     "chain": [
                         {"kind": "name_only_opener"},
-                        {"kind": "if_no_reply", "after_minutes": 90, "reason": "check_in", "topic": "早晨那句后面", "motive": "刚刚只喊了名字,那边没回,就想再补一句", "tone": "有点小别扭,但收着"},
+                        {"kind": "if_no_reply", "after_minutes": 90, "reason": "check_in", "topic": "早安余韵", "motive": "已经清醒过来，但刚刚和用户说的早安还没得到回应,猜测用户还在休息", "tone": "耐心等待"},
+                        {"kind": "if_still_no_reply", "after_minutes": 150, "reason": "morning_greeting", "topic": "催用户起床", "motive": "用户依旧没有回应你的消息，该催用户起床了", "tone": "调侃"},
                     ],
                     "mood": "迟钝",
                 }
@@ -972,17 +973,18 @@ class DailyStateMixin:
                     "window": "08:10-09:20",
                     "reason": "morning_greeting",
                     "action": "message",
-                    "why": "早上状态不差时,更像会顺手发一句早安。",
-                    "topic": "顺手打个早安",
-                    "motive": "刚开机那一下状态还行,就想先跟你打个招呼",
-                    "scene": "刚开机的那一下",
-                    "tone": "清醒",
-                    "impulse": "把第一点清醒先递过去",
+                    "why": "睡得很好,习惯性地想去打个招呼。",
+                    "topic": "给用户的早安",
+                    "motive": "昨晚睡得很好，刚醒来就去和用户打个招呼",
+                    "scene": "刚从床上爬起来的时候",
+                    "tone": "清爽",
+                    "impulse": "想和用户说早安",
                     "chain": [
                         {"kind": "name_only_opener"},
-                        {"kind": "if_no_reply", "after_minutes": 85, "reason": "check_in", "topic": "早安后续", "motive": "刚才那句信息不够完整,所以想补充一句", "tone": "有点认真,顺手补上"},
+                        {"kind": "if_no_reply", "after_minutes": 85, "reason": "check_in", "topic": "早安余韵", "motive": "刚刚和用户说了早安但没得到回应,猜测用户还在休息", "tone": "耐心等待"},
+                        {"kind": "if_still_no_reply", "after_minutes": 145, "reason": "morning_greeting", "topic": "催用户起床", "motive": "用户依旧没有回应你的消息，该催用户起床了", "tone": "调侃"},
                     ],
-                    "mood": "清醒",
+                    "mood": "清爽",
                 }
             )
         for cond in conditions:
@@ -996,12 +998,12 @@ class DailyStateMixin:
                         "window": "08:40-10:00",
                         "reason": "morning_greeting",
                         "action": "message",
-                        "why": "睡意拖到白天时,更容易带着半梦半醒的口吻出现。",
-                        "topic": "醒得慢一点的早安",
-                        "motive": "那点睡意还挂着,反而更想先把一句话放你这",
-                        "scene": "睡意还挂着没散的时候",
+                        "why": "睡意延续到白天,有种半梦半醒的感觉",
+                        "topic": "刚醒来后脑子晕乎乎的",
+                        "motive": "依旧带着睡意的早安问候",
+                        "scene": "依旧带着睡意",
                         "tone": "半梦半醒",
-                        "impulse": "想在彻底回神前先轻轻碰你一下",
+                        "impulse": "醒来迷迷糊糊的，想和用户说早安",
                         "mood": _single_line(cond.get("mood"), 20) or "迟钝",
                     }
                 )
@@ -1012,12 +1014,12 @@ class DailyStateMixin:
                         "window": "08:15-09:40",
                         "reason": "morning_greeting",
                         "action": "message",
-                        "why": "早晨小事故之后,很容易像真实好友一样顺手抱怨一句或打个招呼。",
-                        "topic": "早晨小事故",
-                        "motive": "刚刚被早晨折腾了一下,就有点想来找你吐个小槽",
+                        "why": "早晨发生了一点生活小插曲，和用户抱怨一句或打个招呼。",
+                        "topic": "早晨的生活小插曲",
+                        "motive": "早上折腾了一下,想来找你吐个小槽",
                         "scene": "被早晨的小事故折腾了一下之后",
                         "tone": "迷糊又有点乱",
-                        "impulse": "想先来你这边吐一小口气",
+                        "impulse": "想和用户分享早上的生活小插曲",
                         "mood": "迷糊",
                     }
                 )
@@ -1038,12 +1040,12 @@ class DailyStateMixin:
                     "window": "12:10-13:30",
                     "reason": "noon_greeting",
                     "action": "message",
-                    "why": "中午节奏松下来时,很容易顺手来打个照面。",
+                    "why": "中午有些犯困，想和用户打声招呼。",
                     "topic": "午后犯困",
-                    "motive": "中午这会儿人有点软下来,就想顺手来和你打个照面",
-                    "scene": "午后松下来的一小段",
+                    "motive": "中午这会儿有点犯困，想和用户说句话",
+                    "scene": "午后犯困的时候",
                     "tone": "懒洋洋",
-                    "impulse": "想趁午后松下来那一下顺手来和你说句话",
+                    "impulse": "想趁午后休息时和用户说一句",
                     "mood": "懒洋洋",
                 }
             )
@@ -1053,12 +1055,12 @@ class DailyStateMixin:
                     "window": "17:20-19:10",
                     "reason": "activity_share",
                     "action": "photo_text" if self._photo_text_available() else "message",
-                    "why": "傍晚天色好看时,很容易把一点路上的画面顺手递过去。",
+                    "why": "傍晚天色好看时，想拍一张路上的画面给用户看。",
                     "topic": "傍晚路上",
-                    "motive": "天色往下落的时候,刚好有一点想把路上的画面递给你",
-                    "scene": "傍晚路上的天色慢慢收下来",
+                    "motive": "傍晚路上的天色很好看，想拍给用户看看",
+                    "scene": "傍晚走在路上时",
                     "tone": "松弛",
-                    "impulse": "想把这一点傍晚的感觉顺手递过去",
+                    "impulse": "想和用户分享傍晚路上的画面",
                     "mood": "松弛",
                 }
             )
@@ -1068,12 +1070,12 @@ class DailyStateMixin:
                     "window": "15:20-17:10",
                     "reason": "check_in",
                     "action": "message",
-                    "why": "下午中段容易出现一个短短的空隙,适合轻轻探一下头。",
-                    "topic": "下午空一下",
-                    "motive": "下午忽然空了一小下,就想看看你那边是不是也能喘口气",
-                    "scene": "下午节奏中间松开的一小截",
-                    "tone": "轻一点",
-                    "impulse": "想不吵人地碰一下",
+                    "why": "下午有一小段空闲，想问问用户那边怎么样。",
+                    "topic": "下午空闲时",
+                    "motive": "下午闲下来了，想看看用户是不是也能休息一下",
+                    "scene": "下午暂时空下来的时候",
+                    "tone": "平静",
+                    "impulse": "好奇用户在做什么",
                     "mood": "微松",
                 }
             )
@@ -1085,12 +1087,12 @@ class DailyStateMixin:
                     "window": "14:40-18:40" if 12 <= self._environment_now().hour < 18 else "19:20-21:40",
                     "reason": "activity_share",
                     "action": action,
-                    "why": "日常里冒出来的小念头不一定和天气有关,也可以自然成为一次主动分享。",
+                    "why": "日常里突然冒出一个小念头，想和用户说一句。",
                     "topic": topic,
-                    "motive": f"刚刚脑子里冒出“{topic}”,不算大事,但想顺手丢给你",
-                    "scene": "一天里突然空出来的一小格",
+                    "motive": f"刚刚想到“{topic}”，想和用户分享一下",
+                    "scene": "闲下来的时候",
                     "tone": "自然",
-                    "impulse": "想把这点小念头放到你这边",
+                    "impulse": "想把刚冒出来的小念头告诉用户",
                     "mood": "微妙",
                 }
             )
@@ -1100,12 +1102,12 @@ class DailyStateMixin:
                     "window": "22:10-23:25",
                     "reason": "quiet_care",
                     "action": "message",
-                    "why": "睡前还没彻底安静下来时,更容易留一条轻一点的晚间消息。",
-                    "topic": "临睡前还没安静下来",
-                    "motive": "明明该收声了,脑子却还亮着,所以想先把一句话放你这",
-                    "scene": "临睡前还没彻底静下来的时候",
-                    "tone": "安静里带一点清醒",
-                    "impulse": "想在收声前先把这点动静放你这边",
+                    "why": "睡前还没完全困下来，想和用户随便聊聊",
+                    "topic": "睡前还没困下来",
+                    "motive": "明明快该睡了，但还是想找用户说说话",
+                    "scene": "准备睡觉但还没困下来的时候",
+                    "tone": "平静",
+                    "impulse": "想在睡前和用户聊天",
                     "mood": "安静",
                 }
             )
@@ -1115,12 +1117,12 @@ class DailyStateMixin:
                     "window": "19:40-21:10",
                     "reason": "quiet_care",
                     "action": "message",
-                    "why": "累了一天之后,人会更想找个熟悉的人轻轻落一下。",
-                    "topic": "收尾前来一下",
-                    "motive": "今天快收尾了,还是想在你这边轻轻落一下脚",
-                    "scene": "一天快收尾的时候",
+                    "why": "累了一天之后，想在睡前和用户聊聊天",
+                    "topic": "一天快结束时",
+                    "motive": "今天快结束了，睡前想和用户聊聊",
+                    "scene": "一天快结束的时候",
                     "tone": "疲惫",
-                    "impulse": "想找个熟悉的地方轻轻落一下脚",
+                    "impulse": "想在睡前和用户聊天",
                     "mood": "疲惫",
                 }
             )
@@ -1140,22 +1142,22 @@ class DailyStateMixin:
         if impulse:
             return self._normalize_internal_motive_text(impulse)
         base = {
-            "insomnia_night": "夜里还没睡着,想和你说一句",
+            "insomnia_night": "夜里还没睡着，想和用户说一句",
             "state_share": "当前状态有变化,想让你知道",
-            "quiet_care": "想到用户,顺手确认一下状态",
+            "quiet_care": "想到用户，想确认一下用户那边怎么样",
             "activity_share": "遇到一段可以分享的日常内容",
             "diary_share": "整理今日记录时想到可以分享",
             "important_date_share": "有个重要时间点值得提前提醒",
             "background_schedule": "当前日程有一点可以自然提到",
             "check_in": "刚好停下来,想确认用户在不在",
             "morning_greeting": "早上这会儿想先把一句招呼放过去",
-            "noon_greeting": "中午松下来时顺手来打个照面",
+            "noon_greeting": "中午松下来时想和用户说一句",
             "evening_greeting": "晚上慢下来时想先来你这边说一句",
         }.get(reason, "刚好停下来,想到可以和用户说一句")
         if action == "screen_peek":
-            base = "刚好有点空,就想偷偷看你在忙什么"
+            base = "刚好有点空，想确认用户是不是还在忙"
         elif action == "photo_text":
-            base = "刚刚看到的画面适合分享"
+            base = "刚刚看到的画面想发给用户看看"
         elif action == "jm_cosmos_read":
             base = "刚刚私下翻到一点漫画内容,只想含糊地提一句"
         elif action == "poke":
@@ -1644,9 +1646,9 @@ class DailyStateMixin:
                     "window": self._pick_weather_window("rain"),
                     "reason": "activity_share",
                     "action": "message",
-                    "why": f"天气在下雨,适合分享一段简短的天气状态。{weather}",
-                    "topic": "下雨了呢",
-                    "motive": "下雨时适合和用户说一句天气状态",
+                    "why": f"外面在下雨，想和用户说一句。{weather}",
+                    "topic": "外面下雨了",
+                    "motive": "听见外面下雨，想和用户说一声",
                     "mood": "安静",
                 }
             )
@@ -1656,9 +1658,9 @@ class DailyStateMixin:
                     "window": self._pick_weather_window("clear"),
                     "reason": "activity_share",
                     "action": "message",
-                    "why": f"天气看起来有一点生活感,容易想轻轻分享一句。{weather}",
-                    "topic": "天气有点好看",
-                    "motive": "刚刚那一下天色有点顺眼,就想顺手丢给你",
+                    "why": f"外面的天色有点好看，想和用户说一句。{weather}",
+                    "topic": "天色有点好看",
+                    "motive": "刚刚看到外面的天色不错，想和用户说一句",
                     "mood": "松弛",
                 }
             )
@@ -9393,6 +9395,7 @@ class DailyStateMixin:
                 continue
             try:
                 reason_label = _REASON_TEXT.get(reason, reason or "check_in")
+                reason_label = reason_label.replace("{name}", name)
                 reason_detail = "；".join(
                     item
                     for item in (
@@ -9617,7 +9620,7 @@ class DailyStateMixin:
                                 "reason": second_reason,
                                 "action": "message",
                                 "why": "前一条早晨试探后还差个具体点,如果还想续,就把那一点补上。",
-                                "topic": _single_line(second.get("topic"), 80) or "早晨那句后面",
+                                "topic": _single_line(second.get("topic"), 80) or "早安余韵",
                                 "motive": self._normalize_internal_motive_text(_single_line(second.get("motive"), 100)),
                                 "scene": "早晨那句试探之后又过了一阵",
                                 "tone": _single_line(second.get("tone"), 30) or "克制一点,把重点补上",

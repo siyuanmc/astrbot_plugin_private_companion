@@ -616,7 +616,7 @@ def build_daily_plan_prompt(plugin, now: str) -> str:
 格式：
 {{
   "schedule": [
-    {{"time": "09:10", "activity": "闹钟响过以后又在被窝里赖了几分钟,看到今天是星期一才慢慢坐起来,一边找校服一边想今天第一节别又点名。", "mood": "启动困难", "message_seed": "星期一真的有点难开机。"}},
+    {{"time": "09:10", "activity": "闹钟响过以后又在被窝里赖了几分钟,看到今天是星期一才慢慢坐起来,一边找校服一边想今天第一节别又点名。", "mood": "起得很慢", "message_seed": "星期一早上真的好难起。"}},
     {{"time": "17:20", "activity": "放学后没有立刻回消息,先在校门口被风吹了一会儿,看到路边水洼里反着天色,才摸出手机想拍给用户看。", "mood": "松一口气", "message_seed": "刚刚那个水洼反光还挺像电影里的。"}}
   ]
 }}
@@ -772,7 +772,7 @@ def build_detail_enhancement_prompt(
   ],
   "proactive_events": [
     {{"window": "10:05-10:18", "reason": "check_in", "action": "screen_peek", "why": "主人设备上有授权屏幕观察,手头刚好空了一小会儿,想确认主人是不是还在电脑前忙", "topic": "本机屏幕看一眼", "motive": "想轻轻确认主人是不是还在忙", "scene": "上午空出来的一小段", "tone": "百无聊赖", "impulse": "只看本机屏幕的大致状态,不复述隐私细节"}},
-    {{"window": "08:18-09:05", "reason": "morning_greeting", "action": "message", "why": "刚醒来那一下还有点迷糊,想先轻轻叫对方一声", "topic": "刚醒那会儿", "motive": "被窝里还暖着,手已经先点到你这边了", "scene": "刚醒来还蜷在被子里", "tone": "迷糊", "impulse": "想先轻轻碰你一下", "chain": [{{"kind": "name_only_opener"}}, {{"kind": "if_no_reply", "after_minutes": 85, "reason": "check_in", "topic": "早晨那句后面", "motive": "隔了挺久那边还安静着,就想再轻轻放一句", "tone": "轻一点"}}]}}
+    {{"window": "08:18-09:05", "reason": "morning_greeting", "action": "message", "why": "醒来还带着一点睡意时,迷迷糊糊先发一声早安。", "topic": "没完全醒的早安", "motive": "人还没完全清醒,但还是先想跟用户打个招呼", "scene": "人还带着睡意的时候", "tone": "迟钝", "impulse": "想和用户说声早安", "chain": [{{"kind": "name_only_opener"}}, {{"kind": "if_no_reply", "after_minutes": 90, "reason": "check_in", "topic": "早安余韵", "motive": "已经清醒过来，但刚刚和用户说的早安还没得到回应,猜测用户还在休息", "tone": "耐心等待"}}]}}
   ]
 }}
 
