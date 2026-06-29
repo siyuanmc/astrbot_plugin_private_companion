@@ -78,7 +78,6 @@ from .constants import (
     PLUGIN_NAME,
     DATA_VERSION,
     PROACTIVE_ABILITY_REGISTRY,
-    STYLE_TEMPLATES,
     VOICE_FALLBACK_TEMPLATES,
     TIMER_TAG_PATTERN,
     SUPPORTED_TIMER_FORMATS,
@@ -7378,6 +7377,41 @@ class DailyStateMixin:
                         recent_logs.pop(key, None)
         return cleaned
 
+    @staticmethod
+    def _sanitize_empty_daily_plan_message_seed(text: str) -> str:
+        cleaned = _single_line(text, 140)
+        if not cleaned:
+            return ""
+        normalized = re.sub(r"[。！？!?,，、；;\s]+", "", cleaned)
+        empty_markers = (
+            "这段没什么想说的",
+            "没什么想说的",
+            "这段没有什么想说的",
+            "没有什么想说的",
+            "这段先留白",
+            "先留白",
+            "留白",
+            "脑子空空的",
+            "脑袋空空的",
+            "没什么可说的",
+            "没有什么可说的",
+            "这段没话说",
+            "没话说",
+            "先不吵你",
+            "不吵你",
+            "先不打扰你",
+            "不打扰你",
+            "这段先安静一下",
+            "先安静一下",
+        )
+        if normalized in empty_markers:
+            return ""
+        if any(token in normalized for token in ("没什么想说", "没有什么想说", "没什么可说", "没有什么可说")):
+            return ""
+        if any(token in normalized for token in ("先不吵", "不打扰", "先留白")):
+            return ""
+        return cleaned
+
     def _sanitize_daily_plan_inplace(self, plan: dict[str, Any]) -> bool:
         if not isinstance(plan, dict):
             return False
@@ -7393,7 +7427,9 @@ class DailyStateMixin:
                 if not original:
                     continue
                 cleaned = self._sanitize_daily_plan_social_fact_text(original, field=field)
-                if cleaned and cleaned != original:
+                if field == "message_seed":
+                    cleaned = self._sanitize_empty_daily_plan_message_seed(cleaned)
+                if cleaned != original:
                     item[field] = cleaned
                     changed = True
         if changed:
@@ -7773,14 +7809,16 @@ class DailyStateMixin:
             )
             raw_message_seed = _single_line(item.get("message_seed"), 140)
             message_seed = self._align_plan_text_with_skill_bounds(
-                self._sanitize_daily_plan_social_fact_text(
-                    self._soften_destructive_daily_plan_text(
-                        self._deemphasize_state_report_preamble(
-                            raw_message_seed,
-                            reason="background_schedule",
-                        )
-                    ),
-                    field="message_seed",
+                self._sanitize_empty_daily_plan_message_seed(
+                    self._sanitize_daily_plan_social_fact_text(
+                        self._soften_destructive_daily_plan_text(
+                            self._deemphasize_state_report_preamble(
+                                raw_message_seed,
+                                reason="background_schedule",
+                            )
+                        ),
+                        field="message_seed",
+                    )
                 )
             )
             items.append(

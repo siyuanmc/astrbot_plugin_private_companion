@@ -157,7 +157,7 @@
       "default_style": {
         "description": "默认语气",
         "type": "string",
-        "hint": "可选：温柔、活泼、工作。用户可用“陪伴 语气”单独覆盖。",
+        "hint": "填写简短语气描述，例如温柔、活泼、工作感、校园风。用户可用“陪伴 语气”单独覆盖；该值只作为生成参考，不对应固定外发模板。",
         "default": "温柔"
       },
       "worldview_adaptation_mode": {

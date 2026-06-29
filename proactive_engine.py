@@ -77,7 +77,6 @@ from .constants import (
     PLUGIN_NAME,
     DATA_VERSION,
     PROACTIVE_ABILITY_REGISTRY,
-    STYLE_TEMPLATES,
     VOICE_FALLBACK_TEMPLATES,
     TIMER_TAG_PATTERN,
     SUPPORTED_TIMER_FORMATS,
@@ -4889,7 +4888,7 @@ class ProactiveEngineMixin:
         return {
             "screen_peek": 0.32 if any(token in text for token in ("还在忙", "埋进去", "看你", "确认", "忙太久", "偷看一眼")) else 0.0,
             "photo_text": 0.34 if any(token in text for token in ("顺手拍", "拍给你", "发你看", "光", "雨", "窗边", "晚霞", "小猫", "桌上", "一幕", "书页", "食堂", "饮料", "便利店", "影子", "倒影", "杯", "包装", "车窗", "门口")) else 0.0,
-            "poke": 0.24 if any(token in text for token in ("戳", "碰你一下", "冒头", "闹你一下", "刷存在感")) else 0.0,
+            "poke": 0.24 if any(token in text for token in ("戳", "碰你一下", "冒头", "轻轻叫你一下", "刷存在感")) else 0.0,
             "voice": 0.3 if any(token in text for token in ("懒得打字", "留句语音", "小声说", "睡不着", "不想敲字")) else 0.0,
         }
 
@@ -5492,7 +5491,7 @@ class ProactiveEngineMixin:
             motives = [
                 "这会儿说话可能慢一点，但还是想和用户说一句",
                 "这会儿不太想说太多，但还是想问用户一句",
-                "这一会儿没那么闹腾，想安静地和用户说一句",
+                "这一会儿比较安静，想慢慢和用户说一句",
             ]
             if energy < 45:
                 motives.append("不太想说长句，但想确认用户还在")
@@ -5516,9 +5515,9 @@ class ProactiveEngineMixin:
             if _single_line(share.get("kind"), 32) == "bot_harassment":
                 if text:
                     return self._normalize_internal_motive_text(
-                        f"共同群 {group_id} 里有点闹腾,{speaker} 那句“{text}”还挺扎眼,但只想很轻地跟你提一下"
+                        f"共同群 {group_id} 里有人持续提到 Bot,{speaker} 那句“{text}”还挺扎眼,但只想很轻地跟你提一下"
                     )
-                return self._normalize_internal_motive_text(f"共同群 {group_id} 里有点闹腾,只想很轻地跟你提一下")
+                return self._normalize_internal_motive_text(f"共同群 {group_id} 里有人持续提到 Bot,只想很轻地跟你提一下")
             if text:
                 return self._normalize_internal_motive_text(
                     f"共同群 {group_id} 里有个小转折,{speaker} 那句“{text}”还留着点余味,想顺手给你递一下"

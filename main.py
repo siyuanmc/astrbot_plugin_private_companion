@@ -73,7 +73,6 @@ from .constants import (
     PLUGIN_NAME,
     DATA_VERSION,
     PROACTIVE_ABILITY_REGISTRY,
-    STYLE_TEMPLATES,
     VOICE_FALLBACK_TEMPLATES,
     TIMER_TAG_PATTERN,
     SUPPORTED_TIMER_FORMATS,
@@ -5707,12 +5706,13 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
                     self._save_data_sync()
                     response = f"记住了,以后我会叫你：{user['nickname']}"
             elif action in {"语气", "风格"}:
-                if value not in STYLE_TEMPLATES:
-                    response = "可选语气：温柔、活泼、工作"
+                style_value = _single_line(value, 24)
+                if not style_value:
+                    response = "请这样设置：陪伴 语气 <简短语气描述>"
                 else:
-                    user["style"] = value
+                    user["style"] = style_value
                     self._save_data_sync()
-                    response = f"语气已切换为：{value}"
+                    response = f"语气偏好已记录：{style_value}"
             elif action in {"清空记忆", "忘记我"}:
                 self.data.setdefault("users", {}).pop(user_id, None)
                 self._save_data_sync()

@@ -77,7 +77,6 @@ from .constants import (
     PLUGIN_NAME,
     DATA_VERSION,
     PROACTIVE_ABILITY_REGISTRY,
-    STYLE_TEMPLATES,
     VOICE_FALLBACK_TEMPLATES,
     TIMER_TAG_PATTERN,
     SUPPORTED_TIMER_FORMATS,
@@ -949,7 +948,7 @@ class ProactiveMixin:
     @staticmethod
     def _proactive_text_is_intimate(*parts: Any) -> bool:
         text = " ".join(_single_line(part, 120) for part in parts if _single_line(part, 120))
-        return bool(re.search(r"贴贴|抱抱|亲亲|摸摸|揉揉|蹭蹭|闹你|撒娇|想你|黏|贴近|靠近|坏心思|亲密|睡前|床|小屁股", text, re.I))
+        return bool(re.search(r"贴贴|抱抱|亲亲|摸摸|揉揉|蹭蹭|逗你|撒娇|想你|黏|贴近|靠近|坏心思|亲密|睡前|床|小屁股", text, re.I))
 
     def _low_pressure_proactive_replacement(
         self,

@@ -77,7 +77,6 @@ from .constants import (
     PLUGIN_NAME,
     DATA_VERSION,
     PROACTIVE_ABILITY_REGISTRY,
-    STYLE_TEMPLATES,
     VOICE_FALLBACK_TEMPLATES,
     TIMER_TAG_PATTERN,
     SUPPORTED_TIMER_FORMATS,
@@ -813,7 +812,7 @@ class GroupObservationMixin:
             "kind": "bot_harassment",
             "speaker_id": speaker_id,
             "speaker": speaker,
-            "topic": f"{speaker or '某个成员'} 一直闹 Bot",
+            "topic": f"{speaker or '某个成员'} 持续提到 Bot",
             "text": text,
             "summary": " / ".join(summary_items[-4:]),
             "score": score,
@@ -896,7 +895,7 @@ class GroupObservationMixin:
                     "topic": topic,
                     "score": score,
                     "motive": (
-                        f"群 {group_id} 里有人一直闹 Bot；{self._group_member_identity_name(target_id, target_id, limit=24)} 已经有 {target_absence}没在群里冒泡，想私下轻轻提一句"
+                        f"群 {group_id} 里有人持续围绕 Bot 互动；{self._group_member_identity_name(target_id, target_id, limit=24)} 已经有 {target_absence}没在群里冒泡，想私下轻轻提一句"
                         if kind == "bot_harassment"
                         else f"群 {group_id} 里有个挺有意思的片段；{self._group_member_identity_name(target_id, target_id, limit=24)} 已经有 {target_absence}没在群里冒泡，想私下轻轻转述一下"
                     ),

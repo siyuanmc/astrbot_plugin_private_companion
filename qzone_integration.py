@@ -45,19 +45,79 @@ class QzoneMixin(QzoneMediaMixin):
         if bot is not None:
             self._qzone_last_bot = bot
 
+    @staticmethod
+    def _qzone_runtime_bot_usable(candidate: Any) -> bool:
+        if candidate is None:
+            return False
+        if any(callable(getattr(candidate, name, None)) for name in ("get_cookies", "get_credentials", "get_login_info")):
+            return True
+        if callable(getattr(candidate, "call_action", None)):
+            return True
+        api = getattr(candidate, "api", None)
+        return callable(getattr(api, "call_action", None))
+
+    def _qzone_runtime_bot_candidates(self, source: Any) -> list[Any]:
+        """Return likely OneBot client objects from an AstrBot platform wrapper."""
+        if source is None:
+            return []
+        candidates: list[Any] = [source]
+        for attr in (
+            "bot",
+            "client",
+            "adapter",
+            "connection",
+            "onebot",
+            "platform",
+            "platform_impl",
+            "impl",
+            "instance",
+        ):
+            try:
+                value = getattr(source, attr, None)
+            except Exception:
+                value = None
+            if value is not None:
+                candidates.append(value)
+        api = getattr(source, "api", None)
+        if api is not None:
+            candidates.append(api)
+        deduped: list[Any] = []
+        seen: set[int] = set()
+        for item in candidates:
+            marker = id(item)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            deduped.append(item)
+        return deduped
+
     def _qzone_find_runtime_bot(self) -> Any | None:
         bot = getattr(self, "_qzone_last_bot", None)
-        if bot is not None:
+        if self._qzone_runtime_bot_usable(bot):
             return bot
+        for candidate in self._qzone_runtime_bot_candidates(bot):
+            if self._qzone_runtime_bot_usable(candidate):
+                self._qzone_last_bot = candidate
+                return candidate
         platform_manager = getattr(getattr(self, "context", None), "platform_manager", None)
-        for inst in list(getattr(platform_manager, "platform_insts", []) or []):
-            if any(callable(getattr(inst, name, None)) for name in ("get_cookies", "get_credentials", "get_login_info")):
-                self._qzone_last_bot = inst
-                return inst
-            api = getattr(inst, "api", None)
-            if callable(getattr(api, "call_action", None)):
-                self._qzone_last_bot = inst
-                return inst
+        platform_lists: list[Any] = []
+        for attr in ("platform_insts", "platform_instances", "instances", "platforms"):
+            try:
+                value = getattr(platform_manager, attr, None)
+            except Exception:
+                value = None
+            if value:
+                platform_lists.append(value.values() if isinstance(value, dict) else value)
+        for platforms in platform_lists:
+            try:
+                iterable = list(platforms or [])
+            except Exception:
+                iterable = []
+            for inst in iterable:
+                for candidate in self._qzone_runtime_bot_candidates(inst):
+                    if self._qzone_runtime_bot_usable(candidate):
+                        self._qzone_last_bot = candidate
+                        return candidate
         return None
 
     @staticmethod
@@ -264,7 +324,14 @@ class QzoneMixin(QzoneMediaMixin):
             logger.debug("[PrivateCompanion] QQ 空间使用手动 QZONE_COOKIE: uin=%s", ctx.get("uin"))
             return ctx["cookie_header"]
         bot = getattr(event, "bot", None) if event is not None else None
-        if bot is None:
+        if bot is not None:
+            usable_bot = None
+            for candidate in self._qzone_runtime_bot_candidates(bot):
+                if self._qzone_runtime_bot_usable(candidate):
+                    usable_bot = candidate
+                    break
+            bot = usable_bot or bot
+        if bot is None or not self._qzone_runtime_bot_usable(bot):
             bot = self._qzone_find_runtime_bot()
         if bot is not None:
             self._qzone_last_bot = bot
@@ -281,6 +348,8 @@ class QzoneMixin(QzoneMediaMixin):
         actions = ("get_cookies", "get_credentials")
         api = getattr(bot, "api", None)
         call_action = getattr(api, "call_action", None)
+        if not callable(call_action):
+            call_action = getattr(bot, "call_action", None)
         for action in actions:
             direct = getattr(bot, action, None)
             for domain in domains:
@@ -1262,7 +1331,10 @@ class QzoneMixin(QzoneMediaMixin):
             state["last_comment_inbox_checked_at"] = now
             state["last_comment_inbox_status"] = f"failed:{_single_line(reason, 80)}"
             self._save_data_sync()
-            logger.warning("[PrivateCompanion] QQ 空间评论收件箱处理失败: %s", reason, exc_info=True)
+            if any(token in reason for token in ("没有可用的 OneBot 连接", "获取 QQ 空间 Cookie 失败", "Cookie")):
+                logger.warning("[PrivateCompanion] QQ 空间评论收件箱处理失败: %s", reason)
+            else:
+                logger.warning("[PrivateCompanion] QQ 空间评论收件箱处理失败: %s", reason, exc_info=True)
 
     def _qzone_public_state_hint(self, state: dict[str, Any]) -> str:
         """Return a public-safe mood hint for Qzone posts without internal state fields."""
