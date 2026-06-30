@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import time
 from copy import deepcopy
 from datetime import datetime
 from typing import Any
@@ -13,6 +14,7 @@ from .helpers import _safe_int
 
 class PrivateCompanionPageApiUsersGroupsMixin:
     async def list_users(self) -> dict[str, Any]:
+        start = time.perf_counter()
         try:
             limit = self._query_int("limit", 80, 1, 300)
             async with self.plugin._data_lock:
@@ -22,6 +24,9 @@ class PrivateCompanionPageApiUsersGroupsMixin:
                 user_items = [(user_id, dict(user)) for user_id, user in users.items() if isinstance(user, dict)]
             items = [self._user_summary(user_id, user) for user_id, user in user_items]
             items.sort(key=lambda item: item.get("last_seen_ts") or 0, reverse=True)
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+            if elapsed_ms > 1200:
+                logger.warning("[PrivateCompanionPage] 用户列表接口耗时较高: elapsed=%sms users=%s", elapsed_ms, len(items))
             return self._ok({"items": items[:limit], "total": len(items)})
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 获取用户列表失败: {exc}", exc_info=True)
@@ -164,6 +169,7 @@ class PrivateCompanionPageApiUsersGroupsMixin:
             logger.error(f"[PrivateCompanionPage] 更新用户失败: {exc}", exc_info=True)
             return self._error(str(exc))
     async def list_groups(self) -> dict[str, Any]:
+        start = time.perf_counter()
         try:
             limit = self._query_int("limit", 80, 1, 300)
             async with self.plugin._data_lock:
@@ -178,6 +184,9 @@ class PrivateCompanionPageApiUsersGroupsMixin:
                 shadow_count = len(groups) - len(visible_groups)
             items = [self._group_summary(group_id, group) for group_id, group in visible_groups]
             items.sort(key=lambda item: item.get("last_seen_ts") or 0, reverse=True)
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+            if elapsed_ms > 1200:
+                logger.warning("[PrivateCompanionPage] 群列表接口耗时较高: elapsed=%sms groups=%s", elapsed_ms, len(items))
             return self._ok({"items": items[:limit], "total": len(items), "shadow_total": shadow_count})
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 获取群列表失败: {exc}", exc_info=True)

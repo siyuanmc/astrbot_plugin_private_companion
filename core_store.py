@@ -244,12 +244,23 @@ class CoreStoreMixin:
     """配置、数据存储、用户/群组基础访问"""
 
     def _save_config_if_possible(self) -> None:
-        save = getattr(self.config, "save_config", None)
-        if callable(save):
+        for method_name in ("save_config", "save", "save_conf"):
+            save = getattr(self.config, method_name, None)
+            if not callable(save):
+                continue
             try:
-                save()
+                result = save()
+                if asyncio.iscoroutine(result) or hasattr(result, "__await__"):
+                    close = getattr(result, "close", None)
+                    if callable(close):
+                        close()
+                    logger.debug("[PrivateCompanion] 自动保存配置返回异步对象，已跳过同步等待: %s", method_name)
+                return
+            except TypeError:
+                continue
             except Exception as exc:
                 logger.debug("[PrivateCompanion] 自动保存配置失败: %s", _single_line(exc, 120))
+                return
 
     def _set_runtime_bool_config(self, key: str, value: bool) -> None:
         setattr(self, key, bool(value))

@@ -128,6 +128,10 @@ DEFAULT_AI_DAILY_SOURCES = "\n".join(
 )
 BILIBILI_AI_BOT_PLUGIN_NAME = "astrbot_plugin_bilibili_ai_bot"
 BILIBILI_PUBLIC_INFO_PLUGIN_NAME = "astrbot_plugin_bilibili"
+BILIBILI_AI_BOT_LEGACY_DATA_NAMES = (
+    BILIBILI_AI_BOT_PLUGIN_NAME,
+    "astrbot_plugin_bilibili_bot",
+)
 
 DEFAULT_NEWS_SOURCES = "\n".join(
     [
@@ -663,7 +667,7 @@ class NewsExplorationMixin:
     def _bilibili_plugin_dir(self) -> Path:
         candidates = self._bilibili_ai_bot_plugin_dirs()
         for path in candidates:
-            if (path / "main.py").exists():
+            if self._is_bilibili_ai_bot_dir(path):
                 return path
         return Path(self.data_dir).parent.parent / "plugins" / BILIBILI_AI_BOT_PLUGIN_NAME
 
@@ -691,12 +695,13 @@ class NewsExplorationMixin:
         )
 
     def _bilibili_ai_bot_plugin_dirs(self) -> list[Path]:
+        # Startup-safe: do not glob all bilibili-like plugin folders here.
+        # A broad scan can interact badly with AstrBot's plugin loading phase.
         found: list[Path] = []
         seen: set[str] = set()
         for root in self._bilibili_plugin_roots():
-            direct = root / BILIBILI_AI_BOT_PLUGIN_NAME
-            for path in [direct, *root.glob("astrbot_plugin_bilibili*")]:
-                key = str(path.resolve()) if path.exists() else str(path)
+            for path in (root / BILIBILI_AI_BOT_PLUGIN_NAME,):
+                key = str(path)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -705,20 +710,27 @@ class NewsExplorationMixin:
         return found
 
     def _bilibili_ai_bot_package_names(self) -> list[str]:
+        now = _now_ts()
+        cache = getattr(self, "_bilibili_ai_bot_package_names_cache", None)
+        if isinstance(cache, dict) and now - _safe_float(cache.get("ts"), 0) < 60:
+            names = cache.get("names")
+            if isinstance(names, list):
+                return [str(name) for name in names if str(name or "").strip()]
         names = [BILIBILI_AI_BOT_PLUGIN_NAME]
         for path in self._bilibili_ai_bot_plugin_dirs():
             if path.name not in names:
                 names.append(path.name)
+        try:
+            self._bilibili_ai_bot_package_names_cache = {"ts": now, "names": list(names)}
+        except Exception:
+            pass
         return names
 
     def _bilibili_ai_bot_data_dirs(self) -> list[Path]:
         candidates: list[Path] = []
-        for plugin_name in self._bilibili_ai_bot_package_names():
-            try:
-                candidates.append(Path(StarTools.get_data_dir(plugin_name)))
-            except Exception:
-                pass
-            candidates.append(self._bilibili_plugin_dir().parent.parent / "plugin_data" / plugin_name)
+        plugin_data_root = Path(self.data_dir).parent.parent / "plugin_data"
+        for plugin_name in BILIBILI_AI_BOT_LEGACY_DATA_NAMES:
+            candidates.append(plugin_data_root / plugin_name)
         deduped: list[Path] = []
         seen: set[str] = set()
         for path in candidates:
@@ -729,15 +741,6 @@ class NewsExplorationMixin:
         return deduped
 
     def _bilibili_watch_log_file(self) -> Path:
-        for package_name in self._bilibili_ai_bot_package_names():
-            for module_name in (f"data.plugins.{package_name}.core.config", f"{package_name}.core.config"):
-                try:
-                    module = importlib.import_module(module_name)
-                    path = getattr(module, "WATCH_LOG_FILE", "")
-                    if path:
-                        return Path(path)
-                except Exception:
-                    pass
         data_candidates = [path / "watch_log.json" for path in self._bilibili_ai_bot_data_dirs()]
         for path in data_candidates:
             if path.exists():
@@ -745,76 +748,138 @@ class NewsExplorationMixin:
         return data_candidates[0] if data_candidates else self._bilibili_plugin_dir() / "watch_log.json"
 
     def _bilibili_available(self) -> bool:
+        now = _now_ts()
+        cache = getattr(self, "_bilibili_available_cache", None)
+        if isinstance(cache, dict) and now - _safe_float(cache.get("ts"), 0) < 30:
+            return bool(cache.get("available"))
         try:
-            return bool(self._bilibili_ai_bot_plugin_dirs()) or self._bilibili_watch_log_file().exists()
+            available = bool(self._bilibili_ai_bot_plugin_dirs()) or self._bilibili_watch_log_file().exists()
         except Exception:
-            return False
+            available = False
+        try:
+            self._bilibili_available_cache = {"ts": now, "available": bool(available)}
+        except Exception:
+            pass
+        return bool(available)
 
     def _find_bilibili_bot_instance(self) -> Any | None:
+        now = _now_ts()
+        cache = getattr(self, "_bilibili_bot_instance_cache", None)
+        if isinstance(cache, dict) and now - _safe_float(cache.get("ts"), 0) < 30:
+            return cache.get("instance")
+        names = tuple(self._bilibili_ai_bot_package_names())
+        found = None
         try:
             getter = getattr(getattr(self, "context", None), "get_registered_star", None)
             if callable(getter):
-                for name in self._bilibili_ai_bot_package_names():
+                for name in names:
                     obj = getter(name)
                     if obj is not None and (
                         callable(getattr(obj, "_run_proactive", None)) or hasattr(obj, "memory_api")
                     ):
-                        return obj
+                        found = obj
+                        break
         except Exception:
             pass
-        for obj in gc.get_objects():
-            try:
-                cls = obj.__class__
-                module = str(getattr(cls, "__module__", ""))
-                if not any(name in module for name in self._bilibili_ai_bot_package_names()):
+        if found is None and names:
+            for obj in gc.get_objects():
+                try:
+                    cls = obj.__class__
+                    module = str(getattr(cls, "__module__", ""))
+                    if not any(name in module for name in names):
+                        continue
+                    if (callable(getattr(obj, "_run_proactive", None)) and hasattr(obj, "_proactive_task")) or hasattr(obj, "memory_api"):
+                        found = obj
+                        break
+                except Exception:
                     continue
-                if (callable(getattr(obj, "_run_proactive", None)) and hasattr(obj, "_proactive_task")) or hasattr(obj, "memory_api"):
-                    return obj
-            except Exception:
-                continue
-        return None
+        try:
+            self._bilibili_bot_instance_cache = {"ts": now, "instance": found}
+        except Exception:
+            pass
+        return found
 
     def _find_bilibili_memory_api(self) -> Any | None:
+        now = _now_ts()
+        cache = getattr(self, "_bilibili_memory_api_object_cache", None)
+        if isinstance(cache, dict) and now - _safe_float(cache.get("ts"), 0) < 30:
+            return cache.get("api")
         bili = self._find_bilibili_bot_instance()
         api = getattr(bili, "memory_api", None) if bili is not None else None
         if api is not None and callable(getattr(api, "get_recent_memories", None)):
+            try:
+                self._bilibili_memory_api_object_cache = {"ts": now, "api": api}
+            except Exception:
+                pass
             return api
+        names = tuple(self._bilibili_ai_bot_package_names())
         for obj in gc.get_objects():
             try:
                 cls = obj.__class__
                 module = str(getattr(cls, "__module__", ""))
-                if not any(name in module for name in self._bilibili_ai_bot_package_names()):
+                if not any(name in module for name in names):
                     continue
                 api = getattr(obj, "memory_api", None)
                 if api is not None and callable(getattr(api, "get_recent_memories", None)):
+                    try:
+                        self._bilibili_memory_api_object_cache = {"ts": now, "api": api}
+                    except Exception:
+                        pass
                     return api
             except Exception:
                 continue
+        try:
+            self._bilibili_memory_api_object_cache = {"ts": now, "api": None}
+        except Exception:
+            pass
         return None
 
-    def _bilibili_memory_api_available(self) -> bool:
-        return self._find_bilibili_memory_api() is not None
+    def _bilibili_memory_api_available(self, *, allow_probe: bool = True, ttl_seconds: int = 60) -> bool:
+        now = _now_ts()
+        cache = getattr(self, "_bilibili_memory_api_cache", None)
+        if isinstance(cache, dict) and now - _safe_float(cache.get("ts"), 0) < max(5, ttl_seconds):
+            return bool(cache.get("available"))
+        if not allow_probe:
+            return False
+        available = self._find_bilibili_memory_api() is not None
+        try:
+            self._bilibili_memory_api_cache = {"ts": now, "available": bool(available)}
+        except Exception:
+            pass
+        return bool(available)
 
     def _find_bilibili_runtime_objects(self) -> list[Any]:
+        now = _now_ts()
+        cache = getattr(self, "_bilibili_runtime_objects_cache", None)
+        if isinstance(cache, dict) and now - _safe_float(cache.get("ts"), 0) < 30:
+            objects = cache.get("objects")
+            if isinstance(objects, list):
+                return list(objects)
+        names = tuple(self._bilibili_ai_bot_package_names())
         found: list[Any] = []
         seen: set[int] = set()
-        for obj in gc.get_objects():
-            try:
-                cls = obj.__class__
-                module = str(getattr(cls, "__module__", ""))
-                if "astrbot_plugin_bilibili" not in module:
+        if names:
+            for obj in gc.get_objects():
+                try:
+                    cls = obj.__class__
+                    module = str(getattr(cls, "__module__", ""))
+                    if not any(name in module for name in names):
+                        continue
+                    if id(obj) in seen:
+                        continue
+                    if (
+                        callable(getattr(obj, "get_video_info", None))
+                        or callable(getattr(getattr(obj, "bili_client", None), "get_video_info", None))
+                        or callable(getattr(obj, "_http_get", None))
+                    ):
+                        seen.add(id(obj))
+                        found.append(obj)
+                except Exception:
                     continue
-                if id(obj) in seen:
-                    continue
-                if (
-                    callable(getattr(obj, "get_video_info", None))
-                    or callable(getattr(getattr(obj, "bili_client", None), "get_video_info", None))
-                    or callable(getattr(obj, "_http_get", None))
-                ):
-                    seen.add(id(obj))
-                    found.append(obj)
-            except Exception:
-                continue
+        try:
+            self._bilibili_runtime_objects_cache = {"ts": now, "objects": list(found)}
+        except Exception:
+            pass
         return found
 
     def _load_bilibili_watch_log(self) -> list[dict[str, Any]]:
@@ -902,7 +967,7 @@ class NewsExplorationMixin:
             }
         return None
 
-    def _latest_bilibili_video_candidate(self) -> dict[str, Any] | None:
+    def _latest_bilibili_video_candidate(self, *, include_memory_api: bool = True) -> dict[str, Any] | None:
         logs = self._load_bilibili_watch_log()
         if logs:
             for item in reversed(logs[-20:]):
@@ -928,9 +993,11 @@ class NewsExplorationMixin:
                     "time": _single_line(item.get("time"), 24),
                     "actions": list(item.get("actions") or []) if isinstance(item.get("actions"), list) else [],
                     "source": "watch_log",
-                    "memory_context": self._bilibili_memory_context_for_bvid(bvid),
+                    "memory_context": self._bilibili_memory_context_for_bvid(bvid) if include_memory_api else [],
                 }
-        return self._bilibili_video_candidate_from_memory()
+        if include_memory_api:
+            return self._bilibili_video_candidate_from_memory()
+        return None
 
     def _record_bilibili_share_to_memory(self, user_id: str, candidate: dict[str, Any]) -> None:
         api = self._find_bilibili_memory_api()
@@ -1014,7 +1081,8 @@ class NewsExplorationMixin:
     def _maybe_schedule_bilibili_video_share(self) -> bool:
         if not self.enable_bilibili_integration:
             return False
-        candidate = self._latest_bilibili_video_candidate()
+        include_memory_api = bool(self._bilibili_memory_api_available(allow_probe=False))
+        candidate = self._latest_bilibili_video_candidate(include_memory_api=include_memory_api)
         if not isinstance(candidate, dict):
             return False
         users = self.data.get("users")

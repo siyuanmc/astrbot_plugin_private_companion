@@ -259,17 +259,12 @@ class IntegrationStatusMixin:
         """Work around LivingMemory versions whose MemoryProcessor lacks config."""
         if not self.enable_livingmemory_integration:
             return
-        try:
-            module = importlib.import_module(
-                "data.plugins.astrbot_plugin_livingmemory.core.processors.memory_processor"
-            )
-        except Exception:
-            try:
-                module = importlib.import_module(
-                    "astrbot_plugin_livingmemory.core.processors.memory_processor"
-                )
-            except Exception:
-                return
+        module = (
+            sys.modules.get("data.plugins.astrbot_plugin_livingmemory.core.processors.memory_processor")
+            or sys.modules.get("astrbot_plugin_livingmemory.core.processors.memory_processor")
+        )
+        if module is None:
+            return
         processor_cls = getattr(module, "MemoryProcessor", None)
         if processor_cls is None or hasattr(processor_cls, "config"):
             return

@@ -127,9 +127,9 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             register(f"{PAGE_API_PREFIX}{path}", handler, methods, desc)
 
     async def get_overview(self) -> dict[str, Any]:
+        start = time.perf_counter()
         try:
             async with self.plugin._data_lock:
-                self._auto_import_worldbook_if_needed_locked()
                 refresher = getattr(self.plugin, "_refresh_sleep_runtime_state", None)
                 if callable(refresher):
                     refresher()
@@ -144,62 +144,69 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 if isinstance(group, dict) and not self._looks_like_member_shadow_group(str(group_id), group)
             }
             enabled_groups = sum(1 for item in visible_groups.values() if isinstance(item, dict) and item.get("enabled", True))
-            return self._ok(
-                {
-                    "plugin": {
-                        "enabled": bool(getattr(self.plugin, "enabled", False)),
-                        "bot_name": getattr(self.plugin, "bot_name", ""),
-                        "data_file": getattr(self.plugin, "data_file", ""),
-                        "data_version": data.get("version"),
-                    },
-                    "private": {
-                        "user_count": len(users),
-                        "enabled_user_count": enabled_users,
-                        "require_opt_in": bool(getattr(self.plugin, "require_private_opt_in", True)),
-                        "max_daily_messages": getattr(self.plugin, "max_daily_messages", 0),
-                        "idle_minutes": getattr(self.plugin, "idle_minutes", 0),
-                        "min_interval_minutes": getattr(self.plugin, "min_interval_minutes", 0),
-                    },
-                    "group": {
-                        "enabled": bool(getattr(self.plugin, "enable_group_companion", False)),
-                        "group_count": len(visible_groups),
-                        "enabled_group_count": enabled_groups,
-                        "shadow_group_count": max(0, len(groups) - len(visible_groups)),
-                        "access_mode": getattr(self.plugin, "group_access_mode", "whitelist"),
-                        "whitelist": self.plugin._configured_group_ids(),
-                        "blacklist": self.plugin._configured_group_blacklist_ids(),
-                        "interjection_enabled": bool(getattr(self.plugin, "enable_group_interjection", False)),
-                        "repeat_follow_enabled": bool(getattr(self.plugin, "enable_group_repeat_follow", False)),
-                    },
-                    "features": self._feature_flags(),
-                    "proactive_only": self._proactive_only_mode_snapshot(),
-                    "providers": self._provider_settings(),
-                    "settings": self._runtime_settings(),
-                    "cache": self._cache_summary(data),
-                    "livingmemory": self._livingmemory_summary(),
-                    "screen_companion": self._screen_companion_summary(data),
-                    "knowledge": self.plugin._roleplay_knowledge_summary(),
-                    "worldbook": self._worldbook_summary(data),
-                    "proactive_candidates": self._proactive_candidate_summary(data),
-                    "proactive_tasks": self._proactive_task_summary(data),
-                    "message_debounce": self._message_debounce_summary(data),
-                    "bilibili": self._bilibili_summary(data),
-                    "news": self._news_summary(data),
-                    "web_exploration": self._web_exploration_summary(data),
-                    "qzone": self._qzone_summary(data),
-                    "private_reading": self._jm_cosmos_summary(data),
-                    "creative": self._creative_summary(data),
-                    "bookshelf": await self._bookshelf_summary(data, unlocked=False),
-                    "skill_growth": self._skill_growth_summary(data),
-                    "food_menu": self._food_menu_summary(data),
-                    "external_abilities": self._external_ability_summary(data),
-                    "life_observation": self._life_observation_summary(data),
-                    "daily_state": self._daily_state_summary(data.get("daily_state")),
-                    "daily_timeline": self._daily_timeline_summary(data),
-                    "daily_outfit": self._daily_outfit_summary(data),
-                    "token_stats": token_stats,
-                }
-            )
+            payload = {
+                "plugin": {
+                    "enabled": bool(getattr(self.plugin, "enabled", False)),
+                    "bot_name": getattr(self.plugin, "bot_name", ""),
+                    "data_file": getattr(self.plugin, "data_file", ""),
+                    "data_version": data.get("version"),
+                },
+                "private": {
+                    "user_count": len(users),
+                    "enabled_user_count": enabled_users,
+                    "require_opt_in": bool(getattr(self.plugin, "require_private_opt_in", True)),
+                    "max_daily_messages": getattr(self.plugin, "max_daily_messages", 0),
+                    "idle_minutes": getattr(self.plugin, "idle_minutes", 0),
+                    "min_interval_minutes": getattr(self.plugin, "min_interval_minutes", 0),
+                },
+                "group": {
+                    "enabled": bool(getattr(self.plugin, "enable_group_companion", False)),
+                    "group_count": len(visible_groups),
+                    "enabled_group_count": enabled_groups,
+                    "shadow_group_count": max(0, len(groups) - len(visible_groups)),
+                    "access_mode": getattr(self.plugin, "group_access_mode", "whitelist"),
+                    "whitelist": self.plugin._configured_group_ids(),
+                    "blacklist": self.plugin._configured_group_blacklist_ids(),
+                    "interjection_enabled": bool(getattr(self.plugin, "enable_group_interjection", False)),
+                    "repeat_follow_enabled": bool(getattr(self.plugin, "enable_group_repeat_follow", False)),
+                },
+                "features": self._feature_flags(),
+                "proactive_only": self._proactive_only_mode_snapshot(),
+                "providers": self._provider_settings(),
+                "settings": self._runtime_settings(),
+                "cache": self._cache_summary(data),
+                "livingmemory": self._livingmemory_summary(),
+                "screen_companion": self._screen_companion_summary(data),
+                "knowledge": self.plugin._roleplay_knowledge_summary(),
+                "worldbook": self._worldbook_summary(data),
+                "proactive_candidates": self._proactive_candidate_summary(data),
+                "proactive_tasks": self._proactive_task_summary(data),
+                "message_debounce": self._message_debounce_summary(data),
+                "bilibili": self._bilibili_summary(data),
+                "news": self._news_summary(data),
+                "web_exploration": self._web_exploration_summary(data),
+                "qzone": self._qzone_summary(data),
+                "private_reading": self._jm_cosmos_summary(data),
+                "creative": self._creative_summary(data),
+                "bookshelf": await self._bookshelf_summary(data, unlocked=False),
+                "skill_growth": self._skill_growth_summary(data),
+                "food_menu": self._food_menu_summary(data),
+                "external_abilities": self._external_ability_summary(data),
+                "life_observation": self._life_observation_summary(data),
+                "daily_state": self._daily_state_summary(data.get("daily_state")),
+                "daily_timeline": self._daily_timeline_summary(data),
+                "daily_outfit": self._daily_outfit_summary(data),
+                "token_stats": token_stats,
+            }
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+            if elapsed_ms > 1200:
+                logger.warning(
+                    "[PrivateCompanionPage] 总览接口耗时较高: elapsed=%sms users=%s groups=%s",
+                    elapsed_ms,
+                    len(users),
+                    len(visible_groups),
+                )
+            return self._ok(payload)
         except Exception as exc:
             logger.error(f"[PrivateCompanionPage] 获取总览失败: {exc}", exc_info=True)
             return self._error(str(exc))
@@ -283,9 +290,80 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 return []
             return list(value[-limit:])
 
+        scalar_user_keys = (
+            "enabled",
+            "manual_enabled",
+            "manual_disabled",
+            "nickname",
+            "style",
+            "umo",
+            "relationship_role",
+            "last_seen",
+            "last_sent",
+            "sent_today",
+            "sent_day",
+            "last_proactive_skip_at",
+            "last_proactive_skip_reason",
+            "last_proactive_skip_prefix",
+            "proactive_daily_limit",
+            "proactive_idle_minutes",
+            "proactive_min_interval_minutes",
+            "photo_daily_limit",
+            "screen_peek_daily_limit",
+            "poke_daily_limit",
+            "proactive_boundary_note",
+            "inbound_count",
+            "reply_count",
+            "proactive_sent_count",
+            "relationship_score",
+            "planned_proactive_reason",
+            "planned_proactive_action",
+            "planned_proactive_source",
+            "planned_proactive_topic",
+            "planned_proactive_motive",
+            "planned_proactive_impulse_id",
+            "planned_candidate_id",
+            "planned_proactive_semantic_kind",
+            "planned_proactive_anchor_type",
+            "planned_proactive_semantic_score",
+            "planned_proactive_semantic_note",
+            "planned_proactive_window_start_at",
+            "planned_proactive_best_until_at",
+            "planned_proactive_expire_at",
+            "planned_proactive_model_judge_at",
+            "next_proactive_at",
+            "proactive_sending",
+            "last_proactive_hesitation_at",
+            "last_proactive_hesitation_note",
+        )
+
+        def user_snapshot(value: Any) -> dict[str, Any]:
+            if not isinstance(value, dict):
+                return {}
+            snapshot = {key: value.get(key) for key in scalar_user_keys if key in value}
+            for key in (
+                "relationship_state",
+                "persona_relationship",
+                "llm_timer_event",
+                "planned_proactive_model_judge_result",
+                "proactive_afterglow",
+            ):
+                raw = value.get(key)
+                if isinstance(raw, dict):
+                    snapshot[key] = dict(raw)
+            aliases = value.get("alias_user_ids")
+            if isinstance(aliases, list):
+                snapshot["alias_user_ids"] = list(aliases[:8])
+            hesitations = value.get("recent_proactive_hesitations")
+            if isinstance(hesitations, list):
+                snapshot["recent_proactive_hesitations"] = [
+                    dict(item) for item in hesitations[-3:] if isinstance(item, dict)
+                ]
+            return snapshot
+
         data: dict[str, Any] = {
             "version": raw_data.get("version"),
-            "users": {str(key): dict(value) for key, value in raw_data.get("users", {}).items() if isinstance(value, dict)}
+            "users": {str(key): user_snapshot(value) for key, value in raw_data.get("users", {}).items() if isinstance(value, dict)}
             if isinstance(raw_data.get("users"), dict)
             else {},
             "groups": {
@@ -340,11 +418,35 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             data[key] = list_tail(raw_data.get(key), limit)
 
         image_cache = raw_data.get("private_image_vision_cache")
-        data["private_image_vision_cache"] = image_cache if isinstance(image_cache, dict) else {}
+        data["private_image_vision_cache_count"] = len(image_cache) if isinstance(image_cache, dict) else 0
+        data["private_image_vision_cache"] = {}
 
         profiles = raw_data.get("worldbook_member_profiles")
-        data["worldbook_member_profiles"] = profiles if isinstance(profiles, dict) else {}
+        if isinstance(profiles, dict):
+            profile_items = [(str(key), value) for key, value in profiles.items() if isinstance(value, dict)]
+            data["worldbook_member_profile_count"] = len(profile_items)
+            data["worldbook_enabled_member_profile_count"] = sum(1 for _, value in profile_items if bool(value.get("enabled", True)))
+            data["worldbook_pending_observation_total"] = sum(
+                len(value.get("pending_observations"))
+                for _, value in profile_items
+                if isinstance(value.get("pending_observations"), list)
+            )
+            data["worldbook_member_profiles"] = {key: value for key, value in profile_items[:160]}
+        else:
+            data["worldbook_member_profile_count"] = 0
+            data["worldbook_enabled_member_profile_count"] = 0
+            data["worldbook_pending_observation_total"] = 0
+            data["worldbook_member_profiles"] = {}
+        worldbook_groups = raw_data.get("worldbook_group_profiles")
+        if isinstance(worldbook_groups, dict):
+            group_items = [(str(key), value) for key, value in worldbook_groups.items() if isinstance(value, dict)]
+            data["worldbook_group_profile_count"] = len(group_items)
+            data["worldbook_group_profiles"] = {key: value for key, value in group_items[:120]}
+        else:
+            data["worldbook_group_profile_count"] = 0
+            data["worldbook_group_profiles"] = {}
         entries = raw_data.get("worldbook_entries")
+        data["worldbook_entry_count"] = len(entries) if isinstance(entries, list) else 0
         data["worldbook_entries"] = list_tail(entries, 300) if isinstance(entries, list) else []
 
         news_state = shallow_dict(raw_data.get("news_integration"))
@@ -437,6 +539,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
 
     def _cache_summary(self, data: dict[str, Any]) -> dict[str, Any]:
         image_cache = data.get("private_image_vision_cache") if isinstance(data.get("private_image_vision_cache"), dict) else {}
+        image_cache_count = self._int(data.get("private_image_vision_cache_count")) if "private_image_vision_cache_count" in data else len(image_cache)
         metrics = data.get("cache_metrics") if isinstance(data.get("cache_metrics"), dict) else {}
 
         def metric_row(name: str) -> dict[str, Any]:
@@ -468,7 +571,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         return {
             "private_image_vision": {
                 "enabled": bool(getattr(self.plugin, "enable_private_image_vision_cache", False)),
-                "items": len(image_cache),
+                "items": image_cache_count,
                 "max_items": int(getattr(self.plugin, "private_image_vision_cache_max_items", 0) or 0),
                 "private": metric_row("image_vision:private_image"),
                 "forward": metric_row("image_vision:forward_image"),
@@ -4845,15 +4948,27 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         atmosphere = group.get("atmosphere") if isinstance(group.get("atmosphere"), dict) else {}
         slang_terms = group.get("slang_terms") if isinstance(group.get("slang_terms"), list) else []
         slang_meanings = group.get("slang_meanings") if isinstance(group.get("slang_meanings"), dict) else {}
+        members = group.get("members") if isinstance(group.get("members"), dict) else {}
         cleaner = getattr(self.plugin, "_cleanup_group_slang_terms", None)
         if callable(cleaner):
             try:
-                group_for_filter = deepcopy(group)
+                group_for_filter = {
+                    "slang_terms": [dict(item) if isinstance(item, dict) else item for item in slang_terms],
+                    "slang_meanings": {str(key): dict(value) if isinstance(value, dict) else value for key, value in slang_meanings.items()},
+                    "members": {
+                        str(user_id): {
+                            key: member.get(key)
+                            for key in ("name", "identity_name", "display_name", "nickname", "card")
+                            if isinstance(member, dict) and key in member
+                        }
+                        for user_id, member in members.items()
+                        if isinstance(member, dict)
+                    },
+                }
                 if cleaner(group_for_filter):
                     slang_terms = group_for_filter.get("slang_terms") if isinstance(group_for_filter.get("slang_terms"), list) else []
             except Exception:
                 pass
-        members = group.get("members") if isinstance(group.get("members"), dict) else {}
         identity_count = sum(1 for item in members.values() if isinstance(item, dict) and item.get("identity_known"))
         wakeup_logs = group.get("group_wakeup_logs") if isinstance(group.get("group_wakeup_logs"), list) else []
         last_wakeup = group.get("last_group_wakeup") if isinstance(group.get("last_group_wakeup"), dict) else {}
@@ -8725,6 +8840,11 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         groups = data.get("worldbook_group_profiles") if isinstance(data.get("worldbook_group_profiles"), dict) else {}
         entries = data.get("worldbook_entries") if isinstance(data.get("worldbook_entries"), list) else []
         state = data.get("worldbook_import_state") if isinstance(data.get("worldbook_import_state"), dict) else {}
+        member_count = self._int(data.get("worldbook_member_profile_count")) if "worldbook_member_profile_count" in data else 0
+        enabled_member_count = self._int(data.get("worldbook_enabled_member_profile_count")) if "worldbook_enabled_member_profile_count" in data else 0
+        pending_observation_total = self._int(data.get("worldbook_pending_observation_total")) if "worldbook_pending_observation_total" in data else 0
+        group_count = self._int(data.get("worldbook_group_profile_count")) if "worldbook_group_profile_count" in data else 0
+        entry_count = self._int(data.get("worldbook_entry_count")) if "worldbook_entry_count" in data else len(entries)
         profile_items = []
         for user_id, item in profiles.items():
             if not isinstance(item, dict):
@@ -8775,6 +8895,10 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 }
             )
         profile_items.sort(key=lambda item: (not item.get("enabled", True), item.get("name") or item.get("user_id")))
+        if "worldbook_member_profile_count" not in data:
+            member_count = len(profile_items)
+            enabled_member_count = sum(1 for item in profile_items if item.get("enabled", True))
+            pending_observation_total = sum(self._clamp_int(item.get("pending_observation_count"), 0, 0, 999) for item in profile_items)
         group_items = [
             {
                 "group_id": self._single_line(group_id, 40),
@@ -8786,6 +8910,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             for group_id, item in groups.items()
             if isinstance(item, dict)
         ]
+        if "worldbook_group_profile_count" not in data:
+            group_count = len(group_items)
         return {
             "enabled": bool(getattr(self.plugin, "enable_worldbook_member_recognition", False)),
             "auto_import": bool(getattr(self.plugin, "worldbook_auto_import", False)),
@@ -8798,11 +8924,11 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             ),
             "auto_pending_observations": bool(getattr(self.plugin, "worldbook_auto_pending_observations", False)),
             "inject_limit": getattr(self.plugin, "worldbook_member_inject_limit", 0),
-            "entry_count": len(entries),
-            "member_count": len(profile_items),
-            "enabled_member_count": sum(1 for item in profile_items if item.get("enabled", True)),
-            "pending_observation_total": sum(self._clamp_int(item.get("pending_observation_count"), 0, 0, 999) for item in profile_items),
-            "group_count": len(group_items),
+            "entry_count": entry_count,
+            "member_count": member_count,
+            "enabled_member_count": enabled_member_count,
+            "pending_observation_total": pending_observation_total,
+            "group_count": group_count,
             "last_import": self.plugin._format_timestamp_elapsed(state.get("last_import_at", 0)),
             "source_files": state.get("source_files") if isinstance(state.get("source_files"), list) else [],
             "members": profile_items[:120],
@@ -8886,7 +9012,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             available = False
         latest = None
         try:
-            latest = self.plugin._latest_bilibili_video_candidate()
+            latest_getter = getattr(self.plugin, "_latest_bilibili_video_candidate", None)
+            latest = latest_getter(include_memory_api=False) if callable(latest_getter) else None
         except Exception:
             latest = None
         try:
@@ -8894,7 +9021,14 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         except Exception:
             watch_log = ""
         try:
-            memory_api_available = bool(getattr(self.plugin, "_bilibili_memory_api_available", lambda: False)())
+            memory_checker = getattr(self.plugin, "_bilibili_memory_api_available", None)
+            if callable(memory_checker):
+                try:
+                    memory_api_available = bool(memory_checker(allow_probe=False))
+                except TypeError:
+                    memory_api_available = bool(memory_checker())
+            else:
+                memory_api_available = False
         except Exception:
             memory_api_available = False
         return {

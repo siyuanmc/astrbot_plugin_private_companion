@@ -52,17 +52,24 @@ def migrate_flat_config_into_schema_groups(
     *,
     schema_path: Path,
     logger: Any | None = None,
+    save: bool = True,
 ) -> int:
     """Copy legacy flat config values into the new AstrBot schema groups."""
     try:
-        return _migrate_flat_config_into_schema_groups(config, schema_path=schema_path, logger=logger)
+        return _migrate_flat_config_into_schema_groups(config, schema_path=schema_path, logger=logger, save=save)
     except Exception as exc:
         if logger is not None:
             logger.warning("[PrivateCompanion] 配置分组迁移失败，已跳过且不影响插件加载: %s", _single_line(exc, 160))
         return 0
 
 
-def _migrate_flat_config_into_schema_groups(config: Any, *, schema_path: Path, logger: Any | None = None) -> int:
+def _migrate_flat_config_into_schema_groups(
+    config: Any,
+    *,
+    schema_path: Path,
+    logger: Any | None = None,
+    save: bool = True,
+) -> int:
     root = _config_root_mapping(config)
     if not isinstance(root, dict):
         return 0
@@ -110,18 +117,32 @@ def _migrate_flat_config_into_schema_groups(config: Any, *, schema_path: Path, l
     roleplay_hint_changes = _migrate_legacy_roleplay_image_hint(root, schema_map)
     changed.extend(roleplay_hint_changes)
 
-    # 旧别名键只负责迁移；仍在 schema 中登记的 flat 兼容键会保留默认值，
+    # 旧别名键只负责迁移；仍在 schema 中登记的 flat 兼容键重置为默认值，
     # 避免 AstrBot 每次启动都反复补齐并刷屏。
     removed_legacy_keys: list[str] = []
     cleanup_keys = set(LEGACY_KEY_ALIASES) | {LEGACY_PROACTIVE_ACTIONS_KEY, "require_target_group"}
     for old_key in cleanup_keys:
+        item = schema_map.get(old_key)
         if old_key in root:
-            root.pop(old_key, None)
-            removed_legacy_keys.append(old_key)
-        if isinstance(legacy_group, dict) and old_key in legacy_group:
-            legacy_group.pop(old_key, None)
-            if old_key not in removed_legacy_keys:
+            if item:
+                default_value = _coerce_schema_value(item.get("default"), item)
+                if root.get(old_key) != default_value:
+                    root[old_key] = default_value
+                    removed_legacy_keys.append(old_key)
+            else:
+                root.pop(old_key, None)
                 removed_legacy_keys.append(old_key)
+        if isinstance(legacy_group, dict) and old_key in legacy_group:
+            if item and str(item.get("group") or "") == "legacy_compat_config":
+                default_value = _coerce_schema_value(item.get("default"), item)
+                if legacy_group.get(old_key) != default_value:
+                    legacy_group[old_key] = default_value
+                    if old_key not in removed_legacy_keys:
+                        removed_legacy_keys.append(old_key)
+            else:
+                legacy_group.pop(old_key, None)
+                if old_key not in removed_legacy_keys:
+                    removed_legacy_keys.append(old_key)
     if removed_legacy_keys:
         changed.extend(f"{key}~cleanup" for key in removed_legacy_keys)
 
@@ -129,7 +150,8 @@ def _migrate_flat_config_into_schema_groups(config: Any, *, schema_path: Path, l
         return 0
     if logger is not None:
         logger.info("[PrivateCompanion] 已将旧版扁平配置迁移到新版分组配置: %s 项", len(changed))
-    _save_config_after_schema_migration(config, logger=logger)
+    if save:
+        _save_config_after_schema_migration(config, logger=logger)
     return len(changed)
 
 

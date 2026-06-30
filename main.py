@@ -496,11 +496,20 @@ class PrivateCompanionPlugin(
         self.data_dir = StarTools.get_data_dir(PLUGIN_NAME)
         os.makedirs(self.data_dir, exist_ok=True)
         self.data_file = os.path.join(self.data_dir, "companions.json")
-        migrate_flat_config_into_schema_groups(
+        config_migration_started = time.perf_counter()
+        self._startup_config_migration_changes = migrate_flat_config_into_schema_groups(
             c,
             schema_path=Path(__file__).with_name("_conf_schema.json"),
             logger=logger,
+            save=False,
         )
+        config_migration_elapsed_ms = int((time.perf_counter() - config_migration_started) * 1000)
+        if config_migration_elapsed_ms > 1200:
+            logger.warning(
+                "[PrivateCompanion] 启动配置迁移耗时较高: elapsed=%sms changes=%s",
+                config_migration_elapsed_ms,
+                self._startup_config_migration_changes,
+            )
 
         self.enabled = self._cfg_bool(c, "enabled", True)
         self.enable_proactive_only_mode = self._cfg_bool(c, "enable_proactive_only_mode", False)
@@ -1174,41 +1183,13 @@ class PrivateCompanionPlugin(
         self._last_input_status_at: dict[str, float] = {}
         self._passive_input_status_tasks: dict[str, asyncio.Task] = {}
         self._recent_inbound_activity_by_scope: dict[str, dict[str, Any]] = {}
+        self._startup_maintenance_task: asyncio.Task | None = None
+        startup_load_started = time.perf_counter()
         self.data = self._load_data_sync()
         self._apply_tts_runtime_overrides()
-        if self._cleanup_legacy_proactive_prompt_traces():
-            self._save_data_sync()
-        if self._cleanup_framework_meta_leak_records():
-            self._save_data_sync()
-        if self._sanitize_runtime_social_facts_inplace():
-            self._save_data_sync()
-        if self._merge_private_user_alias_records():
-            self._save_data_sync()
-        if self._cleanup_all_group_slang_terms():
-            self._save_data_sync()
-        groups = self.data.get("groups") if isinstance(self.data.get("groups"), dict) else {}
-        if isinstance(groups, dict):
-            group_cleanup_changed = False
-            for raw_group in groups.values():
-                if not isinstance(raw_group, dict):
-                    continue
-                cleaner = getattr(self, "_cleanup_group_members", None)
-                if callable(cleaner) and cleaner(raw_group):
-                    group_cleanup_changed = True
-                edge_cleaner = getattr(self, "_cleanup_group_relationship_edges", None)
-                if callable(edge_cleaner) and edge_cleaner(raw_group):
-                    group_cleanup_changed = True
-            if group_cleanup_changed:
-                self._save_data_sync()
-        if self.worldbook_auto_import:
-            try:
-                if self._import_worldbook_entries_from_sources():
-                    self._save_data_sync()
-            except Exception as e:
-                logger.warning(f"[PrivateCompanion] 刷新关系网失败: {e}", exc_info=True)
-        if self.default_enable_configured_targets:
-            self._sync_configured_targets()
-            self._save_data_sync()
+        load_elapsed_ms = int((time.perf_counter() - startup_load_started) * 1000)
+        if load_elapsed_ms > 1200:
+            logger.warning("[PrivateCompanion] 启动读取数据耗时较高: elapsed=%sms", load_elapsed_ms)
         self.page_api = None
         self._register_page_api_if_available()
 
@@ -1360,20 +1341,100 @@ class PrivateCompanionPlugin(
             logger.info("[PrivateCompanion] 插件总开关已关闭,不启动主动消息循环")
             return
         self._install_send_message_to_user_tool_sanitizer()
-        await self._apply_sqlite_wal_optimizations()
         self._schedule_default_persona_prompt_refresh()
+        needs_startup_save = False
         async with self._data_lock:
+            changed = False
+            if self.default_enable_configured_targets:
+                self._sync_configured_targets()
+                changed = True
             recovered_troubleshooting = self._recover_stale_troubleshooting_proactive_plans()
             if recovered_troubleshooting:
                 logger.info("[PrivateCompanion] 已恢复未完成的排障临时主动任务: %s", recovered_troubleshooting)
-            if self._prime_enabled_user_schedules() or recovered_troubleshooting:
-                self._save_data_sync()
+            if self._prime_enabled_user_schedules():
+                changed = True
+            if recovered_troubleshooting:
+                changed = True
+            if changed:
+                needs_startup_save = True
+        if needs_startup_save:
+            self._schedule_data_save(delay=0.5)
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._scheduler_loop())
             logger.info("[PrivateCompanion] 主动消息循环已启动")
+        if self._startup_maintenance_task is None or self._startup_maintenance_task.done():
+            self._startup_maintenance_task = asyncio.create_task(self._run_startup_background_maintenance())
         asyncio.create_task(self._reset_stale_qq_presence_if_needed())
         asyncio.create_task(self._startup_prepare_today())
         asyncio.create_task(self._refresh_passive_injection_cache())
+
+    def _run_startup_data_maintenance_locked(self) -> bool:
+        changed = False
+
+        def run_step(label: str, func: Any) -> None:
+            nonlocal changed
+            started = time.perf_counter()
+            try:
+                if callable(func) and func():
+                    changed = True
+            except Exception as exc:
+                logger.warning("[PrivateCompanion] 启动后台维护步骤失败: %s error=%s", label, _single_line(exc, 160))
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            if elapsed_ms > 1200:
+                logger.warning("[PrivateCompanion] 启动后台维护步骤耗时较高: step=%s elapsed=%sms", label, elapsed_ms)
+
+        run_step("legacy_prompt_trace_cleanup", self._cleanup_legacy_proactive_prompt_traces)
+        run_step("framework_meta_leak_cleanup", self._cleanup_framework_meta_leak_records)
+        run_step("runtime_social_fact_sanitize", self._sanitize_runtime_social_facts_inplace)
+        run_step("private_user_alias_merge", self._merge_private_user_alias_records)
+        run_step("group_slang_cleanup", self._cleanup_all_group_slang_terms)
+
+        def cleanup_groups() -> bool:
+            groups = self.data.get("groups") if isinstance(self.data.get("groups"), dict) else {}
+            if not isinstance(groups, dict):
+                return False
+            group_changed = False
+            cleaner = getattr(self, "_cleanup_group_members", None)
+            edge_cleaner = getattr(self, "_cleanup_group_relationship_edges", None)
+            for raw_group in groups.values():
+                if not isinstance(raw_group, dict):
+                    continue
+                if callable(cleaner) and cleaner(raw_group):
+                    group_changed = True
+                if callable(edge_cleaner) and edge_cleaner(raw_group):
+                    group_changed = True
+            return group_changed
+
+        run_step("group_record_cleanup", cleanup_groups)
+
+        if self.worldbook_auto_import:
+            run_step("worldbook_auto_import", self._import_worldbook_entries_from_sources)
+        return changed
+
+    async def _run_startup_background_maintenance(self) -> None:
+        await asyncio.sleep(0)
+        started = time.perf_counter()
+        try:
+            if _safe_int(getattr(self, "_startup_config_migration_changes", 0), 0, 0) > 0:
+                config_started = time.perf_counter()
+                await asyncio.to_thread(self._save_config_if_possible)
+                elapsed_ms = int((time.perf_counter() - config_started) * 1000)
+                if elapsed_ms > 1200:
+                    logger.warning("[PrivateCompanion] 启动后台配置保存耗时较高: elapsed=%sms", elapsed_ms)
+            try:
+                await asyncio.wait_for(self._apply_sqlite_wal_optimizations(), timeout=20)
+            except asyncio.TimeoutError:
+                logger.warning("[PrivateCompanion] SQLite WAL 后台优化超时,已跳过本轮启动优化")
+            async with self._data_lock:
+                if self._run_startup_data_maintenance_locked():
+                    self._save_data_sync()
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            if elapsed_ms > 1200:
+                logger.info("[PrivateCompanion] 启动后台维护完成: elapsed=%sms", elapsed_ms)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("[PrivateCompanion] 启动后台维护失败: %s", _single_line(exc, 160), exc_info=True)
 
     async def terminate(self):
         global _private_companion_plugin
@@ -1388,6 +1449,13 @@ class PrivateCompanionPlugin(
             if isinstance(task, asyncio.Task) and not task.done():
                 task.cancel()
         self._passive_input_status_tasks.clear()
+        startup_task = getattr(self, "_startup_maintenance_task", None)
+        if isinstance(startup_task, asyncio.Task) and not startup_task.done():
+            startup_task.cancel()
+            try:
+                await startup_task
+            except asyncio.CancelledError:
+                pass
         save_task = getattr(self, "_data_save_task", None)
         if isinstance(save_task, asyncio.Task) and not save_task.done():
             save_task.cancel()
