@@ -77,6 +77,7 @@ const providerLabels = {
   NARRATION_PROVIDER_ID: "工具结果转述",
   HISTORY_SUMMARY_PROVIDER_ID: "昨日对话摘要",
   RESPONSE_REVIEW_PROVIDER_ID: "回复/主动复核",
+  SMART_SILENCE_PROVIDER_ID: "智能沉默判定",
   PROACTIVE_PERSONA_JUDGE_PROVIDER_ID: "主动人格判定",
   TROUBLESHOOTING_PROVIDER_ID: "排障检查",
   SMART_MESSAGE_DEBOUNCE_PROVIDER_ID: "智能收口判断",
@@ -325,6 +326,13 @@ const providerGuides = {
     fit: "适合便宜、短文本改写自然、边界判断稳的模型。",
     fallback: "留空时回退到陪伴通用模型，再回退到主模型。",
   },
+  SMART_SILENCE_PROVIDER_ID: {
+    preference: "speed",
+    passiveImpact: "conditional",
+    purpose: "用户疑似表达不想继续当前话题时，判断这条待发送回复该不该直接静默取消。",
+    fit: "适合低延迟、短 JSON 稳定、边界判断保守的小模型。",
+    fallback: "留空时跟随回复/主动复核模型，再回退到智能收口或陪伴通用模型。",
+  },
   PROACTIVE_PERSONA_JUDGE_PROVIDER_ID: {
     preference: "speed",
     passiveImpact: "async",
@@ -451,7 +459,7 @@ const providerGroups = [
     id: "core",
     title: "基础与兜底",
     desc: "主模型、陪伴通用和最终回复前后的基础能力。",
-    keys: ["LLM_PROVIDER_ID", "MAI_STYLE_PROVIDER_ID", "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID", "RESPONSE_REVIEW_PROVIDER_ID", "PROACTIVE_PERSONA_JUDGE_PROVIDER_ID", "REST_WAKEUP_PROVIDER_ID", "TROUBLESHOOTING_PROVIDER_ID", "NARRATION_PROVIDER_ID"],
+    keys: ["LLM_PROVIDER_ID", "MAI_STYLE_PROVIDER_ID", "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID", "SMART_SILENCE_PROVIDER_ID", "RESPONSE_REVIEW_PROVIDER_ID", "PROACTIVE_PERSONA_JUDGE_PROVIDER_ID", "REST_WAKEUP_PROVIDER_ID", "TROUBLESHOOTING_PROVIDER_ID", "NARRATION_PROVIDER_ID"],
   },
   {
     id: "daily",
@@ -493,6 +501,7 @@ const featureMeta = {
   enable_expression_style_review: ["表达发送前审核", "发送前检查表达学习过头、异常断句、照抄样本等问题。"],
   enable_intent_emotion_analysis: ["本地意图/情绪快判", "用带置信度的本地规则识别求助、低落、玩笑、亲近和边界。"],
   enable_response_self_review: ["回复/主动复核", "被动回复做轻量自检；主动消息发送前判断是否值得现在发送、是否需要改写或延后。"],
+  enable_smart_silence: ["智能沉默", "用户明确不想继续话题时，让小模型决定本轮是否直接不回复。"],
   enable_llm_timer_scheduling: ["对话临时预约", "把聊天里自然形成的稍后提醒、叫醒、回头说等约定转写成 AstrBot 官方定时计划；插件本身不再单独调度。"],
   enable_passive_topic_suppression: ["话题抑制", "避免短时间反复主动提同一个话题。"],
   enable_relationship_state_machine: ["关系距离感", "根据亲近、冷淡、边界和回应情况调整相处分寸。"],
@@ -886,6 +895,9 @@ const configLabels = {
   qzone_emotional_vent_probability: "心情动态触发概率",
   enable_food_menu_recommendation: "吃什么候选",
   response_review_mode: "回复/主动复核模式",
+  SMART_SILENCE_PROVIDER_ID: "智能沉默小模型",
+  smart_silence_min_confidence: "智能沉默置信度",
+  smart_silence_model_timeout_seconds: "智能沉默超时秒数",
   proactive_review_strength: "主动复核强度",
   proactive_review_hard_risk_threshold: "硬拦截风险阈值",
   proactive_review_low_score_threshold: "低价值分数阈值",
@@ -1480,6 +1492,9 @@ const configDescriptions = {
   atrelay_default_relay_style: "默认转述方式：persona 按人格改写，soft 委婉，original 原话。",
   atrelay_multi_target_limit: "一次转述最多允许几个目标，防止刷屏。",
   response_review_mode: "控制回复/主动复核范围。主动消息发送前统一复核；full 会额外让较长被动回复参与模型改写，延迟更高。",
+  SMART_SILENCE_PROVIDER_ID: "用于用户表达“不想继续这个话题 / 别问了 / 换个话题 / 不用回复”时的发送前沉默判定。留空时跟随回复/主动复核模型。",
+  smart_silence_min_confidence: "小模型判定 silent 且达到该置信度才会真正吞掉回复。值越高越保守，按百分比填写。",
+  smart_silence_model_timeout_seconds: "智能沉默判定最长等待时间。超时默认放行，避免正常回复被拖慢。",
   proactive_review_strength: "控制主动消息发送前复核的拦截力度。默认宽松，避免模型过度保守导致主动消息归零。",
   proactive_review_hard_risk_threshold: "本地语义风险达到该值时会硬拦截主动候选。值越高越少拦截，按百分比填写。",
   proactive_review_low_score_threshold: "标准/严格强度下，候选价值分低于该值且压力较高时会延后。值越低越少延后，按百分比填写。",
@@ -1527,7 +1542,7 @@ const featureSettingGroups = {
   enable_companion_memory: ["memory_refresh_interval_minutes", "max_companion_memory_items"],
   enable_expression_learning: ["expression_learning_mode", "enable_expression_manual_review", "enable_expression_style_review", "max_learned_expression_items"],
   enable_intent_emotion_analysis: [],
-  enable_response_self_review: ["response_review_mode", "proactive_review_strength", "proactive_review_hard_risk_threshold", "proactive_review_low_score_threshold", "proactive_review_pressure_threshold", "response_review_max_chars"],
+  enable_response_self_review: ["response_review_mode", "enable_smart_silence", "SMART_SILENCE_PROVIDER_ID", "smart_silence_min_confidence", "smart_silence_model_timeout_seconds", "proactive_review_strength", "proactive_review_hard_risk_threshold", "proactive_review_low_score_threshold", "proactive_review_pressure_threshold", "response_review_max_chars"],
   enable_passive_topic_suppression: ["passive_topic_memory_hours"],
   enable_relationship_state_machine: ["proactive_unanswered_slowdown_start", "proactive_unanswered_max_interval_multiplier", "friend_unanswered_max_cooldown_hours"],
   enable_emotion_simulation: ["enable_llm_emotion_judgement", "emotion_judgement_mode", "EMOTION_JUDGEMENT_PROVIDER_ID", "emotional_gate_hurt_threshold", "emotional_gate_refuse_threshold", "emotional_gate_recovery_per_hour", "emotional_gate_max_hurt_minutes", "enable_qzone_emotional_vent_publish", "qzone_emotional_vent_threshold", "qzone_emotional_vent_cooldown_hours", "qzone_emotional_vent_probability"],
@@ -1683,7 +1698,7 @@ const featureSettingSections = {
     {
       title: "回复策略",
       note: "意图画像、回复/主动复核和重复话题抑制。",
-      keys: ["enable_intent_emotion_analysis", "enable_response_self_review", "response_review_mode", "proactive_review_strength", "proactive_review_hard_risk_threshold", "proactive_review_low_score_threshold", "proactive_review_pressure_threshold", "response_review_max_chars", "enable_passive_topic_suppression", "passive_topic_memory_hours"],
+      keys: ["enable_intent_emotion_analysis", "enable_response_self_review", "response_review_mode", "enable_smart_silence", "SMART_SILENCE_PROVIDER_ID", "smart_silence_min_confidence", "smart_silence_model_timeout_seconds", "proactive_review_strength", "proactive_review_hard_risk_threshold", "proactive_review_low_score_threshold", "proactive_review_pressure_threshold", "response_review_max_chars", "enable_passive_topic_suppression", "passive_topic_memory_hours"],
     },
     {
       title: "关系与习惯",
@@ -2015,8 +2030,11 @@ const featureSettingTypes = {
   response_review_mode: { type: "select", options: [["severe_only", "主动统一复核"], ["local_only", "仅本地识别并丢弃"], ["full", "含被动积极自检（延迟更高）"]] },
   proactive_review_strength: { type: "select", options: [["lenient", "宽松：减少取消"], ["balanced", "标准：保留延后"], ["strict", "严格：按模型拦截"]] },
   emotion_judgement_mode: { type: "select", options: [["suspicious", "仅复核可疑项"], ["always", "总是复核普通文本"], ["off", "关闭复核"]] },
+  smart_silence_min_confidence: { type: "number", min: 0, max: 100, step: 1 },
+  smart_silence_model_timeout_seconds: { type: "number", min: 0.2, max: 5, step: 0.1 },
   group_high_intensity_merge_scope: { type: "select", options: [["group", "全群连续叫 Bot 合并"], ["same_user", "只合并同一发送者补话"]] },
   EMOTION_JUDGEMENT_PROVIDER_ID: { type: "provider" },
+  SMART_SILENCE_PROVIDER_ID: { type: "provider" },
   PROACTIVE_PERSONA_JUDGE_PROVIDER_ID: { type: "provider" },
   proactive_prompt_template: { type: "textarea" },
   proactive_persona_judge_send_threshold: { type: "number", min: 0, max: 100, step: 1 },
@@ -10588,6 +10606,10 @@ function featureRelatedSettings(key) {
       message_debounce_max_merge_messages: 8,
       enable_smart_message_debounce: false,
       SMART_MESSAGE_DEBOUNCE_PROVIDER_ID: "",
+      enable_smart_silence: true,
+      SMART_SILENCE_PROVIDER_ID: "",
+      smart_silence_min_confidence: 0.66,
+      smart_silence_model_timeout_seconds: 1.2,
       smart_message_debounce_model_timeout_seconds: 0.8,
       smart_message_debounce_wait_seconds: 3,
       smart_message_debounce_learning_window_seconds: 8,
@@ -10933,7 +10955,7 @@ function featureDependencyLines(key) {
   if (key === "enable_proactive_only_mode") dependencies.push(["注意", "只跳过本插件的普通被动增强，不会阻止默认回复或其他插件"]);
   if (key !== "enable_group_companion" && key.startsWith("enable_group_")) dependencies.push(["依赖", "群聊总开关"]);
   if (key === "enable_group_conversation_followup") dependencies.push(["依赖", "群聊场景感知"]);
-  if (["enable_companion_memory", "enable_expression_learning", "enable_intent_emotion_analysis", "enable_response_self_review", "enable_passive_topic_suppression", "enable_relationship_state_machine", "enable_emotion_simulation", "enable_dialogue_episode_memory", "enable_open_loop_tracking", "enable_food_menu_recommendation"].includes(key)) {
+  if (["enable_companion_memory", "enable_expression_learning", "enable_intent_emotion_analysis", "enable_response_self_review", "enable_smart_silence", "enable_passive_topic_suppression", "enable_relationship_state_machine", "enable_emotion_simulation", "enable_dialogue_episode_memory", "enable_open_loop_tracking", "enable_food_menu_recommendation"].includes(key)) {
     dependencies.push(["依赖", "私聊互动策略"]);
   }
   if (["enable_bilibili_boredom_watch"].includes(key)) dependencies.push(["依赖", "B 站能力可用"]);
@@ -11002,10 +11024,16 @@ const featureDetailGuides = {
     disabled: "不再注入本轮意图策略；情绪模拟和关系距离感仍可基于自身开关使用轻量状态。",
   },
   enable_response_self_review: {
-    summary: "主动消息发送前统一做价值复核和轻量润色，重点避免主动开口写成“好呀/确实/刚看到你说”这类像在回复空气的话。",
-    trigger: "主动消息生成后、发送前；普通被动回复只保留防漏、防复读和突然换话题等本地保护，full 模式才会积极改写被动回复。",
-    enabled: "主动消息会在发送前判断原样发送、轻改写、延后或取消；默认宽松强度会减少直接取消，避免模型过度保守导致主动消息归零。",
+    summary: "主动消息发送前统一做价值复核和轻量润色；被动回复保留防漏、防复读和智能沉默等发送前保护。",
+    trigger: "主动消息生成后、发送前；普通被动回复只在严重风险、用户明确边界或 full 模式下进入额外处理。",
+    enabled: "主动消息会在发送前判断原样发送、轻改写、延后或取消；用户明确不想继续话题时，可由智能沉默小模型决定是否直接不发。",
     disabled: "不再调用模型润色主动消息；本地仍会尽量丢弃明显错误的主动消息。",
+  },
+  enable_smart_silence: {
+    summary: "用户说别聊了、别问了、换个话题或不用回复时，不再硬接一句“那就结束这个话题”，而是让小模型判断是否该安静退开。",
+    trigger: "仅在本地快判命中疑似话题边界后调用小模型；普通聊天不会额外消耗。",
+    enabled: "小模型判定 silent 且达到置信度阈值时，本轮待发送回复会被直接取消，不写入上次回复记忆。",
+    disabled: "遇到这类边界表达时仍按普通主链回复处理。",
   },
   enable_passive_topic_suppression: {
     summary: "记录最近被动回复主题，限制短时间内反复把同类话题带回聊天，避免像卡在一个话题上。",
@@ -11688,6 +11716,12 @@ function bindFeatureDetailActions() {
             state.overview.settings.enable_smart_message_debounce = input.checked;
             renderFeatureSwitches();
           }
+          if (state.selectedFeatureKey === "enable_response_self_review" && input.dataset.featureParam === "enable_smart_silence") {
+            state.featureDraft.enable_smart_silence = input.checked;
+            state.overview.settings = state.overview.settings || {};
+            state.overview.settings.enable_smart_silence = input.checked;
+            renderFeatureSwitches();
+          }
           if (
             state.selectedFeatureKey === "enable_tts_enhancement"
             && ["auto_voice_enabled", "enable_tts_local_playback", "enable_tts_live_subtitle_sync"].includes(input.dataset.featureParam)
@@ -12045,6 +12079,9 @@ function resolveProviderId(key, values = currentProviderValues()) {
   if (optionalNoFallbackProviderKeys.has(key)) return "";
   if (key === "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID") {
     return values.LLM_PROVIDER_ID || "";
+  }
+  if (key === "SMART_SILENCE_PROVIDER_ID") {
+    return values.RESPONSE_REVIEW_PROVIDER_ID || values.SMART_MESSAGE_DEBOUNCE_PROVIDER_ID || values.MAI_STYLE_PROVIDER_ID || values.LLM_PROVIDER_ID || "";
   }
   if (key === "PROACTIVE_PERSONA_JUDGE_PROVIDER_ID") {
     return values.RESPONSE_REVIEW_PROVIDER_ID || values.MAI_STYLE_PROVIDER_ID || values.LLM_PROVIDER_ID || "";

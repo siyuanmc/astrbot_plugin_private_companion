@@ -130,6 +130,7 @@ from .group_observation import GroupObservationMixin
 from .event_dispatch import EventDispatchMixin
 from .private_reading import PrivateReadingMixin
 from .news_exploration import NewsExplorationMixin
+from .self_timeline import SelfTimelineMixin
 from .core_store import CoreStoreMixin
 from .integration_status import IntegrationStatusMixin
 from .astrbot_knowledge import AstrBotKnowledgeMixin
@@ -413,7 +414,7 @@ _PROACTIVE_ONLY_TEMP_UNLOCK_RELATED = {
     PLUGIN_NAME,
     "menglimi",
     "我会永远陪着你：为 AstrBot 提供人格连续性、关系识别、主动行为和可视化管理的陪伴编排插件。",
-    "5.4.4",
+    "5.4.5",
 )
 class PrivateCompanionPlugin(
     CoreStoreMixin,
@@ -442,6 +443,7 @@ class PrivateCompanionPlugin(
     EventDispatchMixin,
     PrivateReadingMixin,
     NewsExplorationMixin,
+    SelfTimelineMixin,
     AtRelayMixin,
     Star,
 ):
@@ -839,6 +841,11 @@ class PrivateCompanionPlugin(
         self.response_review_mode = self._cfg_str(c, "response_review_mode", "severe_only", "severe_only").lower()
         if self.response_review_mode not in {"local_only", "severe_only", "full"}:
             self.response_review_mode = "severe_only"
+        self.enable_smart_silence = self._cfg_bool(c, "enable_smart_silence", True)
+        self.smart_silence_provider_id = self._cfg_str(c, "SMART_SILENCE_PROVIDER_ID", "")
+        self.smart_silence_min_confidence = self._cfg_unit_interval(c, "smart_silence_min_confidence", 0.66, 0.0)
+        self.smart_silence_model_timeout_seconds = self._cfg_float(c, "smart_silence_model_timeout_seconds", 1.2, 0.2)
+        self._smart_silence_cache: dict[str, dict[str, Any]] = {}
         self.proactive_review_strength = self._cfg_str(c, "proactive_review_strength", "lenient", "lenient").lower()
         if self.proactive_review_strength not in {"lenient", "balanced", "strict"}:
             self.proactive_review_strength = "lenient"
@@ -1451,34 +1458,43 @@ class PrivateCompanionPlugin(
     async def terminate(self):
         global _private_companion_plugin
         self._stop_event.set()
+
+        async def cancel_task(task: Any, label: str, timeout: float = 3.0) -> None:
+            if not isinstance(task, asyncio.Task) or task.done():
+                return
+            task.cancel()
+            done, pending = await asyncio.wait({task}, timeout=timeout)
+            if pending:
+                logger.warning("[PrivateCompanion] 终止后台任务超时,继续卸载: task=%s", label)
+                return
+            for finished in done:
+                try:
+                    await finished
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    logger.debug("[PrivateCompanion] 终止后台任务时收到异常: task=%s error=%s", label, _single_line(exc, 160))
+
         if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+            await cancel_task(self._task, "proactive_scheduler")
         for task in list(self._passive_input_status_tasks.values()):
             if isinstance(task, asyncio.Task) and not task.done():
                 task.cancel()
         self._passive_input_status_tasks.clear()
         startup_task = getattr(self, "_startup_maintenance_task", None)
-        if isinstance(startup_task, asyncio.Task) and not startup_task.done():
-            startup_task.cancel()
-            try:
-                await startup_task
-            except asyncio.CancelledError:
-                pass
+        await cancel_task(startup_task, "startup_maintenance")
         save_task = getattr(self, "_data_save_task", None)
-        if isinstance(save_task, asyncio.Task) and not save_task.done():
-            save_task.cancel()
-            try:
-                await save_task
-            except asyncio.CancelledError:
-                pass
-        async with self._data_lock:
-            self._save_data_sync()
+        await cancel_task(save_task, "delayed_data_save")
+        try:
+            await asyncio.wait_for(self._save_data_on_terminate(), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.warning("[PrivateCompanion] 终止时保存数据超时,已跳过最终保存以避免卡死卸载")
         if _private_companion_plugin is self:
             _private_companion_plugin = None
+
+    async def _save_data_on_terminate(self) -> None:
+        async with self._data_lock:
+            self._save_data_sync()
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=10000)
     async def observe_recall_enhancement_events(self, event: AstrMessageEvent):
@@ -1800,6 +1816,91 @@ class PrivateCompanionPlugin(
             group_id,
             _single_line(review.get("reason"), 120),
             _single_line(reply_text, 160),
+        )
+        empty_result = self._build_result_from_chain([])
+        try:
+            empty_result.stop_event()
+        except Exception:
+            pass
+        event.set_result(empty_result)
+        event.stop_event()
+
+    @filter.on_decorating_result()
+    async def suppress_smart_silence_reply_before_send(self, event: AstrMessageEvent):
+        """用户明确想停下当前话题时，用小模型决定是否静默取消待发送回复。"""
+        if not self.enabled:
+            return
+        if bool(getattr(event, "_private_companion_smart_silence_drop", False)):
+            logger.info(
+                "[PrivateCompanion] 智能沉默发送前兜底拦截: reason=%s",
+                _single_line(getattr(event, "_private_companion_smart_silence_reason", ""), 120),
+            )
+            empty_result = self._build_result_from_chain([])
+            try:
+                empty_result.stop_event()
+            except Exception:
+                pass
+            event.set_result(empty_result)
+            event.stop_event()
+            return
+        if not bool(getattr(self, "enable_smart_silence", True)):
+            return
+        try:
+            if bool(getattr(event, "is_private_chat", lambda: False)()):
+                return
+        except Exception:
+            pass
+        result = event.get_result()
+        if result is None:
+            return
+        try:
+            if hasattr(result, "is_llm_result") and not result.is_llm_result():
+                return
+        except Exception:
+            pass
+        chain = list(getattr(result, "chain", []) or [])
+        if not chain or any(not isinstance(comp, Plain) for comp in chain):
+            return
+        reply_text = self._chain_text_for_forbidden_recall(chain, limit=600)
+        if not reply_text:
+            return
+        inbound_text = _single_line(
+            getattr(event, "private_companion_group_text", "") or getattr(event, "message_str", ""),
+            260,
+        )
+        if not self._smart_silence_trigger_reason(inbound_text):
+            return
+        recent_context: list[str] = []
+        group_id = self._extract_group_id_from_event(event)
+        if group_id:
+            group = self._get_group(group_id)
+            recent = group.get("recent_messages") if isinstance(group.get("recent_messages"), list) else []
+            for item in recent[-6:]:
+                if not isinstance(item, dict):
+                    continue
+                name = _single_line(item.get("identity_name") or item.get("name") or item.get("sender_id"), 28)
+                msg = _single_line(item.get("text"), 90)
+                if msg:
+                    recent_context.append(f"{name}: {msg}" if name else msg)
+        try:
+            decision = await self._decide_smart_silence(
+                inbound_text=inbound_text,
+                response_text=reply_text,
+                user=None,
+                session_kind="group" if group_id else "chat",
+                recent_context=recent_context,
+            )
+        except Exception as exc:
+            logger.info("[PrivateCompanion] 智能沉默发送前判定失败,默认放行: %s", _single_line(exc, 120))
+            return
+        if str(decision.get("decision") or "") != "silent":
+            return
+        logger.info(
+            "[PrivateCompanion] 智能沉默已取消本轮群聊回复: group=%s reason=%s inbound=%s reply=%s",
+            group_id or "-",
+            _single_line(decision.get("reason"), 120),
+            _single_line(inbound_text, 120),
+            _single_line(reply_text, 140),
         )
         empty_result = self._build_result_from_chain([])
         try:
@@ -4764,6 +4865,28 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
                         mode="group",
                         metadata={"注入位置": placement},
                     )
+            timeline_marker = "<!-- private_companion_self_timeline_v1 -->"
+            if timeline_marker not in (req.system_prompt or "") and timeline_marker not in str(getattr(req, "prompt", "") or ""):
+                self_timeline_context = self._format_self_timeline_context_for_reply(group_recall_text, limit=8)
+                if self_timeline_context:
+                    placement = "prompt" if self._append_turn_prompt_fragment_by_position(
+                        req,
+                        timeline_marker,
+                        self_timeline_context,
+                        priority=67,
+                        source="self_timeline",
+                    ) else "system_prompt"
+                    if placement == "system_prompt":
+                        req.system_prompt = f"{req.system_prompt or ''}\n\n{timeline_marker}\n{self_timeline_context}".strip()
+                    await self._record_request_prompt_fragment(
+                        event,
+                        title="自我时间线检索",
+                        key="self.timeline",
+                        text=self_timeline_context,
+                        source="self_timeline",
+                        mode="group",
+                        metadata={"注入位置": placement},
+                    )
             await self._append_conditional_tool_instructions_to_request(event, req)
             await self._append_environment_perception_to_request(event, req)
             log_bookshelf_secret_skip("group_chat")
@@ -5209,6 +5332,9 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
             web_exploration_context = self._format_recent_web_exploration_context_for_reply(inbound_text)
             if web_exploration_context:
                 prompt_surface.add("web_exploration.recent", web_exploration_context, priority=65, source="web_exploration")
+            self_timeline_context = self._format_self_timeline_context_for_reply(inbound_text, current_user, limit=8)
+            if self_timeline_context:
+                prompt_surface.add("self.timeline", self_timeline_context, priority=67, source="self_timeline")
             if self._feature_enabled_or_temp_unlocked("enable_skill_growth_passive_injection"):
                 skill_context = self._format_skill_growth_for_prompt()
                 if skill_context:
@@ -5470,6 +5596,34 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
 
             inbound_text = _single_line(current_user.get("last_user_message"), 260)
             music_album_context = getattr(event, "private_companion_reply_music_album_context", None)
+            silence_decision = await self._decide_smart_silence(
+                inbound_text=inbound_text,
+                response_text=working_text,
+                user=current_user,
+                session_kind="private",
+            )
+            if str(silence_decision.get("decision") or "") == "silent":
+                setattr(event, "_private_companion_smart_silence_drop", True)
+                setattr(event, "_private_companion_smart_silence_reason", _single_line(silence_decision.get("reason"), 120))
+                resp.completion_text = ""
+                async with self._data_lock:
+                    current = self._get_user(user_id)
+                    stats = current.setdefault("postprocess_stats", {})
+                    if not isinstance(stats, dict):
+                        stats = {}
+                        current["postprocess_stats"] = stats
+                    stats["smart_silence"] = _safe_int(stats.get("smart_silence"), 0, 0) + 1
+                    stats["last_smart_silence_at"] = self._environment_now().strftime("%Y-%m-%d %H:%M")
+                    self._save_data_sync()
+                logger.info(
+                    "[PrivateCompanion] 智能沉默已取消本轮私聊回复: user=%s reason=%s inbound=%s reply=%s",
+                    user_id,
+                    _single_line(silence_decision.get("reason"), 120),
+                    _single_line(inbound_text, 120),
+                    _single_line(working_text, 140),
+                )
+                release_now = True
+                return
             reviewed_text = await self._review_and_rewrite_response(
                 current_user,
                 inbound_text,

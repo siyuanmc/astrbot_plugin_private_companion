@@ -1989,6 +1989,8 @@ Provider 规则：{emotion_rule}
             args,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="ignore",
             timeout=95,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )

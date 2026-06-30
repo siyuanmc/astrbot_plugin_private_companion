@@ -4271,6 +4271,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             prompt_text=prompt_text,
             session_key="daily_outfit",
             image_size="1024x1024",
+            allow_daily_outfit_reference=False,
         )
         if image_path:
             return await self._record_daily_outfit_photo_result(
@@ -4625,6 +4626,7 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         session_key: str,
         reference_image_path: str = "",
         image_size: str = "",
+        allow_daily_outfit_reference: bool = True,
     ) -> tuple[str, str, str]:
         started = time.time()
         trace_id = self._photo_generation_trace_id(session_key, workflow_kind)
@@ -4632,7 +4634,10 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         prompt_text = self._apply_photo_generation_fixed_prompt(prompt_text)
         reference_image_path = _single_line(reference_image_path, 260)
         if not reference_image_path:
-            reference_image_path = await self._photo_persona_reference_image_for_kind_async(workflow_kind)
+            reference_image_path = await self._photo_persona_reference_image_for_kind_async(
+                workflow_kind,
+                allow_daily_outfit=allow_daily_outfit_reference,
+            )
         preferred = self.photo_generation_backend
         try:
             reference_exists = bool(reference_image_path and Path(reference_image_path).exists())
@@ -4891,9 +4896,38 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
             return str(path)
         return ""
 
-    def _photo_persona_reference_image_for_kind(self, workflow_kind: str) -> str:
+    def _daily_outfit_reference_image_path(self) -> str:
+        item = self.data.get("daily_outfit_photo") if isinstance(getattr(self, "data", None), dict) else {}
+        if not isinstance(item, dict):
+            return ""
+        if _single_line(item.get("date"), 20) != _today_key():
+            return ""
+        raw = _single_line(item.get("path"), 500).strip().strip('"').strip("'")
+        if not raw:
+            return ""
+        try:
+            path = Path(raw).expanduser()
+            if not path.is_absolute():
+                path = Path(self.data_dir) / raw
+            path = path.resolve()
+        except Exception:
+            path = Path(raw)
+        try:
+            if not path.exists() or not path.is_file():
+                return ""
+        except (OSError, ValueError):
+            return ""
+        if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+            return ""
+        return str(path)
+
+    def _photo_persona_reference_image_for_kind(self, workflow_kind: str, *, allow_daily_outfit: bool = True) -> str:
         if str(workflow_kind or "").strip().lower() not in {"selfie", "portrait", "自拍", "人像"}:
             return ""
+        if allow_daily_outfit:
+            outfit_path = self._daily_outfit_reference_image_path()
+            if outfit_path:
+                return outfit_path
         return self._photo_persona_reference_image_path()
 
     async def _photo_persona_reference_image_path_async(self) -> str:
@@ -4923,9 +4957,22 @@ reason={reason or "check_in"}；action={action or "message"}；topic={_single_li
         logger.info("[PrivateCompanion] 配置页人设参考图 URL 已缓存为本地文件: path=%s", _single_line(stable_path, 160))
         return stable_path
 
-    async def _photo_persona_reference_image_for_kind_async(self, workflow_kind: str) -> str:
+    async def _photo_persona_reference_image_for_kind_async(
+        self,
+        workflow_kind: str,
+        *,
+        allow_daily_outfit: bool = True,
+    ) -> str:
         if str(workflow_kind or "").strip().lower() not in {"selfie", "portrait", "自拍", "人像"}:
             return ""
+        if allow_daily_outfit:
+            outfit_path = self._daily_outfit_reference_image_path()
+            if outfit_path:
+                logger.info(
+                    "[PrivateCompanion] 自拍参考图优先使用今日穿搭图: path=%s",
+                    _single_line(outfit_path, 160),
+                )
+                return outfit_path
         return await self._photo_persona_reference_image_path_async()
 
     async def _run_comfyui_photo_workflow(

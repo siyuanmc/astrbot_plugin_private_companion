@@ -416,6 +416,12 @@
     "default": "",
     "invisible": true
   },
+  "SMART_SILENCE_PROVIDER_ID": {
+    "description": "Legacy flat config: 智能沉默判定模型（留空跟随回复复核）",
+    "type": "string",
+    "default": "",
+    "invisible": true
+  },
   "TROUBLESHOOTING_PROVIDER_ID": {
     "description": "Legacy flat config: 排障检查模型（留空跟随回复/主动复核）",
     "type": "string",
@@ -1122,6 +1128,24 @@
     "description": "Legacy flat config: 启用回复/主动复核",
     "type": "bool",
     "default": true,
+    "invisible": true
+  },
+  "enable_smart_silence": {
+    "description": "Legacy flat config: 启用智能沉默",
+    "type": "bool",
+    "default": true,
+    "invisible": true
+  },
+  "smart_silence_min_confidence": {
+    "description": "Legacy flat config: 智能沉默最低置信度",
+    "type": "float",
+    "default": 0.66,
+    "invisible": true
+  },
+  "smart_silence_model_timeout_seconds": {
+    "description": "Legacy flat config: 智能沉默模型超时秒数",
+    "type": "float",
+    "default": 1.2,
     "invisible": true
   },
   "response_review_mode": {
@@ -3089,6 +3113,13 @@
         "default": "",
         "_special": "select_provider"
       },
+      "SMART_SILENCE_PROVIDER_ID": {
+        "description": "智能沉默判定模型（留空跟随回复复核）",
+        "type": "string",
+        "hint": "仅在用户疑似表达“不想继续这个话题/别问了/换个话题/不用回复”时调用，判断本轮待发送回复是否应该直接静默取消。建议使用便宜、低延迟、JSON 稳定的小模型。",
+        "default": "",
+        "_special": "select_provider"
+      },
       "TROUBLESHOOTING_PROVIDER_ID": {
         "description": "排障检查模型（留空跟随回复/主动复核）",
         "type": "string",
@@ -4348,6 +4379,43 @@
         "default": true,
         "condition": {
           "enable_mai_style_integration": true
+        }
+      },
+      "enable_smart_silence": {
+        "description": "启用智能沉默",
+        "type": "bool",
+        "hint": "开启后，用户明确表达“不想继续这个话题、别问了、换个话题、不用回复”等边界时，会调用小模型判断是否直接取消本轮回复，而不是继续发一句确认或解释。",
+        "default": true,
+        "condition": {
+          "enable_mai_style_integration": true
+        }
+      },
+      "smart_silence_min_confidence": {
+        "description": "智能沉默最低置信度",
+        "type": "float",
+        "hint": "小模型判定为 silent 且置信度达到该值时才真正吞掉回复。值越高越保守，默认 0.66。",
+        "slider": {
+          "min": 0,
+          "max": 1,
+          "step": 0.05
+        },
+        "default": 0.66,
+        "condition": {
+          "enable_smart_silence": true
+        }
+      },
+      "smart_silence_model_timeout_seconds": {
+        "description": "智能沉默超时秒数",
+        "type": "float",
+        "hint": "小模型判定最长等待时间。超时会默认放行，避免正常回复被拖住。",
+        "slider": {
+          "min": 0.2,
+          "max": 5,
+          "step": 0.1
+        },
+        "default": 1.2,
+        "condition": {
+          "enable_smart_silence": true
         }
       },
       "response_review_mode": {

@@ -61,6 +61,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
         "proactive_review_hard_risk_threshold",
         "proactive_review_low_score_threshold",
         "proactive_review_pressure_threshold",
+        "smart_silence_min_confidence",
         "private_reading_share_probability",
         "private_reading_ask_probability",
         "creative_inspiration_probability",
@@ -5271,6 +5272,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_expression_learning",
             "enable_intent_emotion_analysis",
             "enable_response_self_review",
+            "enable_smart_silence",
             "enable_llm_timer_scheduling",
             "enable_llm_proactive_message",
             "enable_llm_proactive_persona_judge",
@@ -5464,6 +5466,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "NARRATION_PROVIDER_ID",
             "HISTORY_SUMMARY_PROVIDER_ID",
             "RESPONSE_REVIEW_PROVIDER_ID",
+            "SMART_SILENCE_PROVIDER_ID",
             "PROACTIVE_PERSONA_JUDGE_PROVIDER_ID",
             "TROUBLESHOOTING_PROVIDER_ID",
             "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID",
@@ -5494,6 +5497,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             values["DREAM_DIARY_PROVIDER_ID"] = str(getattr(self.plugin, "dream_diary_provider_id", "") or "")
         if not values.get("SMART_MESSAGE_DEBOUNCE_PROVIDER_ID"):
             values["SMART_MESSAGE_DEBOUNCE_PROVIDER_ID"] = str(getattr(self.plugin, "smart_message_debounce_provider_id", "") or "")
+        if not values.get("SMART_SILENCE_PROVIDER_ID"):
+            values["SMART_SILENCE_PROVIDER_ID"] = str(getattr(self.plugin, "smart_silence_provider_id", "") or "")
         if not values.get("REST_WAKEUP_PROVIDER_ID"):
             values["REST_WAKEUP_PROVIDER_ID"] = str(getattr(self.plugin, "rest_wakeup_provider_id", "") or "")
         if not values.get("PROACTIVE_PERSONA_JUDGE_PROVIDER_ID"):
@@ -6355,6 +6360,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "passive_injection_position",
             "framework_session_lock_mode",
             "response_review_mode",
+            "smart_silence_min_confidence",
+            "smart_silence_model_timeout_seconds",
             "proactive_review_strength",
             "proactive_review_hard_risk_threshold",
             "proactive_review_low_score_threshold",
@@ -7129,6 +7136,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "NARRATION_PROVIDER_ID": "narration_provider_id",
             "HISTORY_SUMMARY_PROVIDER_ID": "history_summary_provider_id",
             "RESPONSE_REVIEW_PROVIDER_ID": "response_review_provider_id",
+            "SMART_SILENCE_PROVIDER_ID": "smart_silence_provider_id",
             "PROACTIVE_PERSONA_JUDGE_PROVIDER_ID": "proactive_persona_judge_provider_id",
             "TROUBLESHOOTING_PROVIDER_ID": "troubleshooting_provider_id",
             "RELATIONSHIP_ANALYSIS_PROVIDER_ID": "relationship_analysis_provider_id",
@@ -7426,6 +7434,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "enable_expression_learning",
             "enable_intent_emotion_analysis",
             "enable_response_self_review",
+            "enable_smart_silence",
             "enable_llm_timer_scheduling",
             "enable_llm_proactive_message",
             "enable_llm_proactive_persona_judge",
@@ -7536,6 +7545,7 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "NARRATION_PROVIDER_ID",
             "HISTORY_SUMMARY_PROVIDER_ID",
             "RESPONSE_REVIEW_PROVIDER_ID",
+            "SMART_SILENCE_PROVIDER_ID",
             "PROACTIVE_PERSONA_JUDGE_PROVIDER_ID",
             "TROUBLESHOOTING_PROVIDER_ID",
             "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID",
@@ -7579,6 +7589,8 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
             "default_nickname",
             "default_style",
             "response_review_mode",
+            "smart_silence_min_confidence",
+            "smart_silence_model_timeout_seconds",
             "proactive_review_strength",
             "proactive_review_hard_risk_threshold",
             "proactive_review_low_score_threshold",
@@ -8364,6 +8376,13 @@ class PrivateCompanionPageApi(PrivateCompanionPageApiUsersGroupsMixin):
                 return 8
         if key == "SMART_MESSAGE_DEBOUNCE_PROVIDER_ID":
             return self._single_line(value, 160)
+        if key == "SMART_SILENCE_PROVIDER_ID":
+            return self._single_line(value, 160)
+        if key == "smart_silence_model_timeout_seconds":
+            try:
+                return max(0.2, min(5.0, float(value)))
+            except (TypeError, ValueError):
+                return 1.2
         if key == "private_image_vision_wait_seconds":
             try:
                 return max(0.0, min(90.0, float(value)))

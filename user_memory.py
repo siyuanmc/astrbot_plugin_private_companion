@@ -2444,6 +2444,206 @@ target 只能是 bot/self/other/ambiguous/none。
             parts.append("你要是愿意，我也可以直接帮你把曲目列出来。")
         return "".join(parts)
 
+    def _smart_silence_trigger_reason(self, inbound_text: str) -> str:
+        cleaned = _single_line(inbound_text, 260)
+        if not cleaned:
+            return ""
+        compact = re.sub(r"\s+", "", cleaned)
+        if not compact:
+            return ""
+        direct_markers = (
+            "别聊这个",
+            "不要聊这个",
+            "不聊这个",
+            "别说这个",
+            "不要说这个",
+            "别提这个",
+            "不要提这个",
+            "不想聊这个",
+            "不想说这个",
+            "不想继续",
+            "别继续",
+            "不要继续",
+            "别问了",
+            "不要问了",
+            "别追问",
+            "不要追问",
+            "到此为止",
+            "这个话题到此为止",
+            "结束这个话题",
+            "结束话题",
+            "换个话题",
+            "跳过这个",
+            "略过这个",
+            "打住",
+            "停一下",
+            "先别说了",
+            "先不说了",
+            "别说了",
+            "不要回复",
+            "不用回复",
+            "别回了",
+            "不必回复",
+        )
+        for marker in direct_markers:
+            if marker in compact:
+                return marker
+        topic_patterns = (
+            r"(这个|这件事|这事|这话|这个话题|这话题).{0,8}(算了|别聊|别说|别提|不聊|不说|不提|跳过|略过|到此为止)",
+            r"(算了|够了|停|打住).{0,8}(别聊|别说|别问|别提|不聊|不说|不问|不提)",
+            r"(别|不要|不用).{0,6}(安慰|解释|分析|劝|讲道理|追问)",
+        )
+        for pattern in topic_patterns:
+            if re.search(pattern, compact):
+                return "topic_boundary"
+        return ""
+
+    async def _decide_smart_silence(
+        self,
+        *,
+        inbound_text: str,
+        response_text: str,
+        user: dict[str, Any] | None = None,
+        session_kind: str = "",
+        recent_context: list[str] | None = None,
+    ) -> dict[str, Any]:
+        if not bool(getattr(self, "enable_smart_silence", True)):
+            return {"decision": "send", "reason": "disabled", "confidence": 0.0, "source": "disabled"}
+        inbound = _single_line(inbound_text, 320)
+        response = _single_line(response_text, 600)
+        trigger = self._smart_silence_trigger_reason(inbound)
+        if not trigger:
+            return {"decision": "send", "reason": "no_boundary_trigger", "confidence": 0.0, "source": "prefilter"}
+        if not response:
+            return {"decision": "send", "reason": "empty_response", "confidence": 0.0, "source": "prefilter"}
+        cache_key = hashlib.sha1(
+            f"{session_kind}\n{inbound}\n{response[:240]}".encode("utf-8", errors="ignore")
+        ).hexdigest()
+        cache = getattr(self, "_smart_silence_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            setattr(self, "_smart_silence_cache", cache)
+        now = _now_ts()
+        cached = cache.get(cache_key)
+        if isinstance(cached, dict) and now - _safe_float(cached.get("ts"), 0) <= 120:
+            result = dict(cached.get("result") or {})
+            result["source"] = "cache"
+            return result
+        if len(cache) > 256:
+            for key, item in list(cache.items())[:64]:
+                if not isinstance(item, dict) or now - _safe_float(item.get("ts"), 0) > 120:
+                    cache.pop(key, None)
+
+        provider_id = self._task_provider(
+            getattr(self, "smart_silence_provider_id", ""),
+            getattr(self, "response_review_provider_id", ""),
+            getattr(self, "smart_message_debounce_provider_id", ""),
+            getattr(self, "mai_style_provider_id", ""),
+            getattr(self, "llm_provider_id", ""),
+        )
+        if not provider_id:
+            return {"decision": "send", "reason": "no_provider", "confidence": 0.0, "source": "prefilter"}
+
+        last_companion = _single_line((user or {}).get("last_companion_message"), 260) if isinstance(user, dict) else ""
+        recent_lines = []
+        for item in (recent_context or [])[-6:]:
+            line = _single_line(item, 120)
+            if line:
+                recent_lines.append(f"- {line}")
+        prompt = f"""
+你是聊天回复发送前的智能沉默判定器。判断用户是否在表达“不要继续这个话题/不要再追问/先别回复/换掉当前话题”，从而应该直接不发这条待发送回复。
+
+只输出 JSON：{{"decision":"send|silent","confidence":0-1,"reason":"不超过20字"}}
+
+判定原则：
+- 用户明确说别聊、别问、别继续、到此为止、算了别说了、换个话题，且待发送回复仍在确认、安慰、解释、追问或继续这个话题，decision=silent。
+- 如果用户同一句已经开启了新请求或新问题，例如“算了，帮我看这个”“换个话题，今天吃什么”，且待发送回复是在处理新请求，decision=send。
+- 如果待发送回复只是“好，那不聊这个了”“嗯我闭嘴了”这类对边界的重复确认，通常 silent；真实聊天里安静退开更自然。
+- 不要因为用户说“算了”两个字就一定沉默，要看它是不是结束当前话题，而不是普通口头禅。
+- 不确定时 send。
+
+会话类型：{_single_line(session_kind, 40) or "未知"}
+触发词：{trigger}
+
+【最近上下文】
+{chr(10).join(recent_lines) or "（无）"}
+
+【Bot 上次发出的话】
+{last_companion or "（无）"}
+
+【用户刚才说】
+{inbound}
+
+【待发送回复】
+{response}
+""".strip()
+        timeout_seconds = max(
+            0.2,
+            min(5.0, _safe_float(getattr(self, "smart_silence_model_timeout_seconds", 1.2), 1.2, 0.2)),
+        )
+        started = time.perf_counter()
+        raw = ""
+        try:
+            raw = await asyncio.wait_for(
+                self._llm_call(
+                    prompt,
+                    max_tokens=100,
+                    provider_id=provider_id,
+                    task="smart_silence",
+                ),
+                timeout=timeout_seconds,
+            ) or ""
+        except asyncio.TimeoutError:
+            result = {"decision": "send", "reason": f"timeout>{timeout_seconds:.1f}s", "confidence": 0.0, "source": "timeout"}
+            cache[cache_key] = {"ts": now, "result": result}
+            logger.info(
+                "[PrivateCompanion] 智能沉默判定超时,默认放行: trigger=%s timeout=%.1fs text=%s",
+                trigger,
+                timeout_seconds,
+                _single_line(inbound, 100),
+            )
+            return result
+        except Exception as exc:
+            result = {"decision": "send", "reason": _single_line(exc, 80), "confidence": 0.0, "source": "error"}
+            cache[cache_key] = {"ts": now, "result": result}
+            logger.info("[PrivateCompanion] 智能沉默判定失败,默认放行: %s", _single_line(exc, 120))
+            return result
+
+        payload = self._extract_json_payload(raw or "")
+        if not isinstance(payload, dict):
+            result = {"decision": "send", "reason": "invalid_json", "confidence": 0.0, "source": "model"}
+            cache[cache_key] = {"ts": now, "result": result}
+            return result
+        decision = str(payload.get("decision") or "").strip().lower()
+        if decision not in {"send", "silent"}:
+            decision = "send"
+        confidence = max(0.0, min(1.0, _safe_float(payload.get("confidence"), 0.0, 0.0)))
+        reason = _single_line(payload.get("reason"), 80) or "模型判定"
+        threshold = max(0.0, min(1.0, _safe_float(getattr(self, "smart_silence_min_confidence", 0.66), 0.66, 0.0)))
+        if decision == "silent" and confidence < threshold:
+            decision = "send"
+            reason = f"低置信度:{reason}"
+        result = {
+            "decision": decision,
+            "reason": reason,
+            "confidence": confidence,
+            "source": "model",
+            "trigger": trigger,
+            "elapsed_ms": int((time.perf_counter() - started) * 1000),
+        }
+        cache[cache_key] = {"ts": now, "result": result}
+        logger.info(
+            "[PrivateCompanion] 智能沉默判定: decision=%s confidence=%.2f trigger=%s elapsed=%dms reason=%s user=%s reply=%s",
+            decision,
+            confidence,
+            trigger,
+            result["elapsed_ms"],
+            reason,
+            _single_line(inbound, 120),
+            _single_line(response, 140),
+        )
+        return result
+
     async def _review_and_rewrite_response(
         self,
         user: dict[str, Any],
